@@ -34,7 +34,7 @@ This feature will:
 
 1. [x] **Core Config & Database Setup** - SQLAlchemy models for persistence
 2. [x] **Domain Models** - Models for core domain entities
-3. [ ] **Connector Adapters** - Thin wrappers for external APIs
+3. [x] **Connector Adapters** - Thin wrappers for external APIs
 4. [ ] **Entity Resolution** - Cross-connector entity matching
 5. [ ] **Repository Layer** - Persistence abstraction with caching
 6. [ ] **Transformation Pipeline** - Composable operations using toolz

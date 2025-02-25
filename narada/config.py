@@ -7,7 +7,7 @@ get_logger(name: str) -> Logger
     Args: name - Usually __name__ from the calling module
     Usage: logger = get_logger(__name__)
 
-log_startup_info() -> None 
+log_startup_info() -> None
     Log system configuration and API status at startup
     Call once when application initializes
 
@@ -21,7 +21,7 @@ Logging Quick Start:
 1. Get a logger for your module:
     ```python
     from narada.config import get_logger
-    
+
     logger = get_logger(__name__)
     ```
 
@@ -29,7 +29,7 @@ Logging Quick Start:
     ```python
     # Info with context
     logger.info("Starting sync", playlist_id=123)
-    
+
     # Error with exception
     try:
         result = await api_call()
@@ -78,12 +78,6 @@ load_dotenv()
 
 # Module-level configuration dictionary
 _config: Dict[str, Any] = {
-    # API credentials
-    "SPOTIFY_CLIENT_ID": os.getenv("SPOTIFY_CLIENT_ID", ""),
-    "SPOTIFY_CLIENT_SECRET": os.getenv("SPOTIFY_CLIENT_SECRET", ""),
-    "LASTFM_API_KEY": os.getenv("LASTFM_API_KEY", ""),
-    "LASTFM_API_SECRET": os.getenv("LASTFM_API_SECRET", ""),
-    "LASTFM_USERNAME": os.getenv("LASTFM_USERNAME", ""),
     # Database settings
     "DATABASE_URL": os.getenv("DATABASE_URL", "sqlite+aiosqlite:///narada.db"),
     "DATABASE_ECHO": os.getenv("DATABASE_ECHO", "false").lower() == "true",
@@ -110,23 +104,19 @@ def get_config(key: str, default=None) -> Any:
     return _config.get(key, default)
 
 
-def setup_loguru_logger() -> None:
-    """Configure Loguru logger for the application.
-
-    Sets up two logging sinks:
-    1. Console output with clean formatting and configurable level
-    2. File output with detailed formatting and full debug info
-    """
+def setup_loguru_logger(verbose: bool = False) -> None:
+    """Configure Loguru logger for the application."""
     # Remove default logger
     logger.remove()
 
     # Add contextual info to all log records
     logger.configure(extra={"service": "narada"})
 
-    # Console handler - clean format for normal use
+    # Console handler - adjust level based on verbose flag
+    console_level = "DEBUG" if verbose else _config["CONSOLE_LOG_LEVEL"]
     logger.add(
         sink=sys.stdout,
-        level=_config["CONSOLE_LOG_LEVEL"],
+        level=console_level,
         format=(
             "<green>{time:HH:mm:ss}</green> | "
             "<level>{level: <8}</level> | "
@@ -135,8 +125,8 @@ def setup_loguru_logger() -> None:
             "<level>{message}</level>"
         ),
         colorize=True,
-        backtrace=True,  # Show traceback for warnings and above
-        diagnose=False,  # Keep console output clean
+        backtrace=verbose,  # Show more detail in verbose mode
+        diagnose=verbose,  # Enable diagnostics in verbose mode
     )
 
     # File handler - detailed format with full debug info
@@ -188,39 +178,21 @@ def get_logger(name: str) -> Any:  # Use Any for Loguru logger type
     )
 
 
-def log_startup_info() -> None:
+async def log_startup_info() -> None:
     """Log application configuration on startup."""
     separator = "=" * 50
 
-    # Startup banner
+    # Startup banner and config details
     logger.info("")
     logger.info("<blue>{}</blue>", separator)
     logger.info("<yellow>🎵 Narada Music Integration Platform</yellow>")
     logger.info("<blue>{}</blue>", separator)
     logger.info("")
-
-    # Configuration details
-    logger.debug("Configuration:")
-    logger.debug("├─ Log level: {}", _config["FILE_LOG_LEVEL"])
-    logger.debug("├─ Database: {}", _config["DATABASE_URL"])
-    logger.debug("└─ Data dir: {}", _config["DATA_DIR"])
-
-    # API Status with icons
-    logger.info("")
-    logger.info("API Status:")
-
-    if spotify_configured := bool(_config["SPOTIFY_CLIENT_ID"]):
-        logger.info("├─ ✅ Spotify API configured")
-    else:
-        logger.warning("├─ ❌ Spotify API not configured")
-
-    if lastfm_configured := bool(_config["LASTFM_API_KEY"]):
-        logger.info("└─ ✅ Last.fm API configured")
-    else:
-        logger.warning("└─ ❌ Last.fm API not configured")
-
-    logger.info("")
-    logger.info("<blue>{}</blue>", separator)
+    logger.debug(
+        "Configuration:",
+        file_level=_config["FILE_LOG_LEVEL"],
+        database=_config["DATABASE_URL"],
+    )
     logger.info("")
 
 

@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from importlib.metadata import metadata
 from typing import Dict, List, Optional
 
 import backoff
@@ -12,10 +13,14 @@ from narada.config import get_logger, resilient_operation
 # Get contextual logger with service binding
 logger = get_logger(__name__).bind(service="musicbrainz")
 
+# Get package metadata
+pkg_meta = metadata("narada")
+app_name = pkg_meta.get("Name")
+app_version = pkg_meta.get("Version")
+app_url = pkg_meta.get("Home-page")
+
 # Configure MusicBrainz client
-musicbrainzngs.set_useragent(
-    "Narada", "0.1.0", "https://github.com/yourusername/narada"
-)
+musicbrainzngs.set_useragent(app_name, app_version, app_url)
 
 
 class MusicBrainzConnector:

@@ -1,13 +1,14 @@
 """Last.fm service connector with domain model conversion."""
 
 import asyncio
-from typing import Dict, List, Optional
+import os
+from typing import Optional
 
 import backoff
 import pylast
 from attrs import define
 
-from narada.config import get_config, get_logger, resilient_operation
+from narada.config import get_logger, resilient_operation
 from narada.core.models import Artist, Track
 
 # Get contextual logger with service binding
@@ -39,16 +40,20 @@ class LastFmConnector:
     ) -> None:
         """Initialize Last.fm client with API credentials."""
         logger.debug("Initializing Last.fm connector")
-        self.api_key = api_key or get_config("LASTFM_API_KEY")
-        self.api_secret = get_config("LASTFM_API_SECRET")
-        self.username = username or get_config("LASTFM_USERNAME")
 
-        if not self.api_key:
-            logger.warning("Last.fm API key not configured")
+        # Use environment variables by default, with fallback to passed parameters
+        self.api_key = api_key or os.getenv("LASTFM_KEY")
+        self.api_secret = os.getenv("LASTFM_SECRET")
+        self.username = username or os.getenv("LASTFM_USERNAME")
+
+        if not self.api_key or not self.api_secret:
+            logger.warning("Last.fm API credentials not configured")
+            self.client = None
+            return
 
         self.client = pylast.LastFMNetwork(
-            api_key=self.api_key,
-            api_secret=self.api_secret,
+            api_key=str(self.api_key),
+            api_secret=str(self.api_secret),
         )
 
         # Set user agent for API courtesy
@@ -76,6 +81,10 @@ class LastFmConnector:
             logger.warning("No username provided for Last.fm play count")
             return LastFmPlayCount()
 
+        if not self.client:
+            logger.warning("Last.fm client not initialized - missing API credentials")
+            return LastFmPlayCount()
+
         try:
             # Run in thread pool to avoid blocking
             track = await asyncio.to_thread(
@@ -83,8 +92,9 @@ class LastFmConnector:
             )
 
             # Get user play count
+            track.username = user
             user_playcount = await asyncio.to_thread(
-                lambda: int(track.get_userplaycount(user) or 0)
+                lambda: int(track.get_userplaycount() or 0)
             )
 
             # Get global play count (may be unavailable)
@@ -140,13 +150,18 @@ class LastFmConnector:
             logger.warning("No username provided for Last.fm play count")
             return LastFmPlayCount()
 
+        if not self.client:
+            logger.warning("Last.fm client not initialized - missing API credentials")
+            return LastFmPlayCount()
+
         try:
             # Run in thread pool to avoid blocking
             track = await asyncio.to_thread(self.client.get_track_by_mbid, mbid)
 
             # Get user play count
+            track.username = user
             user_playcount = await asyncio.to_thread(
-                lambda: int(track.get_userplaycount(user) or 0)
+                lambda: int(track.get_userplaycount() or 0)
             )
 
             # Get global play count (may be unavailable)
@@ -179,8 +194,8 @@ class LastFmConnector:
 
     @resilient_operation("batch_get_track_play_counts")
     async def batch_get_track_play_counts(
-        self, tracks: List[Track], username: Optional[str] = None
-    ) -> Dict[int, LastFmPlayCount]:
+        self, tracks: list[Track], username: Optional[str] = None
+    ) -> dict[int, LastFmPlayCount]:
         """Batch retrieve play counts for multiple tracks.
 
         Optimizes API calls through parallel requests.
@@ -190,7 +205,7 @@ class LastFmConnector:
             username: Optional username (defaults to configured user)
 
         Returns:
-            Dictionary mapping track ID to play count info
+            dictionary mapping track ID to play count info
         """
         user = username or self.username
         results = {}
@@ -234,6 +249,9 @@ class LastFmConnector:
             if isinstance(item, Exception):
                 logger.error(f"Error in batch play count fetch: {item}")
                 continue
+            if not isinstance(item, tuple):
+                logger.error(f"Unexpected result type: {type(item)}")
+                continue
 
             track_id, play_count = item
             results[track_id] = play_count
@@ -253,18 +271,20 @@ def convert_lastfm_track_to_domain(lastfm_track: pylast.Track) -> Track:
     try:
         # Get basic metadata
         title = lastfm_track.get_title()
-        artist_name = lastfm_track.get_artist().get_name()
+        artist = lastfm_track.get_artist()
+        artist_name = artist.get_name() if artist else None
 
-        # Try to get album (might fail)
+        # Try to get album
         try:
-            album = lastfm_track.get_album().get_name()
+            album_obj = lastfm_track.get_album()
+            album = album_obj.get_name() if album_obj else None
         except (pylast.WSError, AttributeError):
             album = None
 
         # Create domain model
         track = Track(
-            title=title,
-            artists=[Artist(name=artist_name)],
+            title=title or "",
+            artists=[Artist(name=artist_name or "")] if artist_name else [],
             album=album,
         )
 

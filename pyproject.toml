@@ -1,8 +1,9 @@
 [tool.poetry]
 name = "narada"
-version = "0.1.0"
-description = "Music metadata integration platform for Spotify, Last.fm, and MusicBrainz"
-authors = ["Your Name <your.email@example.com>"]
+version = "0.1.1"
+description = "Music metadata integration and playlist management platform"
+authors = ["Ash Wright <a@ashwright.net>"]
+homepage = "https://github.com/w-ash/narada"
 readme = "README.md"
 license = "MIT"
 packages = [{include = "narada"}]
@@ -72,3 +73,12 @@ markers = [
 [tool.coverage.run]
 source = ["narada"]
 omit = ["tests/*"]
+
+[tool.poetry.urls]
+"Documentation" = "https://github.com/w-ash/narada/docs"
+"Repository" = "https://github.com/w-ash/narada"
+"Bug Tracker" = "https://github.com/w-ash/narada/issues"
+
+[tool.typer.app]
+name = "narada"
+help = "Music metadata integration and playlist management platform"
