@@ -9,31 +9,33 @@ packages = [{include = "narada"}]
 
 [tool.poetry.dependencies]
 python = "^3.13"
-sqlalchemy = {extras = ["asyncio"], version = "^2.0.27"}
-alembic = "^1.13.1"
-httpx = "^0.27.0"  # Modern async HTTP client replacement for requests
-spotipy = "^2.23.0"
-pylast = "^5.2.0"
+sqlalchemy = {extras = ["asyncio"], version = "^2.0.38"}
+alembic = "^1.14.1"
+httpx = "^0.28.1"  # Modern async HTTP client replacement for requests
+spotipy = "^2.25.0"
+pylast = "^5.3.0"
 musicbrainzngs = "^0.7.1"
-loguru = "^0.7.2"
+loguru = "^0.7.3"
 python-dotenv = "^1.0.1"
 rich = "^13.7.0"
-typer = "^0.9.0"  # Modern CLI framework
-attrs = "^23.2.0"
-toolz = "^0.12.1"
+typer = "^0.15.1"  # Modern CLI framework
+attrs = "^25.1.0"
+toolz = "^1.0.0"
 backoff = "^2.2.1"
-aiosqlite = "^0.19.0"  # Async SQLite support
+
+aiosqlite = "^0.21.0"  # Async SQLite support
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^7.4.4"
-pytest-asyncio = "^0.23.5"  # Async test support
-pytest-cov = "^4.1.0"
-black = "^24.1.1"
-ruff = "^0.1.15"  # Modern replacement for isort, flake8, etc.
-pre-commit = "^3.6.0"
+pytest = "^8.3.4"
+pytest-asyncio = "^0.25.3"  # Async test support
+pytest-cov = "^6.0.0"
+black = "^25.1.0"
+ruff = "^0.3.5"  # Modern replacement for isort, flake8, etc.
+pre-commit = "^4.1.0"
 
 [tool.poetry.scripts]
 narada = "narada.cli.app:main"
+test-db = "narada.data.test_database:main"
 
 [build-system]
 requires = ["poetry-core"]
@@ -63,6 +65,9 @@ known-first-party = ["narada"]
 testpaths = ["tests"]
 python_files = "test_*.py"
 asyncio_mode = "auto"
+markers = [
+    "integration: marks tests as integration tests",
+]
 
 [tool.coverage.run]
 source = ["narada"]
