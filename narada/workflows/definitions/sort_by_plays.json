@@ -1,0 +1,67 @@
+{
+  "id": "sort_by_plays",
+  "name": "Sort by Play Count",
+  "description": "Sort a Spotify playlist by Last.fm play counts",
+  "version": "1.0",
+  "parameters": [
+    {
+      "name": "source_playlist_id",
+      "type": "string",
+      "required": true,
+      "description": "Spotify playlist ID to sort"
+    },
+    {
+      "name": "username",
+      "type": "string",
+      "required": true,
+      "description": "Last.fm username for play counts"
+    },
+    {
+      "name": "target_name",
+      "type": "string",
+      "required": false,
+      "description": "Name for the sorted playlist"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "source",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "{parameters.source_playlist_id}"
+      }
+    },
+    {
+      "id": "resolve",
+      "type": "enricher.resolve_lastfm",
+      "config": {
+        "username": "{parameters.username}"
+      },
+      "upstream": [
+        "source"
+      ]
+    },
+    {
+      "id": "sort",
+      "type": "transformer.sort_by_plays",
+      "config": {
+        "reverse": true,
+        "min_confidence": 60
+      },
+      "upstream": [
+        "resolve"
+      ]
+    },
+    {
+      "id": "destination",
+      "type": "destination.create_spotify_playlist",
+      "config": {
+        "name": "{parameters.target_name}",
+        "description": "Sorted by {parameters.username}'s play counts"
+      },
+      "upstream": [
+        "sort"
+      ]
+    }
+  ]
+}

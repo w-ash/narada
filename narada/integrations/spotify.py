@@ -150,6 +150,18 @@ def convert_spotify_track_to_domain(spotify_track: dict[str, Any]) -> Track:
         isrc=spotify_track.get("external_ids", {}).get("isrc"),
     )
 
+    # Store Spotify-specific metadata
+    track = track.with_connector_metadata(
+        "spotify",
+        {
+            "popularity": spotify_track.get("popularity", 0),
+            "album_id": spotify_track["album"].get("id"),
+            "preview_url": spotify_track.get("preview_url"),
+            "explicit": spotify_track.get("explicit", False),
+        },
+    )
+
+    # Store connector ID
     return track.with_connector_track_id("spotify", spotify_track["id"])
 
 

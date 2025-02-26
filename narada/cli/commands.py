@@ -29,7 +29,7 @@ def register_commands(app: typer.Typer) -> None:
     """Register all commands with the Typer app."""
     app.command()(status)
     app.command()(setup)
-    app.command(name="sort")(sort_playlist)  # Better CLI name
+    app.command(name="workflow")(run_workflow)
     app.command()(dashboard)
 
 
@@ -253,65 +253,129 @@ def setup(
     console.print("\n")
 
 
-# In narada/cli/commands.py
-
-
-def sort_playlist(
-    source_id: Annotated[str, typer.Argument(help="Spotify playlist ID to sort")],
-    username: Annotated[str, typer.Option("--username", "-u", help="Last.fm username")],
-    create_new: Annotated[
-        bool,
-        typer.Option("--new/--update", help="Create new playlist or update existing"),
-    ] = True,
-    target_name: Annotated[
-        Optional[str], typer.Option("--name", "-n", help="Name for the sorted playlist")
+def run_workflow(
+    workflow_id: Annotated[
+        Optional[str], typer.Argument(help="Workflow ID to execute", default=None)
     ] = None,
 ) -> None:
-    """Sort a Spotify playlist by Last.fm play counts."""
-    from narada.playlists.workflows import (  # deprecated implementation needs to be updated
-        sort_playlist_by_plays,
-    )
+    """Run a workflow from available definitions."""
+    import json
+    from pathlib import Path
 
-    with console.status("[bold blue]Sorting playlist by play counts..."):
+    from narada.config import get_config
+    from narada.workflows.prefect import run_workflow as execute_workflow
+
+    # Get workflow definitions directory with fallback
+    workflows_dir = Path(get_config("WORKFLOWS_DIR", "narada/workflows/definitions"))
+
+    # Ensure directory exists
+    if not workflows_dir.exists():
+        workflows_dir.mkdir(parents=True, exist_ok=True)
+        console.print(f"[yellow]Created workflows directory: {workflows_dir}[/yellow]")
+
+    # Discover available workflows
+    available_workflows = {}
+    for file_path in workflows_dir.glob("*.json"):
         try:
-            result_id = asyncio.run(
-                sort_playlist_by_plays(
-                    source_id, username, create_new=create_new, target_name=target_name
-                )
-            )
-            console.print("\n[green]✓[/green] Playlist sorted successfully!")
-            console.print(f"[bold]Playlist ID:[/bold] {result_id}")
+            with open(file_path, "r") as f:
+                workflow_def = json.load(f)
+                wf_id = workflow_def.get("id")
+                if wf_id:
+                    available_workflows[wf_id] = {
+                        "name": workflow_def.get("name", wf_id),
+                        "description": workflow_def.get("description", ""),
+                        "path": file_path,
+                    }
         except Exception as e:
-            console.print(f"\n[red]Error:[/red] {e}")
-            logger.exception("Playlist sort failed")
-            raise typer.Exit(1)
-    # Visually engaging status indicator
+            logger.warning(f"Error loading workflow from {file_path}: {e}")
+
+    # Show workflow list if none specified
+    if not workflow_id:
+        if not available_workflows:
+            console.print("[red]No workflows found in definitions directory.[/red]")
+            console.print(
+                f"[yellow]Add workflow JSON files to: {workflows_dir}[/yellow]"
+            )
+            return
+
+        # Display workflow table
+        table = Table(title="Available Workflows")
+        table.add_column("ID", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("Description", style="dim")
+
+        for wf_id, wf_info in sorted(available_workflows.items()):
+            table.add_row(wf_id, wf_info["name"], wf_info["description"])
+
+        console.print(table)
+
+        # Interactive selection
+        choices = list(available_workflows.keys())
+        if typer.confirm("Run a workflow now?"):
+            for i, wf_id in enumerate(choices, 1):
+                console.print(f"[cyan]{i}.[/cyan] {wf_id}")
+
+            choice = typer.prompt("Enter number", type=int, default=1)
+            if 1 <= choice <= len(choices):
+                workflow_id = choices[choice - 1]
+            else:
+                console.print("[red]Invalid selection.[/red]")
+                return
+        else:
+            return
+
+    # Validate workflow exists
+    if workflow_id not in available_workflows:
+        console.print(f"[red]Workflow '{workflow_id}' not found.[/red]")
+        return
+
+    # Load workflow definition
+    workflow_path = available_workflows[workflow_id]["path"]
+    try:
+        with open(workflow_path, "r") as f:
+            workflow_def = json.load(f)
+    except Exception as e:
+        console.print(f"[red]Error loading workflow: {e}[/red]")
+        logger.exception(f"Failed to load workflow: {workflow_path}")
+        return
+
+    # Execute the workflow with progress indication
     with Live(
-        Panel(
-            "[bold blue]Initializing playlist sort operation...[/bold blue]",
-            title="[bold cyan]Narada Playlist Sort[/bold cyan]",
-            border_style="blue",
-        ),
-        console=console,
+        Panel(f"[bold blue]Initializing workflow: {workflow_id}[/bold blue]"),
         refresh_per_second=4,
     ) as live:
-        # Set up the parameters for the sort operation
-        target = target_name or f"{source_id} (Sorted by plays)"
-        live.update(
-            Panel(
-                f"[bold green]Source Playlist:[/bold green] {source_id}\n"
-                f"[bold green]Last.fm Username:[/bold green] {username}\n"
-                f"[bold green]Target Playlist:[/bold green] {target}\n"
-                f"[bold green]Create New:[/bold green] {'Yes' if create_new else 'No'}\n\n"
-                "[yellow]Sorting operation not yet implemented[/yellow]",
-                title="[bold cyan]Narada Playlist Sort[/bold cyan]",
-                border_style="blue",
-            )
-        )
+        try:
+            result = asyncio.run(execute_workflow(workflow_def))
 
-        # Simulate progress for now
-        console.print("\n[yellow]This feature is coming soon![/yellow]\n")
-        logger.info("Playlist sort operation placeholder executed")
+            # Success panel with results
+            success_content = (
+                f"[green bold]✓ Workflow completed: {workflow_id}[/green bold]\n\n"
+            )
+
+            # Extract key results
+            if isinstance(result, dict):
+                if "playlist_id" in result:
+                    success_content += (
+                        f"[bold]Playlist ID:[/bold] {result['playlist_id']}\n"
+                    )
+                elif "destination" in result and isinstance(
+                    result["destination"], dict
+                ):
+                    playlist_id = result["destination"].get("playlist_id")
+                    if playlist_id:
+                        success_content += f"[bold]Playlist ID:[/bold] {playlist_id}\n"
+
+            live.update(Panel(success_content, border_style="green"))
+
+        except Exception as e:
+            live.update(
+                Panel(
+                    f"[bold red]✗ Workflow failed[/bold red]\n\n{str(e)}",
+                    border_style="red",
+                )
+            )
+            logger.exception("Workflow execution failed")
+            raise typer.Exit(1)
 
 
 def dashboard(
@@ -337,7 +401,5 @@ def dashboard(
             border_style="yellow",
         )
     )
-
-    logger.debug("Dashboard initialized", refresh_interval=refresh)
 
     logger.debug("Dashboard initialized", refresh_interval=refresh)

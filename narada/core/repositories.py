@@ -240,7 +240,7 @@ class TrackRepository(BaseRepository):
         if not db_track:
             return None
 
-        return Track(
+        track = Track(
             id=db_track.id,
             title=db_track.title,
             artists=[Artist(name=name) for name in db_track.artists["names"]],
@@ -250,6 +250,15 @@ class TrackRepository(BaseRepository):
                 m.connector_name: m.connector_id for m in db_track.mappings
             },
         )
+
+        # Add connector metadata from mappings
+        for mapping in db_track.mappings:
+            if mapping.connector_metadata:
+                track = track.with_connector_metadata(
+                    mapping.connector_name, mapping.connector_metadata
+                )
+
+        return track
 
     @staticmethod
     def domain_track_to_db(track: Track) -> DBTrack:
@@ -267,7 +276,7 @@ class TrackRepository(BaseRepository):
                     connector_id=track_id,
                     match_method="direct",
                     confidence=100,
-                    connector_metadata={},
+                    connector_metadata=track.connector_metadata.get(name, {}),
                 )
                 for name, track_id in track.connector_track_ids.items()
             ],

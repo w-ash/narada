@@ -65,6 +65,7 @@ Best Practices:
        log_startup_info()
 """
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -223,3 +224,25 @@ def resilient_operation(operation_name=None):
         return wrapper
 
     return decorator
+
+
+def configure_prefect_logging() -> None:
+    """Configure Prefect to use our Loguru setup without changing our existing patterns."""
+
+    # Create a simple handler that passes Prefect logs to Loguru
+    class PrefectLoguruHandler(logging.Handler):
+        def emit(self, record):
+            # Get corresponding Loguru level
+            level = logger.level(record.levelname).name
+
+            # Extract message and maintain original format
+            msg = self.format(record)
+
+            # Pass to loguru with appropriate module context
+            module_name = record.name
+            logger.bind(module=module_name).log(level, msg)
+
+    # Configure the Prefect logger
+    prefect_logger = logging.getLogger("prefect")
+    prefect_logger.handlers = [PrefectLoguruHandler()]
+    prefect_logger.propagate = False

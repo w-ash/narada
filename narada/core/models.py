@@ -46,6 +46,7 @@ class Track:
     id: Optional[int] = field(default=None)
     play_count: Optional[int] = field(default=None)
     connector_track_ids: Dict[str, str] = field(factory=dict)
+    connector_metadata: Dict[str, Dict[str, Any]] = field(factory=dict)
 
     def with_play_count(self, count: int) -> "Track":
         """Create a new track with play count information."""
@@ -59,6 +60,7 @@ class Track:
             id=self.id,
             play_count=count,
             connector_track_ids=self.connector_track_ids.copy(),
+            connector_metadata=self.connector_metadata.copy(),
         )
 
     def with_connector_track_id(self, connector: str, sid: str) -> "Track":
@@ -76,7 +78,35 @@ class Track:
             id=self.id,
             play_count=self.play_count,
             connector_track_ids=new_ids,
+            connector_metadata=self.connector_metadata.copy(),
         )
+
+    def with_connector_metadata(
+        self, connector: str, metadata: Dict[str, Any]
+    ) -> "Track":
+        """Create a new track with additional connector metadata."""
+        new_metadata = self.connector_metadata.copy()
+        new_metadata[connector] = {**new_metadata.get(connector, {}), **metadata}
+
+        return self.__class__(
+            title=self.title,
+            artists=self.artists,
+            album=self.album,
+            duration_ms=self.duration_ms,
+            release_date=self.release_date,
+            isrc=self.isrc,
+            id=self.id,
+            play_count=self.play_count,
+            connector_track_ids=self.connector_track_ids.copy(),
+            connector_metadata=new_metadata,
+        )
+
+    def get_connector_attribute(
+        self, connector: str, attribute: str, default=None
+    ) -> Any:
+        """Get a specific attribute from connector metadata."""
+        connector_data = self.connector_metadata.get(connector, {})
+        return connector_data.get(attribute, default)
 
 
 @define(frozen=True)

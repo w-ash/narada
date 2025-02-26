@@ -96,7 +96,8 @@ narada/                        # Project root
 │   ├── core/                  # Domain core
 │   │   ├── models.py          # Entity definitions (Track, Playlist)
 │   │   ├── matcher.py         # Entity resolution engine
-│   │   └── repositories.py    # Persistence abstractions
+│   │   ├── repositories.py    # Persistence abstractions
+│   │   └── transforms.py    # pure functional primitives
 │   │
 │   ├── data/                  # Data persistence
 │   │   ├── database.py        # Database connection management
@@ -107,24 +108,11 @@ narada/                        # Project root
 │   │   ├── lastfm.py          # Last.fm API integration
 │   │   └── musicbrainz.py     # MusicBrainz integration
 │   │
-│   ├── playlists/             # Transformation core
-│   │   ├── operations.py      # Pure transformation primitives
-│   │   └── transformers.py    # Domain-specific transformations
-│   │
-│   ├── workflows/             # Workflow architecture
-│   │   ├── engine.py          # Execution coordination
-│   │   ├── registry.py        # Component registry
-│   │   ├── execution.py       # Prefect integration layer
-│   │   ├── schema.py          # JSON schema definitions
-│   │   └── components/        # Pipeline components
-│   │       ├── sources.py     # Data ingestion components
-│   │       ├── filters.py     # Data filtering components
-│   │       ├── sorters.py     # Ordering components
-│   │       ├── selectors.py   # Subset extraction components
-│   │       ├── combiners.py   # Stream combination components
-│   │       └── destinations.py # Output components
-│   │
-│   ├── definitions/           # Workflow definitions
+├── workflows/                 # Consolidated workflow system
+│   ├── components.py          # All component implementations
+│   ├── registry.py            # Component type registration
+│   ├── prefect.py             # Prefect adapter (thin layer)
+│   ├── definitions/           # JSON workflow definitions
 │   │   ├── sort_by_plays.json # Use case 1A definition
 │   │   └── discovery_mix.json # Use case 1B definition
 │   │
@@ -142,6 +130,21 @@ narada/                        # Project root
     └── workflow_guide.md      # Workflow authoring guide
 ```
 
+#### Workflow System Interactions
+
+The  architecture follows a clear flow pattern:
+
+1. **Core Layer**: `models.py` defines domain objects
+2. **Transformation Layer**: `transforms.py` provides pure functional operations on those models
+3. **Component Layer**: `components.py` implements business logic using transforms and resolvers
+4. **Registry Layer**: `registry.py` creates a type system for discovering components
+5. **Execution Layer**: `prefect.py` connects the component system to Prefect
+
+Data flows through these layers in a consistent way:
+
+`Workflow Definition (JSON) → prefect.py → registry.py → components.py → transforms.py → models.py`
+
+Each layer maintains clear boundaries and responsibilities, which is needed for a codebase targeting under 2000 LOC.
 ### Model Separation Pattern
 
 Modern streaming architectures have evolved away from rigid multi-model separation in favor of more pragmatic patterns that reduce complexity while maintaining clean boundaries. Here's the strategic approach for Narada:
@@ -244,56 +247,18 @@ We'll implement a declarative workflow engine that separates transformation defi
 
 Our workflow components will be organized into functional categories:
 
-| Category | Purpose | Examples |
-|----------|---------|----------|
-| Sources | Data ingestion from external services | Spotify playlist, album, radio |
-| Filters | Selective content inclusion | By date, playcount, metadata |
-| Sorters | Order manipulation | By playcount, release, randomization |
-| Selectors | Subset extraction | First/last N, random selection |
-| Combiners | Stream aggregation | Merge, interleave, deduplicate |
-| Destinations | Export and persistence | Spotify playlist, local storage |
+| Category     | Purpose                               | Examples                             |
+| ------------ | ------------------------------------- | ------------------------------------ |
+| Sources      | Data ingestion from external services | Spotify playlist, album, radio       |
+| Filters      | Selective content inclusion           | By date, playcount, metadata         |
+| Sorters      | Order manipulation                    | By playcount, release, randomization |
+| Selectors    | Subset extraction                     | First/last N, random selection       |
+| Combiners    | Stream aggregation                    | Merge, interleave, deduplicate       |
+| Destinations | Export and persistence                | Spotify playlist, local storage      |
 
-### Workflow Definition Format
+### Possible Workflow Definition Format
 
-Workflows will be defined in structured JSON that maps directly to execution graphs:
-
-```json
-{
-  "id": "discovery_mix",
-  "name": "New Release Discovery",
-  "description": "Creates a playlist of recent tracks sorted by popularity",
-  "version": "1.0",
-  "parameters": [
-    {"name": "source_playlist", "type": "string", "description": "Source playlist ID"},
-    {"name": "max_age_days", "type": "integer", "default": 90}
-  ],
-  "tasks": [
-    {
-      "id": "source",
-      "type": "source.spotify_playlist",
-      "config": {"playlist_id": "{parameters.source_playlist}"}
-    },
-    {
-      "id": "filter_by_date",
-      "type": "filter.release_date",
-      "config": {"max_age_days": "{parameters.max_age_days}"},
-      "upstream": ["source"]
-    },
-    {
-      "id": "sort_by_popularity",
-      "type": "sort.by_attribute",
-      "config": {"attribute": "popularity", "reverse": true},
-      "upstream": ["filter_by_date"]
-    },
-    {
-      "id": "destination",
-      "type": "destination.spotify_playlist",
-      "config": {"name": "Discovery Mix ({parameters.max_age_days} days)"},
-      "upstream": ["sort_by_popularity"]
-    }
-  ]
-}
-```
+Workflows will be defined in structured JSON that maps directly to execution graphs.
 
 ## Implementation Strategy
 

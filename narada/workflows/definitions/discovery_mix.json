@@ -1,0 +1,225 @@
+{
+  "id": "discovery_mix",
+  "name": "Latest Discovery Mix",
+  "description": "Multi-source filtered new release discovery mix",
+  "version": "1.0",
+  "tasks": [
+    {
+      "id": "source_serotonin",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "37i9dQZF1DWYMroOc5KTTh"
+      }
+    },
+    {
+      "id": "filter_date_serotonin",
+      "type": "transformer.filter_by_release_date",
+      "config": {
+        "max_age_days": 90
+      },
+      "upstream": [
+        "source_serotonin"
+      ]
+    },
+    {
+      "id": "limit_serotonin",
+      "type": "transformer.limit_tracks",
+      "config": {
+        "count": 15
+      },
+      "upstream": [
+        "filter_date_serotonin"
+      ]
+    },
+    {
+      "id": "source_pollen",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "37i9dQZF1DWWBHeXOYZf74"
+      }
+    },
+    {
+      "id": "filter_date_pollen",
+      "type": "transformer.filter_by_release_date",
+      "config": {
+        "max_age_days": 90
+      },
+      "upstream": [
+        "source_pollen"
+      ]
+    },
+    {
+      "id": "limit_pollen",
+      "type": "transformer.limit_tracks",
+      "config": {
+        "count": 10
+      },
+      "upstream": [
+        "filter_date_pollen"
+      ]
+    },
+    {
+      "id": "source_metropolis",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "37i9dQZF1DX8CopunbDxgW"
+      }
+    },
+    {
+      "id": "filter_date_metropolis",
+      "type": "transformer.filter_by_release_date",
+      "config": {
+        "max_age_days": 90
+      },
+      "upstream": [
+        "source_metropolis"
+      ]
+    },
+    {
+      "id": "limit_metropolis",
+      "type": "transformer.limit_tracks",
+      "config": {
+        "count": 10
+      },
+      "upstream": [
+        "filter_date_metropolis"
+      ]
+    },
+    {
+      "id": "source_fourth",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "4CFWNPfP7YKjDQOC2P7Ufr"
+      }
+    },
+    {
+      "id": "filter_date_fourth",
+      "type": "transformer.filter_by_release_date",
+      "config": {
+        "max_age_days": 90
+      },
+      "upstream": [
+        "source_fourth"
+      ]
+    },
+    {
+      "id": "limit_fourth",
+      "type": "transformer.limit_tracks",
+      "config": {
+        "count": 5
+      },
+      "upstream": [
+        "filter_date_fourth"
+      ]
+    },
+    {
+      "id": "mixer",
+      "type": "combiner.merge_playlists",
+      "config": {},
+      "upstream": [
+        "limit_serotonin",
+        "limit_pollen",
+        "limit_metropolis",
+        "limit_fourth"
+      ]
+    },
+    {
+      "id": "sort_popularity",
+      "type": "transformer.sort_by_popularity",
+      "config": {
+        "reverse": true
+      },
+      "upstream": [
+        "mixer"
+      ]
+    },
+    {
+      "id": "source_release_radar",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "37i9dQZF1DWYMroOc5KTTh"
+      }
+    },
+    {
+      "id": "combine_with_release_radar",
+      "type": "combiner.concatenate_playlists",
+      "config": {
+        "order": [
+          "source_release_radar",
+          "sort_popularity"
+        ]
+      },
+      "upstream": [
+        "source_release_radar",
+        "sort_popularity"
+      ]
+    },
+    {
+      "id": "deduplicate",
+      "type": "transformer.deduplicate",
+      "config": {},
+      "upstream": [
+        "combine_with_release_radar"
+      ]
+    },
+    {
+      "id": "source_interesting",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "14GT9ahKyAR9SObC7GdwtO"
+      }
+    },
+    {
+      "id": "filter_not_in_interesting",
+      "type": "filter.not_in_playlist",
+      "config": {},
+      "upstream": [
+        "deduplicate",
+        "source_interesting"
+      ]
+    },
+    {
+      "id": "source_later",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "270F5TpBeK3qLyQEFkJawD"
+      }
+    },
+    {
+      "id": "filter_not_in_later",
+      "type": "filter.not_in_playlist",
+      "config": {},
+      "upstream": [
+        "filter_not_in_interesting",
+        "source_later"
+      ]
+    },
+    {
+      "id": "source_blech",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "6k3Zh8UW7I7kOdopUBFlzn"
+      }
+    },
+    {
+      "id": "filter_not_artist_in_blech",
+      "type": "filter.not_artist_in_playlist",
+      "config": {},
+      "upstream": [
+        "filter_not_in_later",
+        "source_blech"
+      ]
+    },
+    {
+      "id": "destination",
+      "type": "destination.create_spotify_playlist",
+      "config": {
+        "name": "Latest",
+        "description": "Latest tracks from curated sources"
+      },
+      "upstream": [
+        "filter_not_artist_in_blech"
+      ]
+    }
+  ]
+}

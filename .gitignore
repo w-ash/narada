@@ -1,0 +1,47 @@
+# Python Development
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.ipynb_checkpoints
+
+# Package Management
+poetry.lock
+
+# Database Files
+*.db
+*.sqlite
+*.sqlite3
+
+# Allow alembic migrations but ignore version files
+alembic/versions/
+alembic/*.ini
+!alembic/README
+!alembic/script.py.mako
+
+# Environment and Configuration
+.env
+.spotify_cache
+
+# Logs
+*.log
+logs/
+
+# IDE and Editor Files
+.idea/
+.vscode/
+*.swp
+*.swo
+.obsidian/
+*.sublime-*
+*~
+
+# Operating System
+.DS_Store
+Thumbs.db
