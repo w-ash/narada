@@ -1,4 +1,4 @@
-	# Narada Project Bible
+# Narada Project Bible
 
 ## Project Vision
 
@@ -283,19 +283,26 @@ By separating workflow definition from execution mechanics, we create a system t
 
 This architecture has been proven in production systems handling millions of media items at companies like Spotify, Netflix, and SoundCloud. It's specifically designed for the kind of rapid iteration cycles needed in early-stage music technology products.
 
-
 ## Database Model
 
 ### Core Entities
 
 Our database design follows a focused schema pattern that prioritizes essential storage needs while maintaining flexibility for future expansion. Each entity maps to a core domain concept while avoiding unnecessary normalization that would increase query complexity.
 
+The schema consists of the following tables:
 - tracks
 - play_counts
 - track_mappings
 - playlists
 - playlist_mappings
 - playlist_tracks
+
+All tables inherit from `NaradaDBBase` which provides:
+- `id` (Primary Key)
+- `is_deleted` (Soft delete flag)
+- `deleted_at` (Soft delete timestamp)
+- `created_at` (Record creation timestamp)
+- `updated_at` (Last update timestamp)
 
 #### Tracks Table
 
@@ -321,6 +328,11 @@ Central storage for music metadata with cross-connector identifiers.
 +---------------+-------------+--------------------------------------+
 ```
 
+##### Key Points
+1. **Connector Specific Fields** - Direct storage for common identifiers (spotify_id, isrc)
+2. **JSON Artist Storage** - Flexible handling of multiple artists per track
+3. **Metadata Optimization** - Core fields extracted for direct querying
+
 #### Play Counts Table
 
 Caches global and user-specific play count data from Last.fm.
@@ -331,20 +343,25 @@ Caches global and user-specific play count data from Last.fm.
 +------------------+-------------+--------------------------------------+
 | id               | Integer (PK)| Internal identifier                  |
 | track_id         | Integer (FK)| Reference to tracks table            |
-| user_id          | String (IDX)| Last.fm username                     |
+| user_id          | String      | Last.fm username                     |
 | play_count       | Integer     | Number of global plays               |
 | user_play_count  | Integer     | Number of user plays                 |
 | last_updated     | DateTime    | Cache timestamp                      |
+| created_at       | DateTime    | Record creation timestamp            |
+| updated_at       | DateTime    | Last update timestamp                |
 | is_deleted       | Boolean     | Soft delete indicator                |
 | deleted_at       | DateTime    | Deleted at timestamp                 |
 +------------------+-------------+--------------------------------------+
 ```
 
+##### Key Points
+1. **Cache Design** - Structured as a cache with refresh timestamps
+2. **Dual Metrics** - Tracks both global and per-user play counts
+3. **Unique Constraint** - One count entry per track/user combination
+
 #### Track Connector Mappings Table
 
-##### Purpose
-
-The Track connector Mappings table serves as our universal cross-connector integration layer, providing deterministic entity resolution across music platforms with confidence scoring and method tracking.
+The Track Connector Mappings table serves as our universal cross-connector integration layer for tracks.
 
 ```
 +------------------------+-------------+--------------------------------------+
@@ -357,73 +374,23 @@ The Track connector Mappings table serves as our universal cross-connector integ
 | match_method           | String      | Resolution method used               |
 | confidence             | Integer     | Match confidence (0-100)             |
 | last_verified          | DateTime    | Verification timestamp               |
-| metadata               | JSON        | connector-specific auxiliary data    |
+| connector_metadata     | JSON        | Connector-specific auxiliary data    |
+| created_at             | DateTime    | Record creation timestamp            |
+| updated_at             | DateTime    | Last update timestamp                |
 | is_deleted             | Boolean     | Soft delete indicator                |
 | deleted_at             | DateTime    | Deleted at timestamp                 |
 +------------------------+-------------+--------------------------------------+
 ```
 
-##### Design Decisions
-
-1. **Connector-Agnostic Architecture**
-   - Single table handles all connector integrations
-   - Enables unlimited future connector expansion without schema changes
-   - Consistent resolution interface across the application
-
-2. **Resolution Method Tracking**
-   - `match_method` explicitly documents how each match was determined
-   - Common values: "direct" (connector origin), "isrc", "mbid", "artist_title", "fuzzy"
-   - Enables selective reprocessing of lower-quality matches
-
-3. **Confidence Scoring System** (Prototype)
-   - Quantifies match quality on 0-100 scale
-   - Primary matches (direct imports): 100
-   - ISRC-based matches: 90-95
-   - MBID-based matches: 80-85
-   - Artist/title matches: 60-75
-   - Fuzzy matches: 30-50
-
-4. **Auxiliary Metadata**
-   - JSON field stores connector-specific context that may aid future resolution
-   - Examples: track duration, album context, release information
-   - Eliminates need for connector-specific schema adjustments
-
-##### Implementation Strategy
-
-This model implements a directed graph of relationships between our canonical tracks and connector-specific entities. The primary workflow:
-
-1. Track import creates canonical record with 100% confidence for source connector
-2. Resolution engine attempts deterministic matching (ISRC→MBID chain)
-3. Fallback to progressively less confident matching methods
-4. Background processes attempt to improve match quality over time
-
-##### Indexing Strategy
-
-| Index | Type | Purpose |
-|-------|------|---------|
-| (track_id, connector_name) | Composite | Fast lookup for specific connector mappings |
-| (connector_name, connector_id) | Composite | Reverse lookups and duplicate prevention |
-| confidence | Single | Quality-based filtering and prioritization |
-
-##### Usage Patterns
-
-```python
-# Canonical flow: Get Last.fm ID for track
-async def get_lastfm_id(track_id):
-    mapping = await find_mapping(track_id, "lastfm")
-    if mapping and mapping.confidence >= CONFIDENCE_THRESHOLD:
-        return mapping.connector_id
-    
-    # Fallback to resolution if no high-confidence mapping
-    lastfm_id = await resolve_track(track_id, "lastfm")
-    return lastfm_id
-```
-
-This model  simplifies cross-connector entity resolution by centralizing all mapping logic while providing fine-grained visibility into match quality. The design scales linearly with additional connectors.
+##### Key Points
+1. **Connector-Agnostic Architecture** - Single table handles all connector integrations
+2. **Resolution Method Tracking** - Explicitly documents how each match was determined
+3. **Confidence Scoring** - Quantifies match quality on 0-100 scale
+4. **Metadata Storage** - JSON field stores connector-specific context
 
 #### Playlists Table
 
-Our source of truth for playlists.
+Source of truth for playlists with essential metadata.
 
 ```
 +---------------+-------------+--------------------------------------+
@@ -433,30 +400,21 @@ Our source of truth for playlists.
 | name          | String      | Playlist name                        |
 | description   | Text        | Playlist description                 |
 | track_count   | Integer     | Number of tracks                     |
-| created_at    | DateTime    | Creation timestamp                   |
+| created_at    | DateTime    | Record creation timestamp            |
 | updated_at    | DateTime    | Last update timestamp                |
+| is_deleted    | Boolean     | Soft delete indicator                |
+| deleted_at    | DateTime    | Deleted at timestamp                 |
 +---------------+-------------+--------------------------------------+
 ```
+
 ##### Key Points
+1. **Source of Truth** - Connector-agnostic playlist representation
+2. **Minimal Schema** - Only essential fields for playlist identification
+3. **Track Count Cache** - Pre-calculated count for efficient display
 
-1. **Source of Truth**
-   - Our playlists table is now connector-agnostic
-   - Clean separation between our data and connector mappings
-   - Follows same pattern as track resolution
+#### Playlist Connector Mappings Table
 
-2. **Minimal Schema**
-   - Core tables remain simple
-   - Sync state isolated to mappings table
-   - Maintains under 2000 LOC target
-
-3. **Future Ready**
-   - Easy to add new connector integrations
-   - No changes needed to core playlist structure
-   - Consistent with our entity resolution pattern
-
-#### Playlist connector Mappings Table
-
-Maps our playlists to external connector playlists.
+Maps internal playlists to external connector playlists.
 
 ```
 +------------------------+-------------+--------------------------------------+
@@ -464,16 +422,24 @@ Maps our playlists to external connector playlists.
 +------------------------+-------------+--------------------------------------+
 | id                     | Integer (PK)| Internal identifier                  |
 | playlist_id            | Integer (FK)| Reference to our playlist            |
-| connector_name         | String      | connector name (spotify, apple, etc)   |
-| connector_id           | String      | connector's playlist identifier        |
-| last_synced           | DateTime    | Last successful sync                 |
+| connector_name         | String      | Connector name (spotify, apple, etc) |
+| connector_id           | String      | Connector's playlist identifier      |
+| last_synced            | DateTime    | Last successful sync                 |
+| created_at             | DateTime    | Record creation timestamp            |
+| updated_at             | DateTime    | Last update timestamp                |
+| is_deleted             | Boolean     | Soft delete indicator                |
+| deleted_at             | DateTime    | Deleted at timestamp                 |
 +------------------------+-------------+--------------------------------------+
 ```
 
+##### Key Points
+1. **Sync Tracking** - Timestamps for synchronization history
+2. **Unique Mapping** - Each playlist maps to exactly one external playlist per connector
+3. **Consistent Pattern** - Follows same mapping pattern as track resolution
 
 #### Playlist Tracks Table
 
-Maps the many-to-many relationship between playlists and tracks.
+Maps the many-to-many relationship between playlists and tracks with ordering.
 
 ```
 +-----------------+-------------+--------------------------------------+
@@ -482,59 +448,40 @@ Maps the many-to-many relationship between playlists and tracks.
 | id              | Integer (PK)| Internal identifier                  |
 | playlist_id     | Integer (FK)| Reference to playlists table         |
 | track_id        | Integer (FK)| Reference to tracks table            |
-| sort_key        | VARCHAR(32) | Lexicographical ordering key         |
-| created_at      | DateTime    | Creation timestamp                   |
+| sort_key        | String      | Lexicographical ordering key         |
+| created_at      | DateTime    | Record creation timestamp            |
 | updated_at      | DateTime    | Last update timestamp                |
+| is_deleted      | Boolean     | Soft delete indicator                |
+| deleted_at      | DateTime    | Deleted at timestamp                 |
 +-----------------+-------------+--------------------------------------+
 ```
 
 ##### Key Points
-
-1. **Efficient Ordering**
-   - `sort_key` uses lexicographical strings (a000 → z999)
-   - Allows instant reordering without updating multiple rows
-   - Space between values for future insertions
-
-2. **Minimal Schema**
-   - Removed sync-specific fields
-   - Core focus on playlist structure
-   - Under 2000 LOC friendly
-
-3. **Future Extensibility**
-   - Can add sync capability later if needed
-   - Sort key pattern supports other ordering needs
-   - No schema changes needed for most features
-
-##### Example Sort Keys
-```
-First track:    "a0000000"
-Middle track:   "m0000000"
-Last track:     "z0000000"
-Between a and m: "g0000000"
-```
-
+1. **Efficient Ordering** - Lexicographical sort keys (e.g., "a0000000")
+2. **Implicit History** - Track position changes preserved through timestamps
+3. **Fast Retrieval** - Composite index optimizes ordered track fetching
 
 ### Design Decisions
 
-1. **JSON for Artists**
-   - Storing artists as JSON provides flexibility for varying artist data structures
-   - Avoids complex joins while supporting multiple artists per track
-   - Trade-off: Less query optimization for artist filtering
+1. **Base Model Pattern**
+   - All tables inherit from `NaradaDBBase` with consistent fields
+   - Standardized soft delete, timestamps, and primary keys
+   - Reduces duplicated code and ensures consistency
 
-2. **Confidence Scoring**
-   - Entity mappings include confidence scores to prioritize high-quality matches
-   - Enables progressive enhancement of match quality over time
-   - Provides transparency into match reliability
+2. **JSON for Complex Data**
+   - Artists and connector metadata stored as JSON
+   - Avoids complex joins while supporting nested data structures
+   - Trade-off: Less query optimization for complex filtering
 
-3. **Caching Strategy**
-   - Play counts cached with timestamps to enable intelligent refresh policies
-   - Entity mappings treated as semi-permanent with verification timestamps
-   - Trade-off: Potential staleness vs API rate limits
+3. **Soft Delete Strategy**
+   - `is_deleted` flag with timestamp across all tables
+   - Preserves relational integrity while allowing "deletion"
+   - Enables data recovery and history preservation
 
-4. **Position Tracking**
-   - Playlist tracks store explicit position to preserve ordering
-   - Enables position-based operations (move, swap, insert)
-   - Provides history awareness for original vs. transformed playlists
+4. **Separation of Concerns**
+   - Core data separated from connector-specific mappings
+   - Enables clean cross-connector operations
+   - Maintains single source of truth for each entity type
 
 ### Indexing Strategy
 
@@ -554,23 +501,13 @@ Between a and m: "g0000000"
 | playlist_mappings | id | Primary | Primary key | `mapped_column(primary_key=True)` |
 | playlist_mappings | (playlist_id, connector_name) | Composite Unique | Enforce single mapping per playlist/connector | `UniqueConstraint('playlist_id', 'connector_name')` |
 
-##### Index Design Principles
+### Database Session Management
 
-1. **Primary Keys**: Every table has an auto-incrementing integer primary key for consistent reference
-2. **Foreign Keys**: All relationships use indexed foreign keys for efficient joins
-3. **Composite Indices**: Used where multiple columns are frequently queried together
-4. **Unique Constraints**: Prevent duplicate entries in mapping tables
-5. **Ordering**: `sort_key` indexed with `playlist_id` for efficient ordered retrieval
+The database implementation provides several key utilities:
 
-
-#### Migration Philosophy
-
-The schema is designed for additive evolution rather than frequent structural changes:
-- New features can be added via new tables rather than schema modifications
-- Entity resolution quality can improve without schema changes
-- Transformation capabilities expand through code, not data model
-
-This approach keeps migrations simple while allowing the system to grow in capability without database restructuring.
+1. **Connection Pooling** - Configured with timeouts and recycling
+2. **Async Session Factory** - Type-safe async sessions with SQLAlchemy 2.0 patterns
+3. **Context Manager** - `get_session()` for clean transaction handling
 
 ## Connector Integration Strategy
 

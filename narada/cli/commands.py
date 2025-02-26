@@ -29,7 +29,7 @@ def register_commands(app: typer.Typer) -> None:
     """Register all commands with the Typer app."""
     app.command()(status)
     app.command()(setup)
-    app.command(name="workflow")(run_workflow)
+    app.command(name="workflow")(run_workflow)  # Replace sort_playlist
     app.command()(dashboard)
 
 
@@ -255,7 +255,7 @@ def setup(
 
 def run_workflow(
     workflow_id: Annotated[
-        Optional[str], typer.Argument(help="Workflow ID to execute", default=None)
+        Optional[str], typer.Argument(help="Workflow ID to execute")
     ] = None,
 ) -> None:
     """Run a workflow from available definitions."""

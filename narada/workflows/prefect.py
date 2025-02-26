@@ -6,11 +6,12 @@ and Prefect's execution engine, enabling declarative workflows to be
 executed with enterprise-grade reliability.
 """
 
+import datetime
 import re
 from typing import Any, NotRequired, TypedDict
 
 from prefect import flow, task
-from prefect.logging import get_run_logger  # type: ignore
+from prefect.logging import get_run_logger
 
 from narada.config import configure_prefect_logging, get_logger
 from narada.workflows.registry import get_component
@@ -71,7 +72,7 @@ class TaskResult(TypedDict):
     error: NotRequired[str]
 
 
-@task(  # type: ignore
+@task(
     retries=3,
     retry_delay_seconds=30,
     tags=["component"],
@@ -136,10 +137,10 @@ def build_flow(workflow_def: dict) -> Any:
     # Sort tasks in execution order
     sorted_tasks = topological_sort(tasks)
 
-    @flow(  # type: ignore
+    @flow(
         name=flow_name,
         description=flow_description,
-        flow_run_name=f"{flow_name}-{{date:%Y%m%d-%H%M%S}}",  # Dynamic flow run name with timestamp
+        flow_run_name=f"{flow_name}-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}",  # Dynamic flow run name with timestamp
     )
     async def workflow_flow(**parameters):
         """Dynamically generated Prefect flow from workflow definition."""
@@ -175,6 +176,9 @@ def build_flow(workflow_def: dict) -> Any:
 
         flow_logger.info("Workflow completed successfully")
         return context
+
+    # Return the decorated flow function
+    return workflow_flow
 
 
 # --- Workflow execution ---
