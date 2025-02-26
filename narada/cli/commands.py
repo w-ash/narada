@@ -253,6 +253,9 @@ def setup(
     console.print("\n")
 
 
+# In narada/cli/commands.py
+
+
 def sort_playlist(
     source_id: Annotated[str, typer.Argument(help="Spotify playlist ID to sort")],
     username: Annotated[str, typer.Option("--username", "-u", help="Last.fm username")],
@@ -264,19 +267,24 @@ def sort_playlist(
         Optional[str], typer.Option("--name", "-n", help="Name for the sorted playlist")
     ] = None,
 ) -> None:
-    """
-    Sort a Spotify playlist by Last.fm play counts.
-
-    This command fetches a Spotify playlist, retrieves play counts from Last.fm,
-    sorts tracks by play count, and creates a new sorted playlist.
-    """
-    logger.info(
-        "Starting playlist sort operation",
-        source_id=source_id,
-        username=username,
-        create_new=create_new,
+    """Sort a Spotify playlist by Last.fm play counts."""
+    from narada.playlists.workflows import (  # deprecated implementation needs to be updated
+        sort_playlist_by_plays,
     )
 
+    with console.status("[bold blue]Sorting playlist by play counts..."):
+        try:
+            result_id = asyncio.run(
+                sort_playlist_by_plays(
+                    source_id, username, create_new=create_new, target_name=target_name
+                )
+            )
+            console.print("\n[green]✓[/green] Playlist sorted successfully!")
+            console.print(f"[bold]Playlist ID:[/bold] {result_id}")
+        except Exception as e:
+            console.print(f"\n[red]Error:[/red] {e}")
+            logger.exception("Playlist sort failed")
+            raise typer.Exit(1)
     # Visually engaging status indicator
     with Live(
         Panel(
@@ -329,5 +337,7 @@ def dashboard(
             border_style="yellow",
         )
     )
+
+    logger.debug("Dashboard initialized", refresh_interval=refresh)
 
     logger.debug("Dashboard initialized", refresh_interval=refresh)
