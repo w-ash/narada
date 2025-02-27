@@ -111,7 +111,7 @@ def setup_loguru_logger(verbose: bool = False) -> None:
     logger.remove()
 
     # Add contextual info to all log records
-    logger.configure(extra={"service": "narada"})
+    logger.configure(extra={"service": "narada", "module": "root"})
 
     # Console handler - adjust level based on verbose flag
     console_level = "DEBUG" if verbose else _config["CONSOLE_LOG_LEVEL"]
@@ -134,15 +134,7 @@ def setup_loguru_logger(verbose: bool = False) -> None:
     logger.add(
         sink=str(_config["LOG_FILE"]),  # Convert Path to string
         level=_config["FILE_LOG_LEVEL"],
-        format=(
-            "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
-            "{level: <8} | "
-            "process:{process}:{thread} | "
-            "{name}:{function}:{line} | "
-            "({file}:{line}) | "
-            "{message}"
-            "\n{exception}"  # Add exception info on new line
-        ),
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | {process}:{thread} | {extra[service]} | {extra[module]} | {name}:{function}:{line} | {message}",
         rotation="10 MB",  # Rotate at 10 MB
         retention="1 week",  # Keep logs for 1 week
         compression="zip",
@@ -150,6 +142,7 @@ def setup_loguru_logger(verbose: bool = False) -> None:
         diagnose=True,  # Show variables in traceback
         enqueue=True,  # Thread-safe logging
         catch=True,  # Catch errors within logger
+        serialize=True,  # Enable JSON structured logging
     )
 
 
@@ -181,20 +174,23 @@ def get_logger(name: str) -> Any:  # Use Any for Loguru logger type
 
 async def log_startup_info() -> None:
     """Log application configuration on startup."""
+    local_logger = get_logger(__name__)  # Get a properly bound logger
     separator = "=" * 50
 
     # Startup banner and config details
-    logger.info("")
-    logger.info("<blue>{}</blue>", separator)
-    logger.info("<yellow>🎵 Narada Music Integration Platform</yellow>")
-    logger.info("<blue>{}</blue>", separator)
-    logger.info("")
-    logger.debug(
-        "Configuration:",
-        file_level=_config["FILE_LOG_LEVEL"],
-        database=_config["DATABASE_URL"],
-    )
-    logger.info("")
+    local_logger.info("")
+    local_logger.info("{}", separator, markup=True)
+    local_logger.info("🎵 Narada Music Integration Platform", markup=True)
+    local_logger.info("{}", separator, markup=True)
+    local_logger.info("")
+
+    # Log configuration details in a more readable format
+    local_logger.debug("Configuration:")
+    for key, value in _config.items():
+        if isinstance(value, Path):
+            value = str(value)
+        local_logger.debug("  {}: {}", key, value)
+    local_logger.info("")
 
 
 # Add a centralized error handling decorator for service boundaries

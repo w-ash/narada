@@ -39,7 +39,12 @@ class SpotifyConnector:
         logger.debug("Initializing Spotify connector")
         self.client = spotipy.Spotify(
             auth_manager=SpotifyOAuth(
-                scope=["playlist-modify-public", "playlist-modify-private"],
+                scope=[
+                    "playlist-modify-public",
+                    "playlist-modify-private",
+                    "playlist-read-private",
+                    "playlist-read-collaborative",
+                ],
                 open_browser=True,
                 cache_handler=spotipy.CacheFileHandler(cache_path=".spotify_cache"),
             )
@@ -51,7 +56,10 @@ class SpotifyConnector:
         """Fetch a Spotify playlist asynchronously with full pagination."""
         # Get initial playlist data
         raw_playlist = await asyncio.to_thread(
-            self.client.playlist, spotify_playlist_id
+            self.client.playlist,
+            spotify_playlist_id,
+            market="US",
+            # Remove the additional_types parameter or use an empty list
         )
 
         if not isinstance(raw_playlist, dict):

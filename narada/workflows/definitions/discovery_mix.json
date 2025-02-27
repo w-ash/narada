@@ -8,7 +8,7 @@
       "id": "source_serotonin",
       "type": "source.spotify_playlist",
       "config": {
-        "playlist_id": "37i9dQZF1DWYMroOc5KTTh"
+        "playlist_id": "2orOfUrshU959tYCUjt0Zs"
       }
     },
     {
@@ -35,7 +35,7 @@
       "id": "source_pollen",
       "type": "source.spotify_playlist",
       "config": {
-        "playlist_id": "37i9dQZF1DWWBHeXOYZf74"
+        "playlist_id": "2mSsaSRMN5Yfxo18SjDLjX"
       }
     },
     {
@@ -62,7 +62,7 @@
       "id": "source_metropolis",
       "type": "source.spotify_playlist",
       "config": {
-        "playlist_id": "37i9dQZF1DX8CopunbDxgW"
+        "playlist_id": "61R71LCmoVLcIzkPZw3BzA"
       }
     },
     {
@@ -86,30 +86,30 @@
       ]
     },
     {
-      "id": "source_fourth",
+      "id": "source_stereogum",
       "type": "source.spotify_playlist",
       "config": {
         "playlist_id": "4CFWNPfP7YKjDQOC2P7Ufr"
       }
     },
     {
-      "id": "filter_date_fourth",
+      "id": "filter_date_stereogum",
       "type": "transformer.filter_by_release_date",
       "config": {
         "max_age_days": 90
       },
       "upstream": [
-        "source_fourth"
+        "source_stereogum"
       ]
     },
     {
-      "id": "limit_fourth",
+      "id": "limit_stereogum",
       "type": "transformer.limit_tracks",
       "config": {
         "count": 5
       },
       "upstream": [
-        "filter_date_fourth"
+        "filter_date_stereogum"
       ]
     },
     {
@@ -120,7 +120,7 @@
         "limit_serotonin",
         "limit_pollen",
         "limit_metropolis",
-        "limit_fourth"
+        "limit_stereogum"
       ]
     },
     {

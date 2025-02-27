@@ -111,10 +111,16 @@ class Track:
 
 @define(frozen=True)
 class Playlist:
-    """Immutable playlist entity containing an ordered collection of tracks.
+    """Playlists are persistent entities with DB/API identity and metadata.
 
-    Playlists maintain track ordering while supporting functional
-    transformations through non-mutating operations.
+    Playlists are a represention of a user-facing list of tracks to be played,
+    stored sources or destinations for track collections. Unlike TrackLists, Playlists
+    are persisted entities that can be shared, stored, and retrieved.
+
+
+    Playlists maintain track ordering while supporting additional metadata and
+    cross-connector track identifiers for resolution across
+    different music services.
     """
 
     name: str = field(validator=validators.instance_of(str))
@@ -144,6 +150,39 @@ class Playlist:
             description=self.description,
             id=self.id,
             connector_track_ids=new_ids,
+        )
+
+
+@define(frozen=True)
+class TrackList:
+    """Ephemeral, immutable collection of tracks for processing pipelines.
+
+    Unlike Playlists, TrackLists are not persisted entities but rather
+    intermediate processing artifacts that flow through transformation pipelines.
+    """
+
+    tracks: List[Track] = field(factory=list)
+    metadata: Dict[str, Any] = field(factory=dict)
+
+    def with_tracks(self, tracks: List[Track]) -> "TrackList":
+        """Create new TrackList with the given tracks."""
+        return self.__class__(
+            tracks=tracks,
+            metadata=self.metadata.copy(),
+        )
+
+    def with_metadata(self, key: str, value: Any) -> "TrackList":
+        """Add metadata to the TrackList."""
+        new_metadata = self.metadata.copy()
+        new_metadata[key] = value
+        return self.__class__(tracks=self.tracks, metadata=new_metadata)
+
+    @classmethod
+    def from_playlist(cls, playlist: Playlist) -> "TrackList":
+        """Create TrackList from a Playlist."""
+        return cls(
+            tracks=playlist.tracks,
+            metadata={"source_playlist_name": playlist.name},
         )
 
 

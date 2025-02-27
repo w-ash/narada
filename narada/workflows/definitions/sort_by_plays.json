@@ -28,15 +28,12 @@
       "id": "source",
       "type": "source.spotify_playlist",
       "config": {
-        "playlist_id": "{parameters.source_playlist_id}"
+        "playlist_id": "37i9dQZF1DWYMroOc5KTTh"
       }
     },
     {
       "id": "resolve",
       "type": "enricher.resolve_lastfm",
-      "config": {
-        "username": "{parameters.username}"
-      },
       "upstream": [
         "source"
       ]
@@ -56,8 +53,8 @@
       "id": "destination",
       "type": "destination.create_spotify_playlist",
       "config": {
-        "name": "{parameters.target_name}",
-        "description": "Sorted by {parameters.username}'s play counts"
+        "name": "Sworted",
+        "description": "Sorted by Ash's play counts"
       },
       "upstream": [
         "sort"

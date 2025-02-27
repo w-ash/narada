@@ -8,6 +8,7 @@ executed with enterprise-grade reliability.
 
 import datetime
 import re
+from collections.abc import Callable
 from typing import Any, NotRequired, TypedDict
 
 from prefect import flow, task
@@ -21,6 +22,25 @@ configure_prefect_logging()
 
 # Normal module-level logger using our existing pattern
 logger = get_logger(__name__)
+
+# --- Progress callbacks ---
+
+_progress_callbacks: list[Callable] = []
+
+
+def register_progress_callback(callback: Callable) -> None:
+    """Register a callback to receive workflow progress events."""
+    _progress_callbacks.append(callback)
+
+
+def emit_progress_event(event_type: str, event_data: dict[str, Any]) -> None:
+    """Emit a progress event to all registered callbacks."""
+    for callback in _progress_callbacks:
+        try:
+            callback(event_type, event_data)
+        except Exception as e:
+            logger.warning(f"Progress callback error: {e}")
+
 
 # --- Template resolution ---
 
@@ -107,6 +127,8 @@ async def execute_component(component_type: str, context: dict, config: dict) ->
 
 def build_flow(workflow_def: dict) -> Any:
     """Build an executable Prefect flow from a workflow definition."""
+
+    # Extract workflow metadata
     flow_name = workflow_def.get("name", "unnamed_workflow")
     flow_description = workflow_def.get("description", "")
     tasks = workflow_def.get("tasks", [])
@@ -156,7 +178,13 @@ def build_flow(workflow_def: dict) -> Any:
             task_id = task_def["id"]
             component_type = task_def["type"]
 
-            # Simplified logging - directly use f-strings instead of extra={}
+            # Emit task started event
+            emit_progress_event(
+                "task_started",
+                {"task_id": task_id, "task_name": task_id, "task_type": component_type},
+            )
+
+            # Log the task start
             flow_logger.info(f"Starting task: {task_id} (type: {component_type})")
 
             # Resolve configuration with current context
@@ -173,6 +201,17 @@ def build_flow(workflow_def: dict) -> Any:
                 # Simplified logging with f-string
                 flow_logger.debug(f"Storing result under key: {result_key}")
                 context[result_key] = result
+
+            # Emit task completed event
+            emit_progress_event(
+                "task_completed",
+                {
+                    "task_id": task_id,
+                    "task_name": task_id,
+                    "task_type": component_type,
+                    "result": result,
+                },
+            )
 
         flow_logger.info("Workflow completed successfully")
         return context

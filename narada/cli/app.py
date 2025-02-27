@@ -75,17 +75,18 @@ def init_cli(
 
     Path("data").mkdir(exist_ok=True)
 
-    # Only show banner for root command (no subcommand)
-    if ctx.invoked_subcommand is None:
-        import asyncio
+    import asyncio
 
-        try:
-            # Log startup info
-            asyncio.run(log_startup_info())
+    try:
+        # Log startup info - run for all commands
+        asyncio.run(log_startup_info())
+
+        # Only show banner for root command (no subcommand)
+        if ctx.invoked_subcommand is None:
             _display_welcome_banner()
-        except Exception:
-            logger.exception("Error during startup")
-            raise typer.Exit(1)
+    except Exception:
+        logger.exception("Error during startup")
+        raise typer.Exit(1)
 
 
 def _display_welcome_banner() -> None:

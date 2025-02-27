@@ -10,7 +10,6 @@ from typing import Any, List, Optional, Tuple
 
 import typer
 from rich.console import Console
-from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from typing_extensions import Annotated
@@ -262,7 +261,16 @@ def run_workflow(
     import json
     from pathlib import Path
 
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+
     from narada.config import get_config
+    from narada.workflows.prefect import register_progress_callback
     from narada.workflows.prefect import run_workflow as execute_workflow
 
     # Get workflow definitions directory with fallback
@@ -339,41 +347,71 @@ def run_workflow(
         logger.exception(f"Failed to load workflow: {workflow_path}")
         return
 
-    # Execute the workflow with progress indication
-    with Live(
-        Panel(f"[bold blue]Initializing workflow: {workflow_id}[/bold blue]"),
-        refresh_per_second=4,
-    ) as live:
+    workflow_name = workflow_def.get("name", workflow_id)
+    task_count = len(workflow_def.get("tasks", []))
+
+    # Create a custom progress display
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(bar_width=None),
+        TextColumn("[bold cyan]{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        console=console,
+        expand=True,
+        transient=False,  # Keep progress history visible
+    ) as progress:
+        # Add overall workflow progress task
+        workflow_task_id = progress.add_task(
+            f"[bold]Workflow: {workflow_name}", total=task_count, completed=0
+        )
+
+        # Add a task for the current component being processed
+        component_task_id = progress.add_task("Initializing...", total=1, completed=0)
+
+        # Define progress callback for Prefect
+        def update_progress(event_type, event_data):
+            match event_type:
+                case "task_started":
+                    task_name = event_data.get("task_name", "Unknown task")
+                    task_type = event_data.get("task_type", "")
+                    progress.update(
+                        component_task_id,
+                        description=f"Running: {task_name} ({task_type})",
+                        completed=0,
+                        total=1,
+                    )
+
+                case "task_completed":
+                    # Mark current component as complete
+                    progress.update(component_task_id, completed=1)
+                    # Update overall workflow progress
+                    progress.update(
+                        workflow_task_id,
+                        completed=progress.tasks[workflow_task_id].completed + 1,
+                    )
+
+        # Register our callback with Prefect
+        register_progress_callback(update_progress)
+
         try:
+            # Execute workflow with progress tracking
             result = asyncio.run(execute_workflow(workflow_def))
 
-            # Success panel with results
-            success_content = (
-                f"[green bold]✓ Workflow completed: {workflow_id}[/green bold]\n\n"
+            # Display success and results
+            console.print()
+            console.print(
+                f"[green bold]✓ Workflow completed successfully:[/green bold] {workflow_name}"
             )
 
-            # Extract key results
+            # Extract and display key results
             if isinstance(result, dict):
-                if "playlist_id" in result:
-                    success_content += (
-                        f"[bold]Playlist ID:[/bold] {result['playlist_id']}\n"
-                    )
-                elif "destination" in result and isinstance(
-                    result["destination"], dict
-                ):
-                    playlist_id = result["destination"].get("playlist_id")
-                    if playlist_id:
-                        success_content += f"[bold]Playlist ID:[/bold] {playlist_id}\n"
-
-            live.update(Panel(success_content, border_style="green"))
+                pass
 
         except Exception as e:
-            live.update(
-                Panel(
-                    f"[bold red]✗ Workflow failed[/bold red]\n\n{str(e)}",
-                    border_style="red",
-                )
-            )
+            console.print()
+            console.print("[bold red]✗ Workflow failed[/bold red]")
+            console.print(f"[red]Error: {str(e)}[/red]")
             logger.exception("Workflow execution failed")
             raise typer.Exit(1)
 
