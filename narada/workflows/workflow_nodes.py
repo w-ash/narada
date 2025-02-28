@@ -99,7 +99,8 @@ async def resolve_lastfm(context: dict, config: dict) -> dict:
 async def deduplicate_filter(context: dict, config: dict) -> dict:
     """Remove duplicate tracks from playlist."""
     return await make_node(lambda _, __: make_dedup_filter(), "deduplicate")(
-        context, config
+        context,
+        config,
     )
 
 
@@ -113,7 +114,8 @@ async def filter_by_date(context: dict, config: dict) -> dict:
     """Filter tracks by release date range."""
     return await make_node(
         lambda _, cfg: make_date_filter(
-            cfg.get("min_age_days"), cfg.get("max_age_days")
+            cfg.get("min_age_days"),
+            cfg.get("max_age_days"),
         ),
         "filter_by_date",
     )(context, config)
@@ -130,7 +132,8 @@ async def filter_not_in_playlist(context: dict, config: dict) -> dict:
     return await make_node(
         lambda ctx, cfg: make_node(
             lambda c, cf: exclusion_predicate(
-                c, {"reference_task_id": cf.get("reference")}
+                c,
+                {"reference_task_id": cf.get("reference")},
             ),
             "exclude_tracks",
         )(ctx, cfg),
@@ -149,7 +152,8 @@ async def filter_not_artist_in_playlist(context: dict, config: dict) -> dict:
     return await make_node(
         lambda ctx, cfg: make_node(
             lambda c, cf: exclusion_predicate(
-                c, {"reference_task_id": cf.get("reference"), "exclude_artists": True}
+                c,
+                {"reference_task_id": cf.get("reference"), "exclude_artists": True},
             ),
             "exclude_artists",
         )(ctx, cfg),
@@ -221,8 +225,9 @@ async def merge_playlists(context: dict, config: dict) -> dict:
     """Merge multiple playlists into one."""
     sources = config.get("sources", context.get("upstream", []))
     return await make_node(
-        lambda ctx, cfg: combiner_factory(
-            ctx, {"sources": sources, "interleaved": False}
+        lambda ctx, _cfg: combiner_factory(
+            ctx,
+            {"sources": sources, "interleaved": False},
         ),
         "merge_playlists",
     )(context, config)
@@ -238,8 +243,9 @@ async def concatenate_playlists(context: dict, config: dict) -> dict:
     """Concatenate playlists in specified order."""
     order = config.get("order", context.get("upstream", []))
     return await make_node(
-        lambda ctx, cfg: combiner_factory(
-            ctx, {"sources": order, "interleaved": False}
+        lambda ctx, _cfg: combiner_factory(
+            ctx,
+            {"sources": order, "interleaved": False},
         ),
         "concatenate_playlists",
     )(context, config)
@@ -255,8 +261,9 @@ async def interleave_playlists(context: dict, config: dict) -> dict:
     """Interleave tracks from multiple playlists."""
     sources = config.get("sources", context.get("upstream", []))
     return await make_node(
-        lambda ctx, cfg: combiner_factory(
-            ctx, {"sources": sources, "interleaved": True}
+        lambda ctx, _cfg: combiner_factory(
+            ctx,
+            {"sources": sources, "interleaved": True},
         ),
         "interleave_playlists",
     )(context, config)

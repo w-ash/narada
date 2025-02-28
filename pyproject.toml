@@ -31,7 +31,7 @@ pytest = "^8.3.4"
 pytest-asyncio = "^0.25.3"  # Async test support
 pytest-cov = "^6.0.0"
 black = "^25.1.0"
-ruff = "^0.3.5"  # Modern replacement for isort, flake8, etc.
+ruff = "^0.9.9"  # Modern replacement for isort, flake8, etc.
 pre-commit = "^4.1.0"
 
 [tool.poetry.scripts]
@@ -42,33 +42,93 @@ test-db = "narada.data.test_database:main"
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
-[tool.black]
-line-length = 88
-target-version = ['py313']
-
+# Ruff configuration for version 0.9.9
 [tool.ruff]
+# Basic settings
 line-length = 88
 target-version = "py313"
+preview = true
 
-# Enable Pyflakes and pycodestyle rules
-select = ["E", "F", "I"]
-ignore = []
+# Linting rules
+select = [
+    "E",     # pycodestyle errors
+    "F",     # pyflakes
+    "I",     # isort
+    "B",     # flake8-bugbear
+    "UP",    # pyupgrade - modernize syntax
+    "N",     # pep8-naming
+    "SIM",   # flake8-simplify
+    "RUF",   # Ruff-specific rules
+    "C4",    # flake8-comprehensions (optimizes list/dict comprehensions)
+    "TCH",   # type-checking (better typing practices)
+    "TID",   # tidy imports
+    "S",     # flake8-bandit (security checks)
+    "PIE",   # flake8-pie (misc. lints for code improvement)
+    "PT",    # flake8-pytest-style (for better test patterns)
+    "COM",   # flake8-commas (trailing comma usage)
+    "DTZ",   # flake8-datetimez (timezone awareness)
+    "PERF",  # Performance anti-patterns
+    "ERA",   # Eradication of deprecated APIs
+    "ASYNC", # Common async/await issues
+    "FLY",   # String formatting issues
+    "ARG",   # Function argument validation
+    "TD003", # Mark TODOs with an assignee
+    "PYI",   # Stub file linting
+]
 
-# Allow autofix for all enabled rules (when `--fix`) is provided
+ignore = ["E501"]  # Line too long (handled by formatter)
 fixable = ["ALL"]
 unfixable = []
 
-# Sort imports
+# Per-file rule exceptions
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]   # Don't complain about unused imports in __init__ files
+"tests/**/*.py" = ["S101"] # Allow assert in tests
+
+# Import sorting configuration
 [tool.ruff.isort]
 known-first-party = ["narada"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+combine-as-imports = true
+split-on-trailing-comma = true
+lines-between-types = 1
+force-single-line = false           # Allow multi-line imports
+force-sort-within-sections = true   # Sort within sections
+from-first = false                  # Put "from" imports after regular imports
+detect-same-package = true          # Similar to grouping by package
+order-by-type = true                # Organize by import type
 
+# Python 3.13+ specific settings via pyupgrade
+[tool.ruff.pyupgrade]
+# Keep typed versions of builtins for better type checking
+keep-runtime-typing = true
+
+# Configure typing practices
+[tool.ruff.pydocstyle]
+convention = "google"
+
+# Formatter configuration (Compatible with Ruff 0.9.9)
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+# flake8-annotations settings
+[tool.ruff.flake8-annotations]
+allow-star-arg-any = true
+suppress-none-returning = true
+
+# flake8-bugbear settings
+[tool.ruff.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
+# Testing configuration
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
 asyncio_mode = "auto"
-markers = [
-    "integration: marks tests as integration tests",
-]
+markers = ["integration: marks tests as integration tests"]
 
 [tool.coverage.run]
 source = ["narada"]

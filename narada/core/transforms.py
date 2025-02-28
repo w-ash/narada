@@ -11,9 +11,10 @@ Transformations follow functional programming principles:
 - Purity: No side effects or external dependencies
 """
 
+from collections.abc import Callable
+from datetime import UTC, datetime
 import random
-from datetime import datetime
-from typing import Any, Callable, Optional, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from toolz import compose_left, curry
 
@@ -47,7 +48,8 @@ def create_pipeline(*operations: Transform) -> Transform:
 
 @curry
 def filter_by_predicate(
-    predicate: Callable[[Track], bool], tracklist: Optional[TrackList] = None
+    predicate: Callable[[Track], bool],
+    tracklist: TrackList | None = None,
 ) -> Transform | TrackList:
     """
     Filter tracks based on a predicate function.
@@ -68,7 +70,7 @@ def filter_by_predicate(
 
 
 @curry
-def filter_duplicates(tracklist: Optional[TrackList] = None) -> Transform | TrackList:
+def filter_duplicates(tracklist: TrackList | None = None) -> Transform | TrackList:
     """
     Remove duplicate tracks from a tracklist.
 
@@ -100,9 +102,9 @@ def filter_duplicates(tracklist: Optional[TrackList] = None) -> Transform | Trac
 
 @curry
 def filter_by_date_range(
-    min_age_days: Optional[int] = None,
-    max_age_days: Optional[int] = None,
-    tracklist: Optional[TrackList] = None,
+    min_age_days: int | None = None,
+    max_age_days: int | None = None,
+    tracklist: TrackList | None = None,
 ) -> Transform | TrackList:
     """
     Filter tracks by release date range.
@@ -120,22 +122,20 @@ def filter_by_date_range(
         if not track.release_date:
             return False
 
-        age_days = (datetime.now() - track.release_date).days
+        age_days = (datetime.now(UTC) - track.release_date).days
 
         if max_age_days is not None and age_days > max_age_days:
             return False
 
-        if min_age_days is not None and age_days < min_age_days:
-            return False
+        return not (min_age_days is not None and age_days < min_age_days)
 
-        return True
-
-    return cast(Transform | TrackList, filter_by_predicate(in_date_range, tracklist))
+    return cast("Transform | TrackList", filter_by_predicate(in_date_range, tracklist))
 
 
 @curry
 def exclude_tracks(
-    reference_tracks: list[Track], tracklist: Optional[TrackList] = None
+    reference_tracks: list[Track],
+    tracklist: TrackList | None = None,
 ) -> Transform | TrackList:
     """
     Filter out tracks that exist in a reference collection.
@@ -152,12 +152,16 @@ def exclude_tracks(
     def not_in_reference(track: Track) -> bool:
         return track.id not in exclude_ids
 
-    return cast(Transform | TrackList, filter_by_predicate(not_in_reference, tracklist))
+    return cast(
+        "Transform | TrackList",
+        filter_by_predicate(not_in_reference, tracklist),
+    )
 
 
 @curry
 def exclude_artists(
-    reference_tracks: list[Track], tracklist: Optional[TrackList] = None
+    reference_tracks: list[Track],
+    tracklist: TrackList | None = None,
 ) -> Transform | TrackList:
     """
     Filter out tracks whose artists appear in a reference collection.
@@ -179,7 +183,8 @@ def exclude_artists(
         return not (track.artists and track.artists[0].name.lower() in exclude_artists)
 
     return cast(
-        Transform | TrackList, filter_by_predicate(not_artist_in_reference, tracklist)
+        "Transform | TrackList",
+        filter_by_predicate(not_artist_in_reference, tracklist),
     )
 
 
@@ -190,7 +195,7 @@ def exclude_artists(
 def sort_by_attribute(
     key_fn: Callable[[Track], Any],
     reverse: bool = False,
-    tracklist: Optional[TrackList] = None,
+    tracklist: TrackList | None = None,
 ) -> Transform | TrackList:
     """
     Sort tracks by any attribute or derived value.
@@ -215,7 +220,7 @@ def sort_by_attribute(
 
 
 @curry
-def limit(count: int, tracklist: Optional[TrackList] = None) -> Transform | TrackList:
+def limit(count: int, tracklist: TrackList | None = None) -> Transform | TrackList:
     """
     Limit to the first n tracks.
 
@@ -235,7 +240,8 @@ def limit(count: int, tracklist: Optional[TrackList] = None) -> Transform | Trac
 
 @curry
 def take_last(
-    count: int, tracklist: Optional[TrackList] = None
+    count: int,
+    tracklist: TrackList | None = None,
 ) -> Transform | TrackList:
     """
     Take the last n tracks.
@@ -257,7 +263,8 @@ def take_last(
 
 @curry
 def sample_random(
-    count: int, tracklist: Optional[TrackList] = None
+    count: int,
+    tracklist: TrackList | None = None,
 ) -> Transform | TrackList:
     """
     Randomly sample n tracks.
@@ -280,7 +287,9 @@ def sample_random(
 
 @curry
 def select_by_method(
-    count: int, method: str = "first", tracklist: Optional[TrackList] = None
+    count: int,
+    method: str = "first",
+    tracklist: TrackList | None = None,
 ) -> Transform | TrackList:
     """
     Select tracks using specified method.
@@ -303,9 +312,9 @@ def select_by_method(
         raise ValueError(f"Invalid selection method: {method}")
 
     def transform(t: TrackList) -> TrackList:
-        result = cast(Transform, transform_fn)(t)
+        result = cast("Transform", transform_fn)(t)
         return (
-            cast(TrackList, result)
+            cast("TrackList", result)
             .with_metadata("selection_method", method)
             .with_metadata("original_count", len(t.tracks))
         )
@@ -318,7 +327,8 @@ def select_by_method(
 
 @curry
 def concatenate(
-    tracklists: list[TrackList], tracklist: Optional[TrackList] = None
+    tracklists: list[TrackList],
+    tracklist: TrackList | None = None,
 ) -> Transform | TrackList:
     """
     Concatenate multiple tracklists.
@@ -348,7 +358,7 @@ def concatenate(
 def interleave(
     tracklists: list[TrackList],
     stop_on_empty: bool = False,
-    tracklist: Optional[TrackList] = None,
+    tracklist: TrackList | None = None,
 ) -> Transform | TrackList:
     """
     Interleave tracks from multiple tracklists.
@@ -397,7 +407,8 @@ def interleave(
 
 @curry
 def rename(
-    new_name: str, playlist: Optional[Playlist] = None
+    new_name: str,
+    playlist: Playlist | None = None,
 ) -> Callable[[Playlist], Playlist] | Playlist:
     """
     Set playlist name.
@@ -424,7 +435,8 @@ def rename(
 
 @curry
 def set_description(
-    description: str, playlist: Optional[Playlist] = None
+    description: str,
+    playlist: Playlist | None = None,
 ) -> Callable[[Playlist], Playlist] | Playlist:
     """
     Set playlist description.

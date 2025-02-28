@@ -4,7 +4,7 @@ This test verifies:
 1. Table Creation:
    - Creates records in all tables defined in database.py:
      - tracks
-     - play_counts 
+     - play_counts
      - track_mappings
      - playlists
      - playlist_mappings
@@ -77,7 +77,7 @@ async def create_test_data(session: AsyncSession) -> tuple[DBTrack, DBPlaylist]:
                 confidence=100,
                 connector_metadata={"uri": "spotify:123"},
             ),
-        ]
+        ],
     )
     await session.commit()
 
@@ -98,7 +98,7 @@ async def create_test_data(session: AsyncSession) -> tuple[DBTrack, DBPlaylist]:
                 track_id=track.id,
                 sort_key="001",
             ),
-        ]
+        ],
     )
     await session.commit()
 
@@ -150,7 +150,7 @@ async def test_database() -> bool:
             )
 
             session.add_all(
-                [play_count, track_mapping, playlist_mapping, playlist_track]
+                [play_count, track_mapping, playlist_mapping, playlist_track],
             )
             await session.commit()
 
@@ -171,36 +171,36 @@ async def test_database() -> bool:
             # Check child records
             play_count_result = await session.execute(DBPlayCount.active_records())
             play_counts = play_count_result.scalars().all()
-            assert (
-                len(play_counts) == 1
-            ), f"Expected 1 play count, got {len(play_counts)}"
+            assert len(play_counts) == 1, (
+                f"Expected 1 play count, got {len(play_counts)}"
+            )
             assert play_counts[0].track_id == track.id
 
             track_mapping_result = await session.execute(
-                DBTrackMapping.active_records()
+                DBTrackMapping.active_records(),
             )
             track_mappings = track_mapping_result.scalars().all()
-            assert (
-                len(track_mappings) == 1
-            ), f"Expected 1 track mapping, got {len(track_mappings)}"
+            assert len(track_mappings) == 1, (
+                f"Expected 1 track mapping, got {len(track_mappings)}"
+            )
             assert track_mappings[0].connector_id == "123"
 
             playlist_mapping_result = await session.execute(
-                DBPlaylistMapping.active_records()
+                DBPlaylistMapping.active_records(),
             )
             playlist_mappings = playlist_mapping_result.scalars().all()
-            assert (
-                len(playlist_mappings) == 1
-            ), f"Expected 1 playlist mapping, got {len(playlist_mappings)}"
+            assert len(playlist_mappings) == 1, (
+                f"Expected 1 playlist mapping, got {len(playlist_mappings)}"
+            )
             assert playlist_mappings[0].connector_id == "playlist_123"
 
             playlist_track_result = await session.execute(
-                DBPlaylistTrack.active_records()
+                DBPlaylistTrack.active_records(),
             )
             playlist_tracks = playlist_track_result.scalars().all()
-            assert (
-                len(playlist_tracks) == 1
-            ), f"Expected 1 playlist track, got {len(playlist_tracks)}"
+            assert len(playlist_tracks) == 1, (
+                f"Expected 1 playlist track, got {len(playlist_tracks)}"
+            )
             assert playlist_tracks[0].sort_key == "001"
 
             logger.success("✓ All records created successfully")
@@ -226,9 +226,9 @@ async def test_database() -> bool:
             for model in models:
                 result = await session.execute(model.active_records())
                 active_records = result.scalars().all()
-                assert (
-                    len(active_records) == 0
-                ), f"Found active {model.__name__} records after soft delete"
+                assert len(active_records) == 0, (
+                    f"Found active {model.__name__} records after soft delete"
+                )
 
             logger.success("✓ No active records remain")
 
@@ -240,12 +240,12 @@ async def test_database() -> bool:
                 result = await session.execute(select(model))
                 records = result.scalars().all()
                 for record in records:
-                    assert (
-                        record.is_deleted
-                    ), f"{model.__name__} record not marked as deleted"
-                    assert (
-                        record.deleted_at is not None
-                    ), f"{model.__name__} missing deleted_at timestamp"
+                    assert record.is_deleted, (
+                        f"{model.__name__} record not marked as deleted"
+                    )
+                    assert record.deleted_at is not None, (
+                        f"{model.__name__} missing deleted_at timestamp"
+                    )
 
             logger.success("✓ Soft delete timestamps verified")
 

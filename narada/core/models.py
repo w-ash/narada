@@ -5,7 +5,7 @@ enforcing invariants while enabling functional transformation patterns.
 """
 
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import Any, TypeVar
 
 from attrs import define, field, validators
 
@@ -30,23 +30,23 @@ class Track:
     """
 
     title: str = field(validator=validators.instance_of(str))
-    artists: List[Artist] = field(
+    artists: list[Artist] = field(
         factory=list,
         validator=validators.deep_iterable(
             member_validator=validators.instance_of(Artist),
             iterable_validator=validators.min_len(1),
         ),
     )
-    album: Optional[str] = field(default=None)
-    duration_ms: Optional[int] = field(default=None)
-    release_date: Optional[datetime] = field(default=None)
-    isrc: Optional[str] = field(default=None)
+    album: str | None = field(default=None)
+    duration_ms: int | None = field(default=None)
+    release_date: datetime | None = field(default=None)
+    isrc: str | None = field(default=None)
 
     # Extended properties
-    id: Optional[int] = field(default=None)
-    play_count: Optional[int] = field(default=None)
-    connector_track_ids: Dict[str, str] = field(factory=dict)
-    connector_metadata: Dict[str, Dict[str, Any]] = field(factory=dict)
+    id: int | None = field(default=None)
+    play_count: int | None = field(default=None)
+    connector_track_ids: dict[str, str] = field(factory=dict)
+    connector_metadata: dict[str, dict[str, Any]] = field(factory=dict)
 
     def with_play_count(self, count: int) -> "Track":
         """Create a new track with play count information."""
@@ -82,7 +82,9 @@ class Track:
         )
 
     def with_connector_metadata(
-        self, connector: str, metadata: Dict[str, Any]
+        self,
+        connector: str,
+        metadata: dict[str, Any],
     ) -> "Track":
         """Create a new track with additional connector metadata."""
         new_metadata = self.connector_metadata.copy()
@@ -102,7 +104,10 @@ class Track:
         )
 
     def get_connector_attribute(
-        self, connector: str, attribute: str, default=None
+        self,
+        connector: str,
+        attribute: str,
+        default=None,
     ) -> Any:
         """Get a specific attribute from connector metadata."""
         connector_data = self.connector_metadata.get(connector, {})
@@ -124,12 +129,12 @@ class Playlist:
     """
 
     name: str = field(validator=validators.instance_of(str))
-    tracks: List[Track] = field(factory=list)
-    description: Optional[str] = field(default=None)
-    id: Optional[int] = field(default=None)
-    connector_track_ids: Dict[str, str] = field(factory=dict)
+    tracks: list[Track] = field(factory=list)
+    description: str | None = field(default=None)
+    id: int | None = field(default=None)
+    connector_track_ids: dict[str, str] = field(factory=dict)
 
-    def with_tracks(self, tracks: List[Track]) -> "Playlist":
+    def with_tracks(self, tracks: list[Track]) -> "Playlist":
         """Create a new playlist with the given tracks."""
         return self.__class__(
             name=self.name,
@@ -161,10 +166,10 @@ class TrackList:
     intermediate processing artifacts that flow through transformation pipelines.
     """
 
-    tracks: List[Track] = field(factory=list)
-    metadata: Dict[str, Any] = field(factory=dict)
+    tracks: list[Track] = field(factory=list)
+    metadata: dict[str, Any] = field(factory=dict)
 
-    def with_tracks(self, tracks: List[Track]) -> "TrackList":
+    def with_tracks(self, tracks: list[Track]) -> "TrackList":
         """Create new TrackList with the given tracks."""
         return self.__class__(
             tracks=tracks,
@@ -197,66 +202,9 @@ class ConnectorTrackMapping:
     connector_name: str = field(validator=validators.instance_of(str))
     connector_track_id: str = field(validator=validators.instance_of(str))
     match_method: str = field(
-        validator=validators.in_(["direct", "isrc", "mbid", "artist_title", "fuzzy"])
+        validator=validators.in_(["direct", "isrc", "mbid", "artist_title", "fuzzy"]),
     )
     confidence: int = field(
-        validator=[validators.instance_of(int), validators.ge(0), validators.le(100)]
+        validator=[validators.instance_of(int), validators.ge(0), validators.le(100)],
     )
-    metadata: Dict[str, Any] = field(factory=dict)
-
-
-@define(frozen=True)
-class PlaylistOperation:
-    """Immutable playlist transformation definition.
-
-    Defines operations that transform playlists while maintaining
-    immutability and composition patterns.
-    """
-
-    name: str = field(validator=validators.instance_of(str))
-    transform: Callable[[Playlist], Playlist] = field()
-
-    def apply(self, playlist: Playlist) -> Playlist:
-        """Apply this operation to a playlist."""
-        return self.transform(playlist)
-
-    def then(self, next_op: "PlaylistOperation") -> "PlaylistOperation":
-        """Compose with another operation, returning a new operation."""
-
-        def composed_transform(playlist: Playlist) -> Playlist:
-            return next_op.apply(self.apply(playlist))
-
-        return PlaylistOperation(
-            name=f"{self.name} → {next_op.name}", transform=composed_transform
-        )
-
-
-# Common operations
-
-
-def sort_by_attribute(attribute: str, reverse: bool = False) -> PlaylistOperation:
-    """Create an operation that sorts tracks by a specific attribute."""
-
-    def sort_transform(playlist: Playlist) -> Playlist:
-        def get_attr(track: Track) -> Any:
-            return getattr(track, attribute, None) or 0
-
-        sorted_tracks = sorted(playlist.tracks, key=get_attr, reverse=reverse)
-        return playlist.with_tracks(sorted_tracks)
-
-    direction = "descending" if reverse else "ascending"
-    return PlaylistOperation(
-        name=f"Sort by {attribute} ({direction})", transform=sort_transform
-    )
-
-
-def filter_by_predicate(
-    predicate: Callable[[Track], bool], name: str
-) -> PlaylistOperation:
-    """Create an operation that filters tracks by a predicate."""
-
-    def filter_transform(playlist: Playlist) -> Playlist:
-        filtered_tracks = [t for t in playlist.tracks if predicate(t)]
-        return playlist.with_tracks(filtered_tracks)
-
-    return PlaylistOperation(name=f"Filter: {name}", transform=filter_transform)
+    metadata: dict[str, Any] = field(factory=dict)

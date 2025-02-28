@@ -5,8 +5,10 @@ This module provides a streamlined approach to node creation, consolidating
 the various factory patterns into a cohesive system with minimal boilerplate.
 """
 
-from datetime import datetime
-from typing import Any, Awaitable, Callable, TypedDict, TypeVar, cast
+from asyncio import iscoroutinefunction
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any, TypedDict, TypeVar, cast
 
 from narada.core.models import Playlist, Track, TrackList
 from narada.core.transforms import (
@@ -76,9 +78,10 @@ class Context:
                 return tracklist
 
         # Try to find in any task result
-        for key, value in self.data.items():
+        for value in self.data.values():
             if isinstance(value, dict) and isinstance(
-                value.get("tracklist"), TrackList
+                value.get("tracklist"),
+                TrackList,
             ):
                 return value["tracklist"]
 
@@ -97,7 +100,7 @@ class Context:
 def make_result(tracklist: TrackList, operation: str, **extras) -> Result:
     """Create standard result dictionary."""
     return cast(
-        Result,
+        "Result",
         {
             "tracklist": tracklist,
             "operation": operation,
@@ -116,7 +119,13 @@ def make_node(transform_factory: Callable, operation: str) -> NodeFn:
 
     async def node_impl(context: dict, config: dict) -> dict:
         ctx = Context(context)
-        transform = transform_factory(ctx, config)
+
+        # Handle potentially async transform_factory
+        transform: Any
+        if iscoroutinefunction(transform_factory):
+            transform = await transform_factory(ctx, config)
+        else:
+            transform = transform_factory(ctx, config)
 
         # Handle different transform types
         match transform:
@@ -124,18 +133,24 @@ def make_node(transform_factory: Callable, operation: str) -> NodeFn:
                 # Function-based transform (filter, sort, etc.)
                 tracklist = ctx.extract_tracklist()
                 original_count = len(tracklist.tracks)
-                result = fn(tracklist)
-                transformed = cast(TrackList, result)
 
-                # Use explicit cast to dict to fix type compatibility
-                return dict(
-                    tracklist=transformed,
-                    operation=operation,
-                    original_count=original_count,
-                    removed_count=original_count - len(transformed.tracks),
-                )
+                # Handle potentially async transform function with proper typing
+                transformed: TrackList
+                if iscoroutinefunction(fn):
+                    # Since we know it's a coroutine function, we can safely await it
+                    result = await fn(tracklist)  # type: ignore
+                    transformed = cast("TrackList", result)
+                else:
+                    # For synchronous functions
+                    result = fn(tracklist)
+                    transformed = cast("TrackList", result)
 
-            # Add other specialized handling here if needed
+                return {
+                    "tracklist": transformed,
+                    "operation": operation,
+                    "original_count": original_count,
+                    "removed_count": original_count - len(transformed.tracks),
+                }
             case _:
                 raise TypeError(f"Unsupported transform type: {type(transform)}")
 
@@ -147,27 +162,29 @@ def make_node(transform_factory: Callable, operation: str) -> NodeFn:
 
 def make_filter(predicate_fn: PredicateFn) -> TransformFn:
     """Create a tracklist filter using the provided predicate."""
-    return cast(TransformFn, filter_by_predicate(predicate_fn))
+    return cast("TransformFn", filter_by_predicate(predicate_fn))
 
 
 def make_date_filter(
-    min_age: int | None = None, max_age: int | None = None
+    min_age: int | None = None,
+    max_age: int | None = None,
 ) -> TransformFn:
     """Create a date range filter."""
-    return cast(TransformFn, filter_by_date_range(min_age, max_age))
+    return cast("TransformFn", filter_by_date_range(min_age, max_age))
 
 
 def make_dedup_filter() -> TransformFn:
     """Create a deduplication filter."""
-    return cast(TransformFn, filter_duplicates())
+    return cast("TransformFn", filter_duplicates())
 
 
 def make_exclusion_filter(
-    reference_tracks: list[Track], by_artist: bool = False
+    reference_tracks: list[Track],
+    by_artist: bool = False,
 ) -> TransformFn:
     """Create an exclusion filter (by track or artist)."""
     return cast(
-        TransformFn,
+        "TransformFn",
         exclude_artists(reference_tracks)
         if by_artist
         else exclude_tracks(reference_tracks),
@@ -176,21 +193,22 @@ def make_exclusion_filter(
 
 def make_sorter(key_fn: KeyFn, reverse: bool = False) -> TransformFn:
     """Create a sorter using the provided key function."""
-    return cast(TransformFn, sort_by_attribute(key_fn, reverse))
+    return cast("TransformFn", sort_by_attribute(key_fn, reverse))
 
 
 def make_selector(count: int, method: str = "first") -> TransformFn:
     """Create a track selector (first, last, random)."""
-    return cast(TransformFn, select_by_method(count, method))
+    return cast("TransformFn", select_by_method(count, method))
 
 
 def make_combiner(
-    tracklists: list[TrackList], interleaved: bool = False
+    tracklists: list[TrackList],
+    interleaved: bool = False,
 ) -> TransformFn:
     """Create a tracklist combiner."""
     if interleaved:
-        return cast(TransformFn, interleave(tracklists))
-    return cast(TransformFn, concatenate(tracklists))
+        return cast("TransformFn", interleave(tracklists))
+    return cast("TransformFn", concatenate(tracklists))
 
 
 # === KEY FACTORIES ===
@@ -227,19 +245,26 @@ def user_play_count_key(ctx: Context, config: dict) -> Callable[[Track], int]:
     return get_play_count
 
 
-def spotify_popularity_key(ctx: Context, config: dict) -> Callable[[Track], int]:
+def spotify_popularity_key(_ctx: Context, config: dict) -> Callable[[Track], int]:
     """Create key function for Spotify popularity sorting."""
-    return lambda track: track.get_connector_attribute("spotify", "popularity", 0)
+    # Example of how you could use config if needed
+    default_popularity = config.get("default_popularity", 0)
+
+    return lambda track: track.get_connector_attribute(
+        "spotify",
+        "popularity",
+        default_popularity,
+    )
 
 
 # === PREDICATE FACTORIES ===
 
 
-def date_range_predicate(ctx: Context, config: dict) -> PredicateFn:
+def date_range_predicate(_ctx: Context, config: dict) -> PredicateFn:
     """Create a predicate for date range filtering."""
     min_age_days = config.get("min_age_days")
     max_age_days = config.get("max_age_days")
-    now = datetime.now()
+    now = datetime.now(tz=UTC)
 
     def in_date_range(track: Track) -> bool:
         if not track.release_date:
@@ -250,10 +275,7 @@ def date_range_predicate(ctx: Context, config: dict) -> PredicateFn:
         if max_age_days is not None and age_days > max_age_days:
             return False
 
-        if min_age_days is not None and age_days < min_age_days:
-            return False
-
-        return True
+        return not (min_age_days is not None and age_days < min_age_days)
 
     return in_date_range
 
@@ -268,7 +290,7 @@ def exclusion_predicate(ctx: Context, config: dict) -> PredicateFn:
         raise ValueError(f"Missing reference task: {ref_task_id}")
 
     reference = ctx.data[ref_task_id].get("tracklist") or ctx.data[ref_task_id].get(
-        "playlist"
+        "playlist",
     )
 
     if not reference or not hasattr(reference, "tracks"):
@@ -301,7 +323,8 @@ def filter_factory(ctx: Context, config: dict) -> TransformFn:
     match filter_type:
         case "date_range":
             return make_date_filter(
-                config.get("min_age_days"), config.get("max_age_days")
+                config.get("min_age_days"),
+                config.get("max_age_days"),
             )
         case "deduplicate":
             return make_dedup_filter()
@@ -322,12 +345,15 @@ def sorter_factory(ctx: Context, config: dict) -> TransformFn:
         case "popularity":
             return make_sorter(spotify_popularity_key(ctx, config), reverse)
         case "date":
-            return make_sorter(lambda t: t.release_date or datetime.min, reverse)
+            return make_sorter(
+                lambda t: t.release_date or datetime.min.replace(tzinfo=UTC),
+                reverse,
+            )
         case _:
             raise ValueError(f"Unknown sort type: {sort_by}")
 
 
-def selector_factory(ctx: Context, config: dict) -> TransformFn:
+def selector_factory(_ctx: Context, config: dict) -> TransformFn:
     """Factory for selector nodes."""
     count = config.get("count", 10)
     method = config.get("method", "first")

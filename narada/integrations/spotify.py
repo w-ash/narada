@@ -1,13 +1,13 @@
 """Spotify service connector with domain model conversion."""
 
 import asyncio
+from datetime import UTC, datetime
 import os
-from datetime import datetime
 from typing import Any
 
 import backoff
-import spotipy
 from dotenv import load_dotenv
+import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
 from narada.config import get_logger, resilient_operation
@@ -47,7 +47,7 @@ class SpotifyConnector:
                 ],
                 open_browser=True,
                 cache_handler=spotipy.CacheFileHandler(cache_path=".spotify_cache"),
-            )
+            ),
         )
 
     @resilient_operation("get_spotify_playlist")
@@ -86,7 +86,9 @@ class SpotifyConnector:
     @resilient_operation("create_spotify_playlist")
     @backoff.on_exception(backoff.expo, spotipy.SpotifyException, max_tries=3)
     async def create_spotify_playlist(
-        self, domain_playlist: Playlist, user_id: str | None = None
+        self,
+        domain_playlist: Playlist,
+        user_id: str | None = None,
     ) -> str:
         """Create a new Spotify playlist asynchronously."""
         try:
@@ -119,7 +121,9 @@ class SpotifyConnector:
                     for i in range(0, len(spotify_track_uris), 100):
                         batch = spotify_track_uris[i : i + 100]
                         await asyncio.to_thread(
-                            self.client.playlist_add_items, playlist_id, batch
+                            self.client.playlist_add_items,
+                            playlist_id,
+                            batch,
                         )
 
             return playlist_id
@@ -142,7 +146,10 @@ def convert_spotify_track_to_domain(spotify_track: dict[str, Any]) -> Track:
 
     try:
         release_date = (
-            datetime.strptime(spotify_track["album"]["release_date"], "%Y-%m-%d")
+            datetime.strptime(
+                spotify_track["album"]["release_date"],
+                "%Y-%m-%d",
+            ).replace(tzinfo=UTC)
             if "release_date" in spotify_track["album"]
             else None
         )

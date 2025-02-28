@@ -1,9 +1,8 @@
 """MusicBrainz service connector for entity resolution."""
 
 import asyncio
-import time
 from importlib.metadata import metadata
-from typing import Dict, List, Optional
+import time
 
 import backoff
 import musicbrainzngs
@@ -83,7 +82,7 @@ class MusicBrainzConnector:
         max_tries=3,
         giveup=lambda e: "404" in str(e),  # Don't retry not found
     )
-    async def get_recording_by_isrc(self, isrc: str) -> Optional[Dict]:
+    async def get_recording_by_isrc(self, isrc: str) -> dict | None:
         """Get recording details by ISRC.
 
         Args:
@@ -114,7 +113,9 @@ class MusicBrainzConnector:
 
             # Sort by number of releases (descending)
             sorted_recordings = sorted(
-                recordings, key=lambda r: len(r.get("release-list", [])), reverse=True
+                recordings,
+                key=lambda r: len(r.get("release-list", [])),
+                reverse=True,
             )
 
             return sorted_recordings[0]
@@ -129,7 +130,7 @@ class MusicBrainzConnector:
             return None
 
     @resilient_operation("batch_isrc_lookup")
-    async def batch_isrc_lookup(self, isrcs: List[str]) -> Dict[str, str]:
+    async def batch_isrc_lookup(self, isrcs: list[str]) -> dict[str, str]:
         """Batch lookup of ISRC to MBID mappings.
 
         Process ISRCs in parallel while respecting rate limits.
@@ -144,7 +145,7 @@ class MusicBrainzConnector:
             return {}
 
         # Deduplicate ISRCs
-        unique_isrcs = list(set(isrc for isrc in isrcs if isrc))
+        unique_isrcs = list({isrc for isrc in isrcs if isrc})
         logger.info(f"Looking up {len(unique_isrcs)} unique ISRCs")
 
         results = {}
@@ -176,13 +177,13 @@ class MusicBrainzConnector:
             # Log progress
             processed = (batch_idx + 1) * batch_size
             logger.debug(
-                f"Processed {min(processed, len(unique_isrcs))}/{len(unique_isrcs)} ISRCs"
+                f"Processed {min(processed, len(unique_isrcs))}/{len(unique_isrcs)} ISRCs",
             )
 
         logger.info(f"ISRC lookup complete, found {len(results)} matches")
         return results
 
-    async def _process_single_isrc(self, isrc: str) -> Optional[str]:
+    async def _process_single_isrc(self, isrc: str) -> str | None:
         """Process a single ISRC and extract MBID.
 
         Helper method for batch_isrc_lookup.
@@ -201,7 +202,7 @@ class MusicBrainzConnector:
         return recording.get("id")
 
     @resilient_operation("search_recording")
-    async def search_recording(self, artist: str, title: str) -> Optional[Dict]:
+    async def search_recording(self, artist: str, title: str) -> dict | None:
         """Search for a recording by artist and title.
 
         Fallback method when ISRC is unavailable.
@@ -220,7 +221,10 @@ class MusicBrainzConnector:
             # Use strict query to improve match quality
             query = f'artist:"{artist}" AND recording:"{title}"'
             result = await self._rate_limited_request(
-                musicbrainzngs.search_recordings, query=query, limit=5, strict=True
+                musicbrainzngs.search_recordings,
+                query=query,
+                limit=5,
+                strict=True,
             )
 
             recordings = result.get("recording-list", [])
@@ -238,7 +242,7 @@ class MusicBrainzConnector:
             return None
 
     @resilient_operation("get_recording_by_mbid")
-    async def get_recording_by_mbid(self, mbid: str) -> Optional[Dict]:
+    async def get_recording_by_mbid(self, mbid: str) -> dict | None:
         """Get detailed recording information by MBID.
 
         Args:

@@ -1,7 +1,7 @@
 """Repository layer for database operations."""
 
 from collections.abc import Callable
-from typing import Any, Generic, Type, TypeVar
+from typing import Any, ClassVar, TypeVar
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from narada.config import get_logger
 from narada.core.models import Artist, Playlist, Track
+from narada.core.protocols import MappingTable, ModelClass
 from narada.data.database import (
     DBPlaylist,
     DBPlaylistMapping,
@@ -19,19 +20,20 @@ from narada.data.database import (
     NaradaDBBase,
 )
 
-T = TypeVar("T", bound=NaradaDBBase)
-
 logger = get_logger(__name__)
 
+T = TypeVar("T", bound=NaradaDBBase)
+M = TypeVar("M", bound=MappingTable)
 
-class BaseRepository(Generic[T]):
+
+class BaseRepository[T]:
     """Base repository with common database operations."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         logger.debug("Initialized repository with session {}", id(session))
 
-    def _select_active(self, *entities: type[NaradaDBBase]) -> Select:
+    def _select_active(self, *entities: type) -> Select:
         """Create select statement with active filters.
 
         Args:
@@ -67,7 +69,7 @@ class BaseRepository(Generic[T]):
             next_entity = current_attr.prop.entity.class_
             next_path = ".".join(parts[1:])
             load_opt = load_opt.options(
-                self._relationship_option(next_entity, next_path)
+                self._relationship_option(next_entity, next_path),
             )
 
         return load_opt
@@ -86,7 +88,7 @@ class BaseRepository(Generic[T]):
             return list(result.unique()) if multi and result else result
 
         except SQLAlchemyError as e:
-            logger.exception(f"Database error in {self.__class__.__name__}: {str(e)}")
+            logger.exception(f"Database error in {self.__class__.__name__}: {e!s}")
             raise
 
     async def _execute_transaction(self, operation: Callable[[], Any]) -> Any:
@@ -107,12 +109,12 @@ class BaseRepository(Generic[T]):
             return result
 
         except SQLAlchemyError as e:
-            logger.exception(f"Database error in {self.__class__.__name__}: {str(e)}")
+            logger.exception(f"Database error in {self.__class__.__name__}: {e!s}")
             raise
 
     async def get_by_internal_id(
         self,
-        model_class: Type[T],
+        model_class: type[ModelClass],
         id_: int,
         load_relationships: bool = False,
     ) -> T | None:
@@ -133,17 +135,17 @@ class BaseRepository(Generic[T]):
                 *[
                     selectinload(getattr(model_class, rel.key))
                     for rel in model_class.__mapper__.relationships
-                ]
+                ],
             )
 
         return await self._execute_select(stmt)
 
     async def get_by_connector_id(
         self,
-        model_class: Type[T],
+        model_class: type[T],
         connector: str,
         connector_id: str,
-        mapping_class: type[NaradaDBBase],
+        mapping_class: type[M],  # Use the more specific type variable
         relationships: list[str] | None = None,
     ) -> T | None:
         """Get record by connector ID using SQLAlchemy 2.0 patterns.
@@ -160,23 +162,20 @@ class BaseRepository(Generic[T]):
             self._select_active(model_class)
             .join(mapping_class)
             .where(
-                # Use the class attributes properly
-                getattr(mapping_class, "connector_name") == connector,
-                getattr(mapping_class, "connector_id") == connector_id,
+                mapping_class.connector_name == connector,
+                mapping_class.connector_id == connector_id,
             )
         )
 
         # Add relationship loading if specified
         if relationships:
             stmt = stmt.options(
-                *[selectinload(getattr(model_class, rel)) for rel in relationships]
+                *[selectinload(getattr(model_class, rel)) for rel in relationships],
             )
-
-        return await self._execute_select(stmt)
 
     async def find_by_attribute(
         self,
-        model_class: Type[T],
+        model_class: type[ModelClass],  # Change from type[T] to type[ModelClass]
         attribute: str,
         value: Any,
         columns: list[str] | None = None,
@@ -219,16 +218,16 @@ class BaseRepository(Generic[T]):
 
         if relationships:
             stmt = stmt.options(
-                *[selectinload(getattr(model_class, rel)) for rel in relationships]
+                *[selectinload(getattr(model_class, rel)) for rel in relationships],
             )
         return await self._execute_select(stmt)
 
 
-class TrackRepository(BaseRepository):
+class TrackRepository(BaseRepository[DBTrack]):
     """Repository for track operations with efficient caching."""
 
     # ID type lookup definitions
-    _TRACK_ID_TYPES = {
+    _TRACK_ID_TYPES: ClassVar[dict[str, Callable]] = {
         "internal": lambda self, id_value: self._get_by_internal(id_value),
         "spotify": lambda self, id_value: self._get_by_connector("spotify", id_value),
         "isrc": lambda self, id_value: self._get_by_attribute("isrc", id_value),
@@ -255,7 +254,8 @@ class TrackRepository(BaseRepository):
         for mapping in db_track.mappings:
             if mapping.connector_metadata:
                 track = track.with_connector_metadata(
-                    mapping.connector_name, mapping.connector_metadata
+                    mapping.connector_name,
+                    mapping.connector_metadata,
                 )
 
         return track
@@ -307,7 +307,9 @@ class TrackRepository(BaseRepository):
     async def _get_by_internal(self, id_value: str) -> DBTrack | None:
         """Get track by internal ID."""
         result = await self.get_by_internal_id(
-            DBTrack, int(id_value), load_relationships=True
+            DBTrack,
+            int(id_value),
+            load_relationships=True,
         )
         return result if isinstance(result, DBTrack) else None
 
@@ -352,7 +354,7 @@ class TrackRepository(BaseRepository):
             .where(
                 DBTrack.isrc == track.isrc
                 if track.isrc
-                else DBTrack.spotify_id == track.connector_track_ids.get("spotify")
+                else DBTrack.spotify_id == track.connector_track_ids.get("spotify"),
             )
         )
 
@@ -395,7 +397,7 @@ class TrackRepository(BaseRepository):
         ]
 
 
-class PlaylistRepository(BaseRepository):
+class PlaylistRepository(BaseRepository[DBPlaylist]):
     """Repository for playlist operations with efficient caching."""
 
     async def get_playlist(self, id_type: str, id_value: str) -> Playlist | None:
@@ -433,7 +435,9 @@ class PlaylistRepository(BaseRepository):
         return self._convert_db_playlist(db_playlist) if db_playlist else None
 
     async def save_playlist(
-        self, playlist: Playlist, track_repo: TrackRepository
+        self,
+        playlist: Playlist,
+        track_repo: TrackRepository,
     ) -> str:
         """Save playlist with efficient batch operations.
 
@@ -462,7 +466,7 @@ class PlaylistRepository(BaseRepository):
                         playlist_id=db_playlist.id,
                         connector_name=connector,
                         connector_id=connector_id,
-                    )
+                    ),
                 )
 
             # Save tracks and create playlist associations
@@ -477,7 +481,7 @@ class PlaylistRepository(BaseRepository):
                         playlist_id=db_playlist.id,
                         track_id=track_id,
                         sort_key=self._generate_sort_key(idx),
-                    )
+                    ),
                 )
 
             await self.session.flush()
@@ -487,7 +491,10 @@ class PlaylistRepository(BaseRepository):
         return await self._execute_transaction(save_playlist_operation)
 
     async def update_playlist(
-        self, playlist_id: str, playlist: Playlist, track_repo: TrackRepository
+        self,
+        playlist_id: str,
+        playlist: Playlist,
+        track_repo: TrackRepository,
     ) -> None:
         """Update existing playlist with new tracks and order."""
 

@@ -6,13 +6,12 @@ keeping them separate from the CLI initialization logic.
 
 import asyncio
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Annotated, Any
 
-import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from typing_extensions import Annotated
+import typer
 
 from narada.config import get_config, get_logger, resilient_operation
 
@@ -24,60 +23,25 @@ logger = get_logger(__name__)
 SERVICES = ["Spotify", "Last.fm", "MusicBrainz"]
 
 
+def initialize_workflow_system() -> tuple[bool, str]:
+    """Initialize and validate workflow nodes during app startup."""
+    try:
+        # Import workflow package which triggers node registration
+        from narada.workflows import validate_registry
+
+        # Run validation and return result
+        return validate_registry()
+    except Exception as e:
+        logger.exception("Workflow system initialization failed")
+        return False, f"Workflow initialization failed: {e!s}"
+
+
 def register_commands(app: typer.Typer) -> None:
     """Register all commands with the Typer app."""
     app.command()(status)
     app.command()(setup)
     app.command(name="workflow")(run_workflow)  # Replace sort_playlist
     app.command()(dashboard)
-
-
-def initialize_node_system():
-    """Establish deterministic node initialization and validate registry integrity."""
-    try:
-        # Force eager loading of node modules in deterministic sequence
-        from narada.workflows import node_factories  # noqa
-        from narada.workflows import workflow_nodes  # noqa
-        from narada.workflows import node_registry
-
-        # Retrieve singleton registry instance
-        registry = node_registry.registry
-
-        # Define critical node paths that must exist
-        critical_nodes = [
-            "source.spotify_playlist",
-            "enricher.resolve_lastfm",
-            "filter.deduplicate",
-            "filter.by_release_date",
-            "filter.not_in_playlist",
-            "filter.not_artist_in_playlist",
-            "sorter.by_popularity",
-            "sorter.sort_by_user_plays",
-            "selector.limit",
-            "combiner.merge_playlists",
-            "combiner.concatenate_playlists",
-            "destination.create_spotify_playlist",
-        ]
-
-        # Validate registry integrity
-        registered = set(registry.list_nodes().keys())
-        missing = [c for c in critical_nodes if c not in registered]
-
-        if missing:
-            return (
-                False,
-                f"Node registry initialization incomplete: missing {', '.join(missing)}",
-            )
-
-        return True, f"Node system initialized with {len(registered)} nodes"
-
-    except ImportError as e:
-        return False, f"Node system initialization failed: {str(e)}"
-    except Exception as e:
-        return (
-            False,
-            f"Unexpected error during node system initialization: {str(e)}",
-        )
 
 
 @resilient_operation("spotify_check")
@@ -113,7 +77,9 @@ async def _check_lastfm() -> tuple[bool, str]:
         case _:
             try:
                 play_count = await connector.get_track_play_count(
-                    "The Beatles", "Let It Be", connector.username
+                    "The Beatles",
+                    "Let It Be",
+                    connector.username,
                 )
                 return bool(play_count.track_url), f"Connected as {connector.username}"
             except Exception as e:
@@ -138,11 +104,11 @@ async def _check_musicbrainz() -> tuple[bool, str]:
 
 
 @resilient_operation("service_check")
-async def _check_connections() -> List[Tuple[str, bool, str]]:
+async def _check_connections() -> list[tuple[str, bool, str]]:
     """Check all service connections concurrently.
 
     Returns:
-        List[Tuple[str, bool, str]]: List of (service_name, is_connected, details)
+        list[tuple[str, bool, str]]: List of (service_name, is_connected, details)
     """
     with logger.contextualize(operation="service_check"):
         # Define service checks with their coroutines
@@ -156,10 +122,10 @@ async def _check_connections() -> List[Tuple[str, bool, str]]:
         results = await asyncio.gather(*service_checks, return_exceptions=True)
 
         # Process results with pattern matching
-        def process_result(service: str, result: Any) -> Tuple[str, bool, str]:
+        def process_result(service: str, result: Any) -> tuple[str, bool, str]:
             match result:
                 case Exception() as e:
-                    return service, False, f"Error: {str(e)}"
+                    return service, False, f"Error: {e!s}"
                 case (is_connected, details):
                     return service, is_connected, details
                 case _:
@@ -167,12 +133,11 @@ async def _check_connections() -> List[Tuple[str, bool, str]]:
 
         return [
             process_result(service, result)
-            for service, result in zip(SERVICES, results)
+            for service, result in zip(SERVICES, results, strict=False)
         ]
 
 
 def status(
-    ctx: typer.Context,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
     """Check connection status of music services."""
@@ -210,7 +175,7 @@ def status(
             if not all(connected for _, connected, _ in results):
                 console.print(
                     "[yellow]Some services not connected. "
-                    "Run [bold]narada setup[/bold] to configure.[/yellow]"
+                    "Run [bold]narada setup[/bold] to configure.[/yellow]",
                 )
                 console.print("\n")
 
@@ -223,12 +188,13 @@ def status(
         except Exception as e:
             logger.exception("Status check failed")
             console.print(f"[red]Error: {e}[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
 
 def setup(
     force: Annotated[
-        bool, typer.Option("--force", "-f", help="Force reconfiguration")
+        bool,
+        typer.Option("--force", "-f", help="Force reconfiguration"),
     ] = False,
 ) -> None:
     """Configure your music service connections."""
@@ -242,7 +208,7 @@ def setup(
         ]
     ):
         console.print(
-            "\n[yellow]Configuration already exists. Use --force to reconfigure.[/yellow]\n"
+            "\n[yellow]Configuration already exists. Use --force to reconfigure.[/yellow]\n",
         )
         return
 
@@ -258,7 +224,7 @@ def setup(
             title="[bold]Narada Setup[/bold]",
             border_style="green",
             expand=False,
-        )
+        ),
     )
 
     # Show current configuration
@@ -302,7 +268,8 @@ def setup(
 
 def run_workflow(
     workflow_id: Annotated[
-        Optional[str], typer.Argument(help="Workflow ID to execute")
+        str | None,
+        typer.Argument(help="Workflow ID to execute"),
     ] = None,
 ) -> None:
     """Run a workflow from available definitions."""
@@ -318,14 +285,16 @@ def run_workflow(
     )
 
     from narada.config import get_config, get_logger
-    from narada.workflows.prefect import register_progress_callback
-    from narada.workflows.prefect import run_workflow as execute_workflow
+    from narada.workflows.prefect import (
+        register_progress_callback,
+        run_workflow as execute_workflow,
+    )
 
     logger = get_logger(__name__)
 
     # Initialize node system
     with console.status("[bold blue]Initializing node system..."):
-        success, message = initialize_node_system()
+        success, message = initialize_workflow_system()
 
     if not success:
         console.print(f"[bold red]✗ {message}[/bold red]")
@@ -347,7 +316,7 @@ def run_workflow(
     available_workflows = {}
     for file_path in workflows_dir.glob("*.json"):
         try:
-            with open(file_path, "r") as f:
+            with open(file_path) as f:
                 workflow_def = json.load(f)
                 wf_id = workflow_def.get("id")
                 if wf_id:
@@ -364,7 +333,7 @@ def run_workflow(
         if not available_workflows:
             console.print("[red]No workflows found in definitions directory.[/red]")
             console.print(
-                f"[yellow]Add workflow JSON files to: {workflows_dir}[/yellow]"
+                f"[yellow]Add workflow JSON files to: {workflows_dir}[/yellow]",
             )
             return
 
@@ -402,7 +371,7 @@ def run_workflow(
     # Load workflow definition
     workflow_path = available_workflows[workflow_id]["path"]
     try:
-        with open(workflow_path, "r") as f:
+        with open(workflow_path) as f:
             workflow_def = json.load(f)
     except Exception as e:
         console.print(f"[red]Error loading workflow: {e}[/red]")
@@ -425,7 +394,9 @@ def run_workflow(
     ) as progress:
         # Add overall workflow progress task
         workflow_task_id = progress.add_task(
-            f"[bold]Workflow: {workflow_name}", total=task_count, completed=0
+            f"[bold]Workflow: {workflow_name}",
+            total=task_count,
+            completed=0,
         )
 
         # Add a task for the current node being processed
@@ -463,7 +434,7 @@ def run_workflow(
             # Display success and results
             console.print()
             console.print(
-                f"[green bold]✓ Workflow completed successfully:[/green bold] {workflow_name}"
+                f"[green bold]✓ Workflow completed successfully:[/green bold] {workflow_name}",
             )
 
             # Extract and display key results
@@ -473,16 +444,20 @@ def run_workflow(
         except Exception as e:
             console.print()
             console.print("[bold red]✗ Workflow failed[/bold red]")
-            console.print(f"[red]Error: {str(e)}[/red]")
+            console.print(f"[red]Error: {e!s}[/red]")
             logger.exception("Workflow execution failed")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
 
 def dashboard(
     refresh: Annotated[
         int,
         typer.Option(
-            "--refresh", "-r", help="Refresh interval in seconds", min=1, max=3600
+            "--refresh",
+            "-r",
+            help="Refresh interval in seconds",
+            min=1,
+            max=3600,
         ),
     ] = 60,
 ) -> None:
@@ -499,7 +474,7 @@ def dashboard(
             "• [cyan]Smart playlist recommendations[/cyan]",
             title="[bold]Narada Dashboard[/bold]",
             border_style="yellow",
-        )
+        ),
     )
 
     logger.debug("Dashboard initialized", refresh_interval=refresh)

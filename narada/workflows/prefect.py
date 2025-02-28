@@ -6,9 +6,9 @@ and Prefect's execution engine, enabling declarative workflows to be
 executed with enterprise-grade reliability.
 """
 
+from collections.abc import Callable
 import datetime
 import re
-from collections.abc import Callable
 from typing import Any, NotRequired, TypedDict
 
 from prefect import flow, task
@@ -105,8 +105,8 @@ async def execute_node(node_type: str, context: dict, config: dict) -> dict:
     # Log with f-string instead of extra={}
     task_logger.info(f"Executing node: {node_type}")
 
-    # Get node implementation
-    node_func, node_meta = get_node(node_type)
+    # Get node implementation, use _ to indicate unused variable
+    node_func, _ = get_node(node_type)
 
     # Resolve template variables in config
     resolved_config = resolve_templates(config, context)
@@ -123,6 +123,13 @@ async def execute_node(node_type: str, context: dict, config: dict) -> dict:
 
 
 # --- Flow building ---
+
+
+def generate_flow_run_name(flow_name: str) -> str:
+    """Generate a dynamic flow run name with a timestamp."""
+    return (
+        f"{flow_name}-{datetime.datetime.now(datetime.UTC).strftime('%Y%m%d-%H%M%S')}"
+    )
 
 
 def build_flow(workflow_def: dict) -> Any:
@@ -162,7 +169,9 @@ def build_flow(workflow_def: dict) -> Any:
     @flow(
         name=flow_name,
         description=flow_description,
-        flow_run_name=f"{flow_name}-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}",  # Dynamic flow run name with timestamp
+        flow_run_name=generate_flow_run_name(
+            flow_name,
+        ),  # Dynamic flow run name with timestamp
     )
     async def workflow_flow(**parameters):
         """Dynamically generated Prefect flow from workflow definition."""

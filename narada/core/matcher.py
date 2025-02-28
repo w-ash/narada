@@ -5,7 +5,8 @@ music services while supporting functional transformation patterns.
 """
 
 import asyncio
-from typing import Callable, Dict, List, Optional, Tuple, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
 from attrs import define
 
@@ -51,8 +52,8 @@ class MatchResult:
     """
 
     track: Track
-    play_count: Optional[LastFmPlayCount] = None
-    mapping: Optional[ConnectorTrackMapping] = None
+    play_count: LastFmPlayCount | None = None
+    mapping: ConnectorTrackMapping | None = None
     success: bool = False
 
     @property
@@ -67,8 +68,9 @@ class MatchResult:
 
 
 async def resolve_mbid_from_isrc(
-    track: Track, musicbrainz_connector: MusicBrainzConnector
-) -> Tuple[Optional[str], Track]:
+    track: Track,
+    musicbrainz_connector: MusicBrainzConnector,
+) -> tuple[str | None, Track]:
     """Resolve MBID from ISRC using MusicBrainz.
 
     Args:
@@ -129,8 +131,8 @@ def validate_metadata(track: Track, confidence: int) -> int:
 async def match_track(
     track: Track,
     lastfm_connector: LastFmConnector,
-    musicbrainz_connector: Optional[MusicBrainzConnector] = None,
-    username: Optional[str] = None,
+    musicbrainz_connector: MusicBrainzConnector | None = None,
+    username: str | None = None,
 ) -> MatchResult:
     """Match a track to Last.fm and retrieve play count.
 
@@ -178,7 +180,9 @@ async def match_track(
     # STRATEGY #2: Direct artist/title → Last.fm
     if not play_count or not play_count.track_url:
         play_count = await lastfm_connector.get_track_play_count(
-            artist_name, track.title, username
+            artist_name,
+            track.title,
+            username,
         )
 
         if play_count and play_count.track_url:
@@ -209,22 +213,26 @@ async def match_track(
 
     # Update track with Last.fm URL
     updated_track = updated_track.with_connector_track_id(
-        "lastfm", play_count.track_url
+        "lastfm",
+        play_count.track_url,
     )
 
     return MatchResult(
-        track=updated_track, play_count=play_count, mapping=mapping, success=True
+        track=updated_track,
+        play_count=play_count,
+        mapping=mapping,
+        success=True,
     )
 
 
 async def batch_match_tracks(
-    tracks: List[Track],
+    tracks: list[Track],
     lastfm_connector: LastFmConnector,
-    musicbrainz_connector: Optional[MusicBrainzConnector] = None,
-    username: Optional[str] = None,
+    musicbrainz_connector: MusicBrainzConnector | None = None,
+    username: str | None = None,
     batch_size: int = 50,
     concurrency: int = 10,
-) -> Dict[int, MatchResult]:
+) -> dict[int, MatchResult]:
     """Match multiple tracks in batches with controlled concurrency.
 
     Args:
@@ -241,27 +249,33 @@ async def batch_match_tracks(
     if not tracks:
         return {}
 
-    results: Dict[int, MatchResult] = {}
+    results: dict[int, MatchResult] = {}
     total_batches = (len(tracks) + batch_size - 1) // batch_size
 
     # Process tracks in batches
     for batch_idx, batch_start in enumerate(range(0, len(tracks), batch_size)):
         batch = tracks[batch_start : batch_start + batch_size]
         logger.info(
-            f"Processing batch {batch_idx+1}/{total_batches} ({len(batch)} tracks)"
+            f"Processing batch {batch_idx + 1}/{total_batches} ({len(batch)} tracks)",
         )
 
         # Create a semaphore to limit concurrency
         semaphore = asyncio.Semaphore(concurrency)
 
-        async def process_track(track: Track) -> Tuple[Optional[int], MatchResult]:
+        async def process_track(
+            track: Track,
+            sem: asyncio.Semaphore,
+        ) -> tuple[int | None, MatchResult]:
             """Process a single track with rate limiting."""
-            async with semaphore:
+            async with sem:
                 # Small delay to avoid API rate limits
                 await asyncio.sleep(0.1)
                 try:
                     result = await match_track(
-                        track, lastfm_connector, musicbrainz_connector, username
+                        track,
+                        lastfm_connector,
+                        musicbrainz_connector,
+                        username,
                     )
                     return track.id, result
                 except Exception as e:
@@ -269,20 +283,22 @@ async def batch_match_tracks(
                     return track.id, MatchResult(track=track, success=False)
 
         # Process batch concurrently
-        batch_tasks = [process_track(track) for track in batch]
+        batch_tasks = [process_track(track, semaphore) for track in batch]
         batch_results = await asyncio.gather(*batch_tasks)
 
-        # Store valid results
-        for track_id, result in batch_results:
-            if track_id is not None:
-                results[track_id] = result
+        # Store valid results using dictionary comprehension
+        results.update({
+            track_id: result
+            for track_id, result in batch_results
+            if track_id is not None
+        })
 
         # Log batch completion with metrics
         matched = sum(1 for r in results.values() if r.success)
         success_rate = matched / max(1, len(results)) * 100
 
         logger.info(
-            f"Batch {batch_idx+1}/{total_batches} complete",
+            f"Batch {batch_idx + 1}/{total_batches} complete",
             success_rate=f"{success_rate:.1f}%",
             matched=f"{matched}/{len(results)}",
         )
@@ -298,7 +314,7 @@ async def batch_match_tracks(
         total_tracks=len(tracks),
         matched=successful,
         high_confidence=high_confidence,
-        success_rate=f"{(successful/len(tracks))*100:.1f}%",
+        success_rate=f"{(successful / len(tracks)) * 100:.1f}%",
     )
 
     return results

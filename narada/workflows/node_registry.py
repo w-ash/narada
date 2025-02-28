@@ -8,10 +8,10 @@ workflow definitions and node implementations.
 
 from collections.abc import Awaitable, Callable
 from functools import wraps
-from typing import Literal, NotRequired, TypeAlias, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 # Type definitions with modern annotation style
-NodeType: TypeAlias = Literal[
+type NodeType = Literal[
     "source",
     "enricher",
     "filter",
@@ -22,7 +22,7 @@ NodeType: TypeAlias = Literal[
 ]
 
 # Define strict node function type
-NodeFn: TypeAlias = Callable[[dict, dict], Awaitable[dict]]
+type NodeFn = Callable[[dict, dict], Awaitable[dict]]
 
 
 class NodeMetadata(TypedDict):
@@ -136,7 +136,15 @@ class NodeRegistry:
     @staticmethod
     def get_valid_categories() -> set[NodeType]:
         """Get all valid node categories."""
-        return set(NodeType.__args__)
+        return {
+            "source",
+            "enricher",
+            "filter",
+            "sorter",
+            "selector",
+            "combiner",
+            "destination",
+        }
 
 
 # Create global registry instance

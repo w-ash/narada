@@ -54,10 +54,15 @@ class NaradaDBBase(DeclarativeBase):
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=func.now(), nullable=False
+        DateTime,
+        default=func.now(),
+        nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=func.now(), onupdate=func.now(), nullable=False
+        DateTime,
+        default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
     def mark_soft_deleted(self) -> None:
@@ -70,7 +75,7 @@ class NaradaDBBase(DeclarativeBase):
         self.deleted_at = func.now()
 
     @declared_attr.directive
-    def __mapper_args__(cls) -> dict[str, Any]:
+    def __mapper_args__(self) -> dict[str, Any]:
         """Configure mapper arguments."""
         return {
             "eager_defaults": True,
@@ -201,7 +206,9 @@ class DBPlaylistTrack(NaradaDBBase):
 
     playlist = relationship("DBPlaylist", back_populates="tracks", passive_deletes=True)
     track = relationship(
-        "DBTrack", back_populates="playlist_tracks", passive_deletes=True
+        "DBTrack",
+        back_populates="playlist_tracks",
+        passive_deletes=True,
     )
 
 
@@ -209,7 +216,7 @@ class DBPlaylistTrack(NaradaDBBase):
 @asynccontextmanager
 async def get_session(
     rollback: bool = True,
-) -> AsyncGenerator[AsyncSession, None]:
+) -> AsyncGenerator[AsyncSession]:
     """Get database session with automatic transaction management.
 
     Args:
@@ -254,7 +261,8 @@ async def soft_delete_record(session: AsyncSession, model: NaradaDBBase) -> None
 
     # Load all relationships explicitly (SQLAlchemy 2.0 best practice)
     await session.refresh(
-        model, attribute_names=[rel.key for rel in model.__mapper__.relationships]
+        model,
+        attribute_names=[rel.key for rel in model.__mapper__.relationships],
     )
 
     # Mark all related records as deleted

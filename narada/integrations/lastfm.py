@@ -2,11 +2,10 @@
 
 import asyncio
 import os
-from typing import Optional
 
+from attrs import define
 import backoff
 import pylast
-from attrs import define
 
 from narada.config import get_logger, resilient_operation
 from narada.core.models import Artist, Track
@@ -21,7 +20,7 @@ class LastFmPlayCount:
 
     user_play_count: int = 0
     global_play_count: int = 0
-    track_url: Optional[str] = None
+    track_url: str | None = None
 
 
 class LastFmConnector:
@@ -36,7 +35,9 @@ class LastFmConnector:
     """
 
     def __init__(
-        self, api_key: Optional[str] = None, username: Optional[str] = None
+        self,
+        api_key: str | None = None,
+        username: str | None = None,
     ) -> None:
         """Initialize Last.fm client with API credentials."""
         logger.debug("Initializing Last.fm connector")
@@ -63,7 +64,10 @@ class LastFmConnector:
     @resilient_operation("get_track_play_count")
     @backoff.on_exception(backoff.expo, pylast.NetworkError, max_tries=3)
     async def get_track_play_count(
-        self, artist_name: str, track_title: str, username: Optional[str] = None
+        self,
+        artist_name: str,
+        track_title: str,
+        username: str | None = None,
     ) -> LastFmPlayCount:
         """Get play count for a track by artist and title.
 
@@ -88,19 +92,21 @@ class LastFmConnector:
         try:
             # Run in thread pool to avoid blocking
             track = await asyncio.to_thread(
-                self.client.get_track, artist_name, track_title
+                self.client.get_track,
+                artist_name,
+                track_title,
             )
 
             # Get user play count
             track.username = user
             user_playcount = await asyncio.to_thread(
-                lambda: int(track.get_userplaycount() or 0)
+                lambda: int(track.get_userplaycount() or 0),
             )
 
             # Get global play count (may be unavailable)
             try:
                 global_playcount = await asyncio.to_thread(
-                    lambda: int(track.get_playcount() or 0)
+                    lambda: int(track.get_playcount() or 0),
                 )
             except (pylast.WSError, TypeError):
                 global_playcount = 0
@@ -117,7 +123,9 @@ class LastFmConnector:
         except pylast.WSError as e:
             if "not found" in str(e).lower():
                 logger.debug(
-                    "Track not found on Last.fm", artist=artist_name, track=track_title
+                    "Track not found on Last.fm",
+                    artist=artist_name,
+                    track=track_title,
                 )
                 return LastFmPlayCount()
             raise
@@ -133,7 +141,9 @@ class LastFmConnector:
     @resilient_operation("get_mbid_play_count")
     @backoff.on_exception(backoff.expo, pylast.NetworkError, max_tries=3)
     async def get_mbid_play_count(
-        self, mbid: str, username: Optional[str] = None
+        self,
+        mbid: str,
+        username: str | None = None,
     ) -> LastFmPlayCount:
         """Get play count for a track by MusicBrainz ID.
 
@@ -161,13 +171,13 @@ class LastFmConnector:
             # Get user play count
             track.username = user
             user_playcount = await asyncio.to_thread(
-                lambda: int(track.get_userplaycount() or 0)
+                lambda: int(track.get_userplaycount() or 0),
             )
 
             # Get global play count (may be unavailable)
             try:
                 global_playcount = await asyncio.to_thread(
-                    lambda: int(track.get_playcount() or 0)
+                    lambda: int(track.get_playcount() or 0),
                 )
             except (pylast.WSError, TypeError):
                 global_playcount = 0
@@ -188,13 +198,17 @@ class LastFmConnector:
             raise
         except Exception as e:
             logger.exception(
-                "Error getting Last.fm play count by MBID", mbid=mbid, error=str(e)
+                "Error getting Last.fm play count by MBID",
+                mbid=mbid,
+                error=str(e),
             )
             return LastFmPlayCount()
 
     @resilient_operation("batch_get_track_play_counts")
     async def batch_get_track_play_counts(
-        self, tracks: list[Track], username: Optional[str] = None
+        self,
+        tracks: list[Track],
+        username: str | None = None,
     ) -> dict[int, LastFmPlayCount]:
         """Batch retrieve play counts for multiple tracks.
 
@@ -302,4 +316,4 @@ def convert_lastfm_track_to_domain(lastfm_track: pylast.Track) -> Track:
         return track
     except Exception as e:
         logger.exception(f"Error converting Last.fm track: {e}")
-        raise ValueError(f"Cannot convert Last.fm track: {e}")
+        raise ValueError(f"Cannot convert Last.fm track: {e}") from e
