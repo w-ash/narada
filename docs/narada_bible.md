@@ -15,7 +15,7 @@ Narada is a personal music metadata hub that integrates Spotify, Last.fm, and Mu
 
 ### Core Dependencies
 
-| Component             | Package        | Version | Purpose                                                         |
+| Node             | Package        | Version | Purpose                                                         |
 | --------------------- | -------------- | ------- | --------------------------------------------------------------- |
 | Runtime               | Python         | ≥3.13.0 | Modern language features, pattern matching, improved type hints |
 | Database Engine       | SQLite         | ≥3.49.1 | Zero-config, embedded database with async support               |
@@ -109,8 +109,8 @@ narada/                        # Project root
 │   │   └── musicbrainz.py     # MusicBrainz integration
 │   │
 ├── workflows/                 # Consolidated workflow system
-│   ├── components.py          # All component implementations
-│   ├── registry.py            # Component type registration
+│   ├── nodes.py          # All node implementations
+│   ├── registry.py            # Node type registration
 │   ├── prefect.py             # Prefect adapter (thin layer)
 │   ├── definitions/           # JSON workflow definitions
 │   │   ├── sort_by_plays.json # Use case 1A definition
@@ -136,13 +136,13 @@ The  architecture follows a clear flow pattern:
 
 1. **Core Layer**: `models.py` defines domain objects
 2. **Transformation Layer**: `transforms.py` provides pure functional operations on those models
-3. **Component Layer**: `components.py` implements business logic using transforms and resolvers
-4. **Registry Layer**: `registry.py` creates a type system for discovering components
-5. **Execution Layer**: `prefect.py` connects the component system to Prefect
+3. **Node Layer**: `nodes.py` implements business logic using transforms and resolvers
+4. **Registry Layer**: `registry.py` creates a type system for discovering nodes
+5. **Execution Layer**: `prefect.py` connects the node system to Prefect
 
 Data flows through these layers in a consistent way:
 
-`Workflow Definition (JSON) → prefect.py → registry.py → components.py → transforms.py → models.py`
+`Workflow Definition (JSON) → prefect.py → registry.py → nodes.py → transforms.py → models.py`
 
 Each layer maintains clear boundaries and responsibilities, which is needed for a codebase targeting under 2000 LOC.
 ### Model Separation Pattern
@@ -218,7 +218,7 @@ This approach allows us to leverage our existing functional transformation primi
 ┌────────────────────┐     ┌───────────────────────┐     ┌───────────────────┐
 │  Domain Models     │     │  Workflow Engine      │     │  Service Adapters │
 │  ────────────────  │     │  ────────────────     │     │  ───────────────  │
-│  • Track           │     │  • Component Registry │     │  • Spotify        │
+│  • Track           │     │  • Node Registry │     │  • Spotify        │
 │  • Playlist        │◄────┤  • Task Execution     │────►│  • Last.fm        │
 │  • PlaylistOp      │     │  • DAG Processing     │     │  • MusicBrainz    │
 └────────────────────┘     └───────────────────────┘     └───────────────────┘
@@ -228,7 +228,7 @@ This approach allows us to leverage our existing functional transformation primi
 
 We'll implement a declarative workflow engine that separates transformation definitions from execution mechanics:
 
-1. **Component-Based Design** - Modular pipeline elements in clear categories:
+1. **Node-Based Design** - Modular pipeline elements in clear categories:
    - Sources (Spotify playlists, albums, etc.)
    - Transformers (filters, sorters, matchers)
    - Destinations (playlist creation, exports)
@@ -245,11 +245,12 @@ We'll implement a declarative workflow engine that separates transformation defi
 
 ### Transformation Categories
 
-Our workflow components will be organized into functional categories:
+Our workflow nodes will be organized into functional categories:
 
 | Category     | Purpose                               | Examples                             |
 | ------------ | ------------------------------------- | ------------------------------------ |
 | Sources      | Data ingestion from external services | Spotify playlist, album, radio       |
+| Enrichers    | Enriches tracks with metadata         | Fetching lastfm playcounts           |
 | Filters      | Selective content inclusion           | By date, playcount, metadata         |
 | Sorters      | Order manipulation                    | By playcount, release, randomization |
 | Selectors    | Subset extraction                     | First/last N, random selection       |
@@ -264,9 +265,9 @@ Workflows will be defined in structured JSON that maps directly to execution gra
 
 The implementation will follow a staged approach:
 
-1. **Core Engine** - Implement a minimal component registry and execution flow
-2. **Basic Components** - Build essential components for initial use cases
-3. **Prefect Integration** - Wrap components as Prefect tasks for robust execution
+1. **Core Engine** - Implement a minimal node registry and execution flow
+2. **Basic Nodes** - Build essential nodes for initial use cases
+3. **Prefect Integration** - Wrap nodes as Prefect tasks for robust execution
 4. **Storage Layer** - Persist workflow definitions in database with versioning
 
 ## Architectural Benefits
@@ -275,7 +276,7 @@ This evolution delivers significant strategic advantages:
 
 1. **Zero-Code Workflows** - Create new transformations without writing code
 2. **UI-Ready Architecture** - Workflow definitions map cleanly to visual builders
-3. **Extension Without Refactoring** - Add new components while preserving existing ones
+3. **Extension Without Refactoring** - Add new nodes while preserving existing ones
 4. **Execution Reliability** - Leverage battle-tested workflow infrastructure
 5. **Progressive Enhancement** - Start simple and evolve incrementally
 
@@ -653,7 +654,7 @@ This approach yields a system that performs complex cross-connector operations w
 ## Development Workflow
 
 1. Implementation begins with Use Case 1A (playlist sorting)
-2. Each component is built with isolated testing
+2. Each node is built with isolated testing
 3. First build connector adapters, then core processing, then CLI interface
 4. Run independent step validation before integration
 5. Maintain strict LOC discipline - if code expands, refactor

@@ -1,7 +1,7 @@
 """
-Factory system for workflow components with unified patterns.
+Factory system for workflow nodes with unified patterns.
 
-This module provides a streamlined approach to component creation, consolidating
+This module provides a streamlined approach to node creation, consolidating
 the various factory patterns into a cohesive system with minimal boilerplate.
 """
 
@@ -23,14 +23,14 @@ from narada.core.transforms import (
 
 # Type definitions
 T = TypeVar("T")
-ComponentFn = Callable[[dict, dict], Awaitable[dict]]
+NodeFn = Callable[[dict, dict], Awaitable[dict]]
 TransformFn = Callable[[TrackList], TrackList]
 KeyFn = Callable[[Track], Any]
 PredicateFn = Callable[[Track], bool]
 
 
 class Result(TypedDict, total=False):
-    """Standard component result structure."""
+    """Standard node result structure."""
 
     tracklist: TrackList
     playlist: Playlist
@@ -107,14 +107,14 @@ def make_result(tracklist: TrackList, operation: str, **extras) -> Result:
     )
 
 
-def make_component(transform_factory: Callable, operation: str) -> ComponentFn:
+def make_node(transform_factory: Callable, operation: str) -> NodeFn:
     """
-    Unified component factory that handles all component types.
+    Unified node factory that handles all node types.
 
     This factory consolidates the patterns from multiple specialized factories.
     """
 
-    async def component_impl(context: dict, config: dict) -> dict:
+    async def node_impl(context: dict, config: dict) -> dict:
         ctx = Context(context)
         transform = transform_factory(ctx, config)
 
@@ -139,7 +139,7 @@ def make_component(transform_factory: Callable, operation: str) -> ComponentFn:
             case _:
                 raise TypeError(f"Unsupported transform type: {type(transform)}")
 
-    return component_impl
+    return node_impl
 
 
 # === TRANSFORM FACTORIES ===
@@ -290,12 +290,12 @@ def exclusion_predicate(ctx: Context, config: dict) -> PredicateFn:
         return lambda track: track.id not in track_ids
 
 
-# === COMPONENT FACTORY FUNCTIONS ===
-# These integrate with your component registry
+# === NODE FACTORY FUNCTIONS ===
+# These integrate with your node registry
 
 
 def filter_factory(ctx: Context, config: dict) -> TransformFn:
-    """Factory for filter components."""
+    """Factory for filter nodes."""
     filter_type = config.get("filter_type", "predicate")
 
     match filter_type:
@@ -312,7 +312,7 @@ def filter_factory(ctx: Context, config: dict) -> TransformFn:
 
 
 def sorter_factory(ctx: Context, config: dict) -> TransformFn:
-    """Factory for sorter components."""
+    """Factory for sorter nodes."""
     sort_by = config.get("sort_by", "popularity")
     reverse = config.get("reverse", True)
 
@@ -328,7 +328,7 @@ def sorter_factory(ctx: Context, config: dict) -> TransformFn:
 
 
 def selector_factory(ctx: Context, config: dict) -> TransformFn:
-    """Factory for selector components."""
+    """Factory for selector nodes."""
     count = config.get("count", 10)
     method = config.get("method", "first")
 
@@ -336,7 +336,7 @@ def selector_factory(ctx: Context, config: dict) -> TransformFn:
 
 
 def combiner_factory(ctx: Context, config: dict) -> TransformFn:
-    """Factory for combiner components."""
+    """Factory for combiner nodes."""
     source_tasks = config.get("sources", [])
     interleaved = config.get("interleaved", False)
 

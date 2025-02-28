@@ -32,6 +32,54 @@ def register_commands(app: typer.Typer) -> None:
     app.command()(dashboard)
 
 
+def initialize_node_system():
+    """Establish deterministic node initialization and validate registry integrity."""
+    try:
+        # Force eager loading of node modules in deterministic sequence
+        from narada.workflows import node_factories  # noqa
+        from narada.workflows import workflow_nodes  # noqa
+        from narada.workflows import node_registry
+
+        # Retrieve singleton registry instance
+        registry = node_registry.registry
+
+        # Define critical node paths that must exist
+        critical_nodes = [
+            "source.spotify_playlist",
+            "enricher.resolve_lastfm",
+            "filter.deduplicate",
+            "filter.by_release_date",
+            "filter.not_in_playlist",
+            "filter.not_artist_in_playlist",
+            "sorter.by_popularity",
+            "sorter.sort_by_user_plays",
+            "selector.limit",
+            "combiner.merge_playlists",
+            "combiner.concatenate_playlists",
+            "destination.create_spotify_playlist",
+        ]
+
+        # Validate registry integrity
+        registered = set(registry.list_nodes().keys())
+        missing = [c for c in critical_nodes if c not in registered]
+
+        if missing:
+            return (
+                False,
+                f"Node registry initialization incomplete: missing {', '.join(missing)}",
+            )
+
+        return True, f"Node system initialized with {len(registered)} nodes"
+
+    except ImportError as e:
+        return False, f"Node system initialization failed: {str(e)}"
+    except Exception as e:
+        return (
+            False,
+            f"Unexpected error during node system initialization: {str(e)}",
+        )
+
+
 @resilient_operation("spotify_check")
 async def _check_spotify() -> tuple[bool, str]:
     """Check Spotify API connectivity."""
@@ -269,9 +317,23 @@ def run_workflow(
         TimeElapsedColumn,
     )
 
-    from narada.config import get_config
+    from narada.config import get_config, get_logger
     from narada.workflows.prefect import register_progress_callback
     from narada.workflows.prefect import run_workflow as execute_workflow
+
+    logger = get_logger(__name__)
+
+    # Initialize node system
+    with console.status("[bold blue]Initializing node system..."):
+        success, message = initialize_node_system()
+
+    if not success:
+        console.print(f"[bold red]✗ {message}[/bold red]")
+        logger.error(f"Node initialization failed: {message}")
+        raise typer.Exit(1)
+
+    console.print(f"[bold green]✓ {message}[/bold green]")
+    logger.info(f"Node initialization successful: {message}")
 
     # Get workflow definitions directory with fallback
     workflows_dir = Path(get_config("WORKFLOWS_DIR", "narada/workflows/definitions"))
@@ -366,8 +428,8 @@ def run_workflow(
             f"[bold]Workflow: {workflow_name}", total=task_count, completed=0
         )
 
-        # Add a task for the current component being processed
-        component_task_id = progress.add_task("Initializing...", total=1, completed=0)
+        # Add a task for the current node being processed
+        node_task_id = progress.add_task("Initializing...", total=1, completed=0)
 
         # Define progress callback for Prefect
         def update_progress(event_type, event_data):
@@ -376,15 +438,15 @@ def run_workflow(
                     task_name = event_data.get("task_name", "Unknown task")
                     task_type = event_data.get("task_type", "")
                     progress.update(
-                        component_task_id,
+                        node_task_id,
                         description=f"Running: {task_name} ({task_type})",
                         completed=0,
                         total=1,
                     )
 
                 case "task_completed":
-                    # Mark current component as complete
-                    progress.update(component_task_id, completed=1)
+                    # Mark current node as complete
+                    progress.update(node_task_id, completed=1)
                     # Update overall workflow progress
                     progress.update(
                         workflow_task_id,

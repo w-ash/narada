@@ -1,7 +1,7 @@
 """
 Prefect v3 integration layer for workflow execution.
 
-This module provides a thin adapter between Narada's component system
+This module provides a thin adapter between Narada's node system
 and Prefect's execution engine, enabling declarative workflows to be
 executed with enterprise-grade reliability.
 """
@@ -15,7 +15,7 @@ from prefect import flow, task
 from prefect.logging import get_run_logger
 
 from narada.config import configure_prefect_logging, get_logger
-from narada.workflows.component_registry import get_component
+from narada.workflows.node_registry import get_node
 
 # Initialize Prefect logging to use our Loguru setup
 configure_prefect_logging()
@@ -81,7 +81,7 @@ def resolve_templates(value: Any, context: dict) -> Any:
             return value
 
 
-# --- Component execution ---
+# --- Node execution ---
 
 
 class TaskResult(TypedDict):
@@ -95,30 +95,30 @@ class TaskResult(TypedDict):
 @task(
     retries=3,
     retry_delay_seconds=30,
-    tags=["component"],
+    tags=["node"],
 )
-async def execute_component(component_type: str, context: dict, config: dict) -> dict:
-    """Execute a single workflow component as a Prefect task."""
+async def execute_node(node_type: str, context: dict, config: dict) -> dict:
+    """Execute a single workflow node as a Prefect task."""
     # Use Prefect's run logger to get task context
     task_logger = get_run_logger()
 
     # Log with f-string instead of extra={}
-    task_logger.info(f"Executing component: {component_type}")
+    task_logger.info(f"Executing node: {node_type}")
 
-    # Get component implementation
-    component_func, component_meta = get_component(component_type)
+    # Get node implementation
+    node_func, node_meta = get_node(node_type)
 
     # Resolve template variables in config
     resolved_config = resolve_templates(config, context)
 
     try:
-        # Execute the component
-        result = await component_func(context, resolved_config)
-        task_logger.info(f"Component completed successfully: {component_type}")
+        # Execute the node
+        result = await node_func(context, resolved_config)
+        task_logger.info(f"Node completed successfully: {node_type}")
         return result
 
     except Exception as e:
-        task_logger.exception(f"Component failed: {e} (type: {component_type})")
+        task_logger.exception(f"Node failed: {e} (type: {node_type})")
         raise
 
 
@@ -176,27 +176,27 @@ def build_flow(workflow_def: dict) -> Any:
         # Execute tasks in dependency order
         for task_def in sorted_tasks:
             task_id = task_def["id"]
-            component_type = task_def["type"]
+            node_type = task_def["type"]
 
             # Emit task started event
             emit_progress_event(
                 "task_started",
-                {"task_id": task_id, "task_name": task_id, "task_type": component_type},
+                {"task_id": task_id, "task_name": task_id, "task_type": node_type},
             )
 
             # Log the task start
-            flow_logger.info(f"Starting task: {task_id} (type: {component_type})")
+            flow_logger.info(f"Starting task: {task_id} (type: {node_type})")
 
             # Resolve configuration with current context
             config = task_def.get("config", {})
 
-            # Execute component as a task - Prefect v3 automatically tracks dependencies
-            result = await execute_component(component_type, context, config)
+            # Execute node as a task - Prefect v3 automatically tracks dependencies
+            result = await execute_node(node_type, context, config)
 
             # Store result in context with task ID as key
             context[task_id] = result
 
-            # Also store in context under component-specified result key if present
+            # Also store in context under node-specified result key if present
             if result_key := task_def.get("result_key"):
                 # Simplified logging with f-string
                 flow_logger.debug(f"Storing result under key: {result_key}")
@@ -208,7 +208,7 @@ def build_flow(workflow_def: dict) -> Any:
                 {
                     "task_id": task_id,
                     "task_name": task_id,
-                    "task_type": component_type,
+                    "task_type": node_type,
                     "result": result,
                 },
             )

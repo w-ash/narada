@@ -1,8 +1,8 @@
 """
-Workflow components for the Narada transformation pipeline.
+Workflow nodes for the Narada transformation pipeline.
 
 This module provides a clean, declarative implementation of all workflow
-components using the unified factory system. Components are organized by
+nodes using the unified factory system. Nodes are organized by
 functional category with consistent patterns.
 """
 
@@ -10,22 +10,22 @@ from narada.core.matcher import batch_match_tracks
 from narada.core.models import TrackList
 from narada.integrations.lastfm import LastFmConnector
 from narada.integrations.spotify import SpotifyConnector
-from narada.workflows.component_factories import (
+from narada.workflows.node_factories import (
     Context,
     combiner_factory,
     exclusion_predicate,
-    make_component,
     make_date_filter,
     make_dedup_filter,
+    make_node,
     selector_factory,
     sorter_factory,
 )
-from narada.workflows.component_registry import component
+from narada.workflows.node_registry import node
 
-# === SOURCE COMPONENTS ===
+# === SOURCE NODES ===
 
 
-@component(
+@node(
     "source.spotify_playlist",
     description="Fetches a playlist from Spotify",
     output_type="tracklist",
@@ -50,10 +50,10 @@ async def spotify_playlist_source(context: dict, config: dict) -> dict:
     }
 
 
-# === ENRICHER COMPONENTS ===
+# === ENRICHER NODES ===
 
 
-@component(
+@node(
     "enricher.resolve_lastfm",
     description="Resolves tracks to Last.fm and fetches play counts",
 )
@@ -87,10 +87,10 @@ async def resolve_lastfm(context: dict, config: dict) -> dict:
     }
 
 
-# === FILTER COMPONENTS ===
+# === FILTER NODES ===
 
 
-@component(
+@node(
     "filter.deduplicate",
     description="Removes duplicate tracks",
     input_type="tracklist",
@@ -98,12 +98,12 @@ async def resolve_lastfm(context: dict, config: dict) -> dict:
 )
 async def deduplicate_filter(context: dict, config: dict) -> dict:
     """Remove duplicate tracks from playlist."""
-    return await make_component(lambda _, __: make_dedup_filter(), "deduplicate")(
+    return await make_node(lambda _, __: make_dedup_filter(), "deduplicate")(
         context, config
     )
 
 
-@component(
+@node(
     "filter.by_release_date",
     description="Filters tracks by release date range",
     input_type="tracklist",
@@ -111,7 +111,7 @@ async def deduplicate_filter(context: dict, config: dict) -> dict:
 )
 async def filter_by_date(context: dict, config: dict) -> dict:
     """Filter tracks by release date range."""
-    return await make_component(
+    return await make_node(
         lambda _, cfg: make_date_filter(
             cfg.get("min_age_days"), cfg.get("max_age_days")
         ),
@@ -119,7 +119,7 @@ async def filter_by_date(context: dict, config: dict) -> dict:
     )(context, config)
 
 
-@component(
+@node(
     "filter.not_in_playlist",
     description="Excludes tracks found in another playlist",
     input_type="tracklist",
@@ -127,8 +127,8 @@ async def filter_by_date(context: dict, config: dict) -> dict:
 )
 async def filter_not_in_playlist(context: dict, config: dict) -> dict:
     """Exclude tracks present in reference playlist."""
-    return await make_component(
-        lambda ctx, cfg: make_component(
+    return await make_node(
+        lambda ctx, cfg: make_node(
             lambda c, cf: exclusion_predicate(
                 c, {"reference_task_id": cf.get("reference")}
             ),
@@ -138,7 +138,7 @@ async def filter_not_in_playlist(context: dict, config: dict) -> dict:
     )(context, {"reference": config.get("reference", config.get("upstream", [])[-1])})
 
 
-@component(
+@node(
     "filter.not_artist_in_playlist",
     description="Excludes tracks whose artist appears in reference playlist",
     input_type="tracklist",
@@ -146,8 +146,8 @@ async def filter_not_in_playlist(context: dict, config: dict) -> dict:
 )
 async def filter_not_artist_in_playlist(context: dict, config: dict) -> dict:
     """Exclude tracks whose artists appear in reference playlist."""
-    return await make_component(
-        lambda ctx, cfg: make_component(
+    return await make_node(
+        lambda ctx, cfg: make_node(
             lambda c, cf: exclusion_predicate(
                 c, {"reference_task_id": cf.get("reference"), "exclude_artists": True}
             ),
@@ -157,10 +157,10 @@ async def filter_not_artist_in_playlist(context: dict, config: dict) -> dict:
     )(context, {"reference": config.get("reference", config.get("upstream", [])[-1])})
 
 
-# === SORTER COMPONENTS ===
+# === SORTER NODES ===
 
 
-@component(
+@node(
     "sorter.sort_by_user_plays",
     description="Sorts tracks by user play counts",
     input_type="tracklist",
@@ -168,8 +168,8 @@ async def filter_not_artist_in_playlist(context: dict, config: dict) -> dict:
 )
 async def sort_by_user_plays(context: dict, config: dict) -> dict:
     """Sort tracks by user's play count."""
-    return await make_component(
-        lambda ctx, cfg: make_component(
+    return await make_node(
+        lambda ctx, cfg: make_node(
             lambda c, cf: sorter_factory(c, {"sort_by": "play_count", **cf}),
             "sort_by_plays",
         )(ctx, cfg),
@@ -177,7 +177,7 @@ async def sort_by_user_plays(context: dict, config: dict) -> dict:
     )(context, config)
 
 
-@component(
+@node(
     "sorter.by_spotify_popularity",
     description="Sorts tracks by Spotify popularity",
     input_type="tracklist",
@@ -185,8 +185,8 @@ async def sort_by_user_plays(context: dict, config: dict) -> dict:
 )
 async def sort_by_spotify_popularity(context: dict, config: dict) -> dict:
     """Sort tracks by Spotify popularity."""
-    return await make_component(
-        lambda ctx, cfg: make_component(
+    return await make_node(
+        lambda ctx, cfg: make_node(
             lambda c, cf: sorter_factory(c, {"sort_by": "popularity", **cf}),
             "sort_by_popularity",
         )(ctx, cfg),
@@ -194,10 +194,10 @@ async def sort_by_spotify_popularity(context: dict, config: dict) -> dict:
     )(context, config)
 
 
-# === SELECTOR COMPONENTS ===
+# === SELECTOR NODES ===
 
 
-@component(
+@node(
     "selector.limit_tracks",
     description="Limits playlist to specified number of tracks",
     input_type="tracklist",
@@ -205,13 +205,13 @@ async def sort_by_spotify_popularity(context: dict, config: dict) -> dict:
 )
 async def limit_tracks(context: dict, config: dict) -> dict:
     """Limit tracklist to specified number of tracks."""
-    return await make_component(selector_factory, "limit_tracks")(context, config)
+    return await make_node(selector_factory, "limit_tracks")(context, config)
 
 
-# === COMBINER COMPONENTS ===
+# === COMBINER NODES ===
 
 
-@component(
+@node(
     "combiner.merge_playlists",
     description="Combines multiple playlists into one",
     input_type="tracklist",
@@ -220,7 +220,7 @@ async def limit_tracks(context: dict, config: dict) -> dict:
 async def merge_playlists(context: dict, config: dict) -> dict:
     """Merge multiple playlists into one."""
     sources = config.get("sources", context.get("upstream", []))
-    return await make_component(
+    return await make_node(
         lambda ctx, cfg: combiner_factory(
             ctx, {"sources": sources, "interleaved": False}
         ),
@@ -228,7 +228,7 @@ async def merge_playlists(context: dict, config: dict) -> dict:
     )(context, config)
 
 
-@component(
+@node(
     "combiner.concatenate_playlists",
     description="Joins playlists in specified order",
     input_type="tracklist",
@@ -237,7 +237,7 @@ async def merge_playlists(context: dict, config: dict) -> dict:
 async def concatenate_playlists(context: dict, config: dict) -> dict:
     """Concatenate playlists in specified order."""
     order = config.get("order", context.get("upstream", []))
-    return await make_component(
+    return await make_node(
         lambda ctx, cfg: combiner_factory(
             ctx, {"sources": order, "interleaved": False}
         ),
@@ -245,7 +245,7 @@ async def concatenate_playlists(context: dict, config: dict) -> dict:
     )(context, config)
 
 
-@component(
+@node(
     "combiner.interleave_playlists",
     description="Interleaves tracks from multiple playlists",
     input_type="tracklist",
@@ -254,7 +254,7 @@ async def concatenate_playlists(context: dict, config: dict) -> dict:
 async def interleave_playlists(context: dict, config: dict) -> dict:
     """Interleave tracks from multiple playlists."""
     sources = config.get("sources", context.get("upstream", []))
-    return await make_component(
+    return await make_node(
         lambda ctx, cfg: combiner_factory(
             ctx, {"sources": sources, "interleaved": True}
         ),
@@ -262,10 +262,10 @@ async def interleave_playlists(context: dict, config: dict) -> dict:
     )(context, config)
 
 
-# === DESTINATION COMPONENTS ===
+# === DESTINATION NODES ===
 
 
-@component(
+@node(
     "destination.create_spotify_playlist",
     description="Creates a new Spotify playlist",
     input_type="tracklist",

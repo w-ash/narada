@@ -2,15 +2,15 @@
 
 ## Core Concepts
 
-Narada's workflow architecture enables declarative transformation pipelines through a clean separation of component definition from execution logic. This architectural pattern has proven successful in production systems at scale, allowing non-technical users to build sophisticated workflows while maintaining a lean, maintainable codebase.
+Narada's workflow architecture enables declarative transformation pipelines through a clean separation of node definition from execution logic. This architectural pattern has proven successful in production systems at scale, allowing non-technical users to build sophisticated workflows while maintaining a lean, maintainable codebase.
 
 ### Architectural Principles
 
 1. **Separation of Concerns** - Workflow definitions describe *what* should happen, not *how* it happens
-2. **Compositional Design** - Simple components combine to create complex behaviors
+2. **Compositional Design** - Simple nodes combine to create complex behaviors
 3. **Directed Acyclic Graphs** - Tasks execute in dependency order without circular references
 4. **Immutable Data Flow** - Each transformation produces new state rather than mutating existing state
-5. **Standardized Interfaces** - Components follow consistent contracts for composability
+5. **Standardized Interfaces** - Nodes follow consistent contracts for composability
 
 ## Workflow JSON Structure
 
@@ -25,7 +25,7 @@ A workflow is defined in JSON as a directed acyclic graph (DAG) of tasks:
   "tasks": [
     {
       "id": "task_unique_id",
-      "type": "component.type",
+      "type": "node.type",
       "config": {
         "key": "value"
       },
@@ -46,51 +46,59 @@ A workflow is defined in JSON as a directed acyclic graph (DAG) of tasks:
 ### Task Definition
 
 - **id**: Unique identifier within this workflow
-- **type**: Component type that implements the behavior
-- **config**: Component-specific configuration
+- **type**: Node type that implements the behavior
+- **config**: Node-specific configuration
 - **upstream**: Array of task IDs that must complete before this task executes
 
-## Component Reference
+## Node Reference
 
-### Source Components
+### Source Nodes
 
-| Component Type | Description | Configuration |
+| Node Type | Description | Configuration |
 |----------------|-------------|--------------|
 | `source.spotify_playlist` | Fetches a playlist from Spotify | `playlist_id`: Spotify playlist ID |
 
-### Enricher Components
+### Enricher Nodes
 
-| Component Type | Description | Configuration |
+| Node Type | Description | Configuration |
 |----------------|-------------|--------------|
 | `enricher.resolve_lastfm` | Resolves tracks to Last.fm and fetches play counts | (Uses environment configuration) |
 
-### Filter Components
+### Filter Nodes
 
-| Component Type | Description | Configuration |
+| Node Type | Description | Configuration |
 |----------------|-------------|--------------|
-| `transformer.filter_by_release_date` | Filters tracks by release date | `max_age_days`: Maximum age in days<br>`min_age_days`: Minimum age in days |
+| `filter.by_release_date` | Filters tracks by release date | `max_age_days`: Maximum age in days<br>`min_age_days`: Minimum age in days |
 | `filter.not_in_playlist` | Excludes tracks found in another playlist | (Requires two upstream tasks: main and reference) |
 | `filter.not_artist_in_playlist` | Excludes tracks whose artist appears in another playlist | (Requires two upstream tasks: main and reference) |
+| `filter.deduplicate` | Removes duplicate tracks | (No configuration required) |
 
-### Transformer Components
+### Sorter Nodes
 
-| Component Type | Description | Configuration |
+
+| Node Type | Description | Configuration |
 |----------------|-------------|--------------|
-| `transformer.sort_by_plays` | Sorts tracks by user play counts | `reverse`: Boolean to reverse sort order<br>`min_confidence`: Minimum match confidence threshold |
-| `transformer.sort_by_popularity` | Sorts tracks by Spotify popularity | `reverse`: Boolean to reverse sort order |
-| `transformer.limit_tracks` | Limits playlist to specified number of tracks | `count`: Maximum number of tracks |
-| `transformer.deduplicate` | Removes duplicate tracks | (No configuration required) |
+| `sorter.by_user_plays` | Sorts tracks by user play counts | `reverse`: Boolean to reverse sort order<br>`min_confidence`: Minimum match confidence threshold |
+| `sorter.sort_by_spotify_popularity` | Sorts tracks by Spotify popularity | `reverse`: Boolean to reverse sort order |
 
-### Combiner Components
+### Selector Nodes
 
-| Component Type | Description | Configuration |
+| Node Type | Description | Configuration |
+|----------------|-------------|--------------|
+| `selector.limit_tracks` | Limits playlist to specified number of tracks | `count`: Maximum number of tracks |
+
+
+
+### Combiner Nodes
+
+| Node Type | Description | Configuration |
 |----------------|-------------|--------------|
 | `combiner.merge_playlists` | Combines multiple playlists into one | (No configuration required) |
 | `combiner.concatenate_playlists` | Joins playlists in specified order | `order`: Array of task IDs in desired concatenation order |
 
-### Destination Components
+### Destination Nodes
 
-| Component Type | Description | Configuration |
+| Node Type | Description | Configuration |
 |----------------|-------------|--------------|
 | `destination.create_spotify_playlist` | Creates a new Spotify playlist | `name`: Name for the new playlist<br>`description`: Optional description |
 
@@ -144,17 +152,17 @@ This pattern enhances tracks with external data before transformation:
 2. **Task Naming** - Use descriptive IDs that reflect purpose, not implementation
 3. **Configuration Validation** - Include sensible defaults where possible
 4. **Workflow Decomposition** - Break complex workflows into logical groupings of tasks
-5. **Error Handling** - Design for graceful degradation when components fail
+5. **Error Handling** - Design for graceful degradation when nodes fail
 6. **Idempotent Design** - Workflows should produce the same result when executed multiple times
 
 ## Extending the System
 
-The component-based architecture allows for system extension without modifying the workflow engine itself:
+The node-based architecture allows for system extension without modifying the workflow engine itself:
 
-1. Add new component implementations to `components.py`
+1. Add new node implementations to `nodes.py`
 2. Register with the appropriate decorator
-3. Document the component's purpose and configuration
-4. Create workflows that leverage the new component
+3. Document the node's purpose and configuration
+4. Create workflows that leverage the new node
 
 This extensibility model enables continuous evolution without increasing architectural complexity.
 
@@ -218,4 +226,4 @@ This extensibility model enables continuous evolution without increasing archite
 }
 ```
 
-This architecture balances power and simplicity, enabling complex workflows through simple, composable components while maintaining a clean system design.
+This architecture balances power and simplicity, enabling complex workflows through simple, composable nodes while maintaining a clean system design.
