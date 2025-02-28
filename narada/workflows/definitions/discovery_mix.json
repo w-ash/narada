@@ -2,7 +2,7 @@
   "id": "discovery_mix",
   "name": "Latest Discovery Mix",
   "description": "Multi-source filtered new release discovery mix",
-  "version": "1.0",
+  "version": "1.1",
   "tasks": [
     {
       "id": "source_serotonin",
@@ -13,7 +13,7 @@
     },
     {
       "id": "filter_date_serotonin",
-      "type": "transformer.filter_by_release_date",
+      "type": "filter.by_release_date",
       "config": {
         "max_age_days": 90
       },
@@ -23,9 +23,10 @@
     },
     {
       "id": "limit_serotonin",
-      "type": "transformer.limit_tracks",
+      "type": "selector.limit",
       "config": {
-        "count": 15
+        "count": 15,
+        "method": "first"
       },
       "upstream": [
         "filter_date_serotonin"
@@ -40,7 +41,7 @@
     },
     {
       "id": "filter_date_pollen",
-      "type": "transformer.filter_by_release_date",
+      "type": "filter.by_release_date",
       "config": {
         "max_age_days": 90
       },
@@ -50,7 +51,7 @@
     },
     {
       "id": "limit_pollen",
-      "type": "transformer.limit_tracks",
+      "type": "selector.limit",
       "config": {
         "count": 10
       },
@@ -67,7 +68,7 @@
     },
     {
       "id": "filter_date_metropolis",
-      "type": "transformer.filter_by_release_date",
+      "type": "filter.by_release_date",
       "config": {
         "max_age_days": 90
       },
@@ -77,7 +78,7 @@
     },
     {
       "id": "limit_metropolis",
-      "type": "transformer.limit_tracks",
+      "type": "selector.limit",
       "config": {
         "count": 10
       },
@@ -94,7 +95,7 @@
     },
     {
       "id": "filter_date_stereogum",
-      "type": "transformer.filter_by_release_date",
+      "type": "filter.by_release_date",
       "config": {
         "max_age_days": 90
       },
@@ -104,7 +105,7 @@
     },
     {
       "id": "limit_stereogum",
-      "type": "transformer.limit_tracks",
+      "type": "selector.limit",
       "config": {
         "count": 5
       },
@@ -115,7 +116,14 @@
     {
       "id": "mixer",
       "type": "combiner.merge_playlists",
-      "config": {},
+      "config": {
+        "sources": [
+          "limit_serotonin",
+          "limit_pollen",
+          "limit_metropolis",
+          "limit_stereogum"
+        ]
+      },
       "upstream": [
         "limit_serotonin",
         "limit_pollen",
@@ -125,7 +133,7 @@
     },
     {
       "id": "sort_popularity",
-      "type": "transformer.sort_by_popularity",
+      "type": "sorter.by_spotify_popularity",
       "config": {
         "reverse": true
       },
@@ -156,7 +164,7 @@
     },
     {
       "id": "deduplicate",
-      "type": "transformer.deduplicate",
+      "type": "filter.deduplicate",
       "config": {},
       "upstream": [
         "combine_with_release_radar"
@@ -172,7 +180,9 @@
     {
       "id": "filter_not_in_interesting",
       "type": "filter.not_in_playlist",
-      "config": {},
+      "config": {
+        "reference": "source_interesting"
+      },
       "upstream": [
         "deduplicate",
         "source_interesting"
@@ -188,7 +198,9 @@
     {
       "id": "filter_not_in_later",
       "type": "filter.not_in_playlist",
-      "config": {},
+      "config": {
+        "reference": "source_later"
+      },
       "upstream": [
         "filter_not_in_interesting",
         "source_later"
@@ -204,7 +216,9 @@
     {
       "id": "filter_not_artist_in_blech",
       "type": "filter.not_artist_in_playlist",
-      "config": {},
+      "config": {
+        "reference": "source_blech"
+      },
       "upstream": [
         "filter_not_in_later",
         "source_blech"

@@ -2,7 +2,7 @@
   "id": "sort_by_plays",
   "name": "Sort by Play Count",
   "description": "Sort a Spotify playlist by Last.fm play counts",
-  "version": "1.0",
+  "version": "1.1",
   "parameters": [
     {
       "name": "source_playlist_id",
@@ -13,8 +13,8 @@
     {
       "name": "username",
       "type": "string",
-      "required": true,
-      "description": "Last.fm username for play counts"
+      "required": false,
+      "description": "Last.fm username for play counts (defaults to configured user)"
     },
     {
       "name": "target_name",
@@ -28,19 +28,24 @@
       "id": "source",
       "type": "source.spotify_playlist",
       "config": {
-        "playlist_id": "37i9dQZF1DWYMroOc5KTTh"
+        "playlist_id": "{parameters.source_playlist_id}"
       }
     },
     {
       "id": "resolve",
       "type": "enricher.resolve_lastfm",
+      "config": {
+        "username": "{parameters.username}",
+        "batch_size": 50,
+        "concurrency": 5
+      },
       "upstream": [
         "source"
       ]
     },
     {
       "id": "sort",
-      "type": "transformer.sort_by_plays",
+      "type": "sorter.sort_by_user_plays",
       "config": {
         "reverse": true,
         "min_confidence": 60
@@ -53,8 +58,8 @@
       "id": "destination",
       "type": "destination.create_spotify_playlist",
       "config": {
-        "name": "Sworted",
-        "description": "Sorted by Ash's play counts"
+        "name": "{parameters.target_name|Sorted by Play Count}",
+        "description": "Tracks sorted by Last.fm play count"
       },
       "upstream": [
         "sort"

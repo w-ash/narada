@@ -1,167 +1,165 @@
 """
-Component registry system for workflow execution.
+Component registry system for workflow orchestration.
 
-This module provides the central registry for all workflow components,
-handling registration, discovery, and metadata management. It facilitates
-the dynamic lookup of components by name when building workflows.
-
-The registry supports both direct component implementations and
-factory-created components to enable consistent patterns across the system.
+This module provides a centralized registry with a clean, declarative API for
+component registration and discovery. It serves as the connection point between
+workflow definitions and component implementations.
 """
 
+from collections.abc import Awaitable, Callable
 from functools import wraps
-from typing import Any, Awaitable, Callable, Dict, Literal, Optional, Protocol, Tuple
+from typing import (
+    Literal,
+    NotRequired,
+    TypeAlias,
+    TypedDict,
+    get_origin,
+    get_type_hints,
+)
 
-# Type definitions
-ComponentFunc = Callable[[dict, dict], Awaitable[dict]]
-ComponentMeta = Dict[str, Any]
-ComponentType = Literal[
-    "source", "enricher", "filter", "sorter", "selector", "combiner", "destination"
+# Type definitions with modern annotation style
+ComponentType: TypeAlias = Literal[
+    "source",
+    "enricher",
+    "filter",
+    "sorter",
+    "selector",
+    "combiner",
+    "destination",
 ]
 
-
-# Component protocol for static type checking
-class Component(Protocol):
-    """Protocol defining the interface for workflow components."""
-
-    async def __call__(self, context: dict, config: dict) -> dict: ...
+# Define strict component function type
+ComponentFn: TypeAlias = Callable[[dict, dict], Awaitable[dict]]
 
 
-# Initialize global registry
-_COMPONENT_REGISTRY: Dict[str, Tuple[ComponentFunc, ComponentMeta]] = {}
+class ComponentMetadata(TypedDict):
+    """Type-safe component metadata."""
+
+    id: str
+    description: str
+    category: ComponentType
+    input_type: NotRequired[str]
+    output_type: NotRequired[str]
+    factory_created: NotRequired[bool]
 
 
-def component(
-    component_id: str,
-    *,
-    description: str = "",
-    input_type: Optional[str] = None,
-    output_type: Optional[str] = None,
-    category: Optional[ComponentType] = None,
-) -> Callable[[ComponentFunc], ComponentFunc]:
-    """
-    Register a component with the global registry.
+# Singleton registry using a class-based pattern
+class ComponentRegistry:
+    """Registry for workflow components with simplified discovery."""
 
-    Args:
-        component_id: Unique identifier for the component
-        description: Human-readable description
-        input_type: Type of input the component expects
-        output_type: Type of output the component produces
-        category: Component category (source, filter, etc.)
+    def __init__(self) -> None:
+        self._registry: dict[str, tuple[ComponentFn, ComponentMetadata]] = {}
 
-    Returns:
-        Decorator function that registers the component
-    """
+    def register(
+        self,
+        component_id: str,
+        *,
+        description: str = "",
+        input_type: str | None = None,
+        output_type: str | None = None,
+        category: ComponentType | None = None,
+    ) -> Callable[[ComponentFn], ComponentFn]:
+        """Register a component with the registry.
 
-    def decorator(func: ComponentFunc) -> ComponentFunc:
-        # Extract category from component_id if not provided
-        derived_category = category or component_id.split(".", 1)[0]
+        Args:
+            component_id: Unique identifier (e.g., "source.spotify_playlist")
+            description: Human-readable description
+            input_type: Type of input the component expects
+            output_type: Type of output the component produces
+            category: Component category (source, filter, etc.)
 
-        # Create component metadata
-        metadata = {
-            "id": component_id,
-            "description": description,
-            "input_type": input_type,
-            "output_type": output_type,
-            "category": derived_category,
-            "factory_created": hasattr(func, "__factory__"),
-            "transform_functions": getattr(func, "__transforms__", []),
+        Returns:
+            Decorator that registers the component
+        """
+
+        def decorator(func: ComponentFn) -> ComponentFn:
+            # Derive category from ID if not provided
+            derived_category = category
+            if not derived_category and "." in component_id:
+                prefix = component_id.split(".", 1)[0]
+                if prefix in self.get_valid_categories():
+                    derived_category = prefix
+
+            # Enforce category type
+            if derived_category not in self.get_valid_categories():
+                raise ValueError(f"Invalid component category: {derived_category}")
+
+            # Create metadata
+            metadata: ComponentMetadata = {
+                "id": component_id,
+                "description": description,
+                "category": derived_category,  # type: ignore - we validated above
+            }
+            if input_type is not None:
+                metadata["input_type"] = input_type
+            if output_type is not None:
+                metadata["output_type"] = output_type
+            if hasattr(func, "__factory__"):
+                metadata["factory_created"] = True
+
+            # Preserve function metadata with wraps
+            @wraps(func)
+            async def wrapper(context: dict, config: dict) -> dict:
+                return await func(context, config)
+
+            # Store in registry
+            self._registry[component_id] = (wrapper, metadata)
+            return wrapper
+
+        return decorator
+
+    def component(
+        self, component_id: str, **kwargs
+    ) -> Callable[[ComponentFn], ComponentFn]:
+        """Simpler alias for register."""
+        return self.register(component_id, **kwargs)
+
+    def get_component(self, component_id: str) -> tuple[ComponentFn, ComponentMetadata]:
+        """Get a component by ID.
+
+        Args:
+            component_id: The component's unique identifier
+
+        Returns:
+            Tuple of (component_function, metadata)
+
+        Raises:
+            KeyError: If component not found
+        """
+        if component_id not in self._registry:
+            raise KeyError(f"Component not found: {component_id}")
+        return self._registry[component_id]
+
+    def list_components(self) -> dict[str, ComponentMetadata]:
+        """List all registered components."""
+        return {cid: meta for cid, (_, meta) in self._registry.items()}
+
+    def get_by_category(self, category: ComponentType) -> dict[str, ComponentMetadata]:
+        """Get components filtered by category."""
+        return {
+            cid: meta
+            for cid, (_, meta) in self._registry.items()
+            if meta["category"] == category
         }
 
-        # Preserve function metadata with wraps
-        @wraps(func)
-        async def wrapper(context: dict, config: dict) -> dict:
-            return await func(context, config)
-
-        # Store in registry
-        _COMPONENT_REGISTRY[component_id] = (wrapper, metadata)
-        return wrapper
-
-    return decorator
-
-
-def register_factory_component(
-    component_id: str,
-    factory_func: ComponentFunc,
-    description: str = "",
-    input_type: Optional[str] = None,
-    output_type: Optional[str] = None,
-    transforms: list[str] = None,
-    category: Optional[ComponentType] = None,
-) -> ComponentFunc:
-    """
-    Register a component created via factory pattern.
-
-    Args:
-        component_id: Unique identifier for the component
-        factory_func: Factory-created component implementation
-        description: Human-readable description
-        input_type: Type of input the component expects
-        output_type: Type of output the component produces
-        transforms: List of transformation functions used
-        category: Component category (source, filter, etc.)
-
-    Returns:
-        The registered component function
-    """
-    # Mark function as factory-created
-    setattr(factory_func, "__factory__", True)
-    if transforms:
-        setattr(factory_func, "__transforms__", transforms)
-
-    # Create the decorator
-    decorator = component(
-        component_id,
-        description=description,
-        input_type=input_type,
-        output_type=output_type,
-        category=category,
-    )
-
-    # Apply the decorator
-    return decorator(factory_func)
+    @staticmethod
+    def get_valid_categories() -> set[ComponentType]:
+        """Get all valid component categories."""
+        # Extract literals from ComponentType annotation
+        origin = get_origin(ComponentType)
+        if origin is Literal:
+            args = get_type_hints(ComponentType)["__args__"]
+            return set(args)
+        return set()
 
 
-def get_component(component_id: str) -> Tuple[ComponentFunc, ComponentMeta]:
-    """
-    Get a component implementation and metadata by its ID.
+# Create global registry instance
+registry = ComponentRegistry()
 
-    Args:
-        component_id: The unique identifier for the component
+# Export main decorator for clean imports
+component = registry.component
 
-    Returns:
-        Tuple of (component_function, component_metadata)
-
-    Raises:
-        ValueError: If component_id is not registered
-    """
-    if component_id not in _COMPONENT_REGISTRY:
-        raise ValueError(f"Component not found: {component_id}")
-    return _COMPONENT_REGISTRY[component_id]
-
-
-def list_components() -> Dict[str, ComponentMeta]:
-    """
-    List all registered components and their metadata.
-
-    Returns:
-        Dictionary mapping component IDs to their metadata
-    """
-    return {cid: meta for cid, (_, meta) in _COMPONENT_REGISTRY.items()}
-
-
-def get_components_by_category(category: ComponentType) -> Dict[str, ComponentMeta]:
-    """
-    Get all components of a specific category.
-
-    Args:
-        category: Component category to filter by
-
-    Returns:
-        Dictionary mapping component IDs to their metadata
-    """
-    return {
-        cid: meta
-        for cid, (_, meta) in _COMPONENT_REGISTRY.items()
-        if meta["category"] == category
-    }
+# Export utility functions with clear names
+get_component = registry.get_component
+list_components = registry.list_components
+get_components_by_category = registry.get_by_category

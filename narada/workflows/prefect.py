@@ -15,7 +15,7 @@ from prefect import flow, task
 from prefect.logging import get_run_logger
 
 from narada.config import configure_prefect_logging, get_logger
-from narada.workflows.registry import get_component
+from narada.workflows.component_registry import get_component
 
 # Initialize Prefect logging to use our Loguru setup
 configure_prefect_logging()
