@@ -8,7 +8,6 @@ executed with enterprise-grade reliability.
 
 from collections.abc import Callable
 import datetime
-import re
 from typing import Any, NotRequired, TypedDict
 
 from prefect import flow, task
@@ -42,45 +41,6 @@ def emit_progress_event(event_type: str, event_data: dict[str, Any]) -> None:
             logger.warning(f"Progress callback error: {e}")
 
 
-# --- Template resolution ---
-
-
-def resolve_templates(value: Any, context: dict) -> Any:
-    """Recursively resolve template variables in configs.
-
-    Templates use the format: {key.nested.path}
-    """
-    match value:
-        case str() if "{" in value:
-            # Find all template patterns {key.path}
-            pattern = r"\{([\w\.]+)\}"
-
-            def replace_match(match):
-                path = match.group(1).split(".")
-                current = context
-
-                # Traverse the path to get the value
-                try:
-                    for key in path:
-                        current = current[key]
-                    return str(current)
-                except (KeyError, TypeError):
-                    # Return the original template if path not found
-                    return match.group(0)
-
-            # Replace all template patterns
-            return re.sub(pattern, replace_match, value)
-        case dict():
-            # Recursively process dictionary values
-            return {k: resolve_templates(v, context) for k, v in value.items()}
-        case list():
-            # Recursively process list items
-            return [resolve_templates(item, context) for item in value]
-        case _:
-            # Return other values unchanged
-            return value
-
-
 # --- Node execution ---
 
 
@@ -102,18 +62,16 @@ async def execute_node(node_type: str, context: dict, config: dict) -> dict:
     # Use Prefect's run logger to get task context
     task_logger = get_run_logger()
 
-    # Log with f-string instead of extra={}
+    # Log node execution
     task_logger.info(f"Executing node: {node_type}")
 
-    # Get node implementation, use _ to indicate unused variable
+    # Get node implementation
     node_func, _ = get_node(node_type)
 
-    # Resolve template variables in config
-    resolved_config = resolve_templates(config, context)
-
     try:
-        # Execute the node
-        result = await node_func(context, resolved_config)
+        # Execute node with direct configuration
+        # No template resolution - config passes through unchanged
+        result = await node_func(context, config)
         task_logger.info(f"Node completed successfully: {node_type}")
         return result
 

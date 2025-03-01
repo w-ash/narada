@@ -83,54 +83,122 @@ class SpotifyConnector:
 
         return convert_spotify_playlist_to_domain(raw_playlist)
 
+    # Add these methods to SpotifyConnector
+
     @resilient_operation("create_spotify_playlist")
     @backoff.on_exception(backoff.expo, spotipy.SpotifyException, max_tries=3)
-    async def create_spotify_playlist(
+    async def create_playlist(
         self,
-        domain_playlist: Playlist,
-        user_id: str | None = None,
+        name: str,
+        tracks: list[Track],
+        description: str | None = None,
     ) -> str:
-        """Create a new Spotify playlist asynchronously."""
-        try:
-            if not user_id:
-                current_user = await asyncio.to_thread(self.client.current_user)
-                if not current_user:
-                    raise ValueError("Failed to get current user from Spotify")
-                user_id = current_user["id"]
+        """Create a new Spotify playlist with tracks.
 
-            result = await asyncio.to_thread(
+        Args:
+            name: Playlist name
+            tracks: List of tracks to add
+            description: Optional playlist description
+
+        Returns:
+            Spotify playlist ID
+        """
+        try:
+            # Extract Spotify track URIs
+            spotify_track_uris = [
+                f"spotify:track:{t.connector_track_ids['spotify']}"
+                for t in tracks
+                if "spotify" in t.connector_track_ids
+            ]
+
+            # Create empty playlist
+            logger.info(
+                f"Creating Spotify playlist: {name} with {len(spotify_track_uris)} tracks",
+            )
+            playlist = await asyncio.to_thread(
                 self.client.user_playlist_create,
-                user=user_id,
-                name=domain_playlist.name,
-                description=domain_playlist.description or "",
+                user=(self.client.me() or {}).get("id", ""),
+                name=name,
+                public=False,
+                description=description or "",
             )
 
-            if not result or "id" not in result:
-                raise ValueError("Invalid response from playlist creation")
+            # Add tracks in batches (Spotify API limits)
+            if spotify_track_uris:
+                for i in range(0, len(spotify_track_uris), 50):
+                    batch = spotify_track_uris[i : i + 50]
+                    await asyncio.to_thread(
+                        self.client.playlist_add_items,
+                        playlist_id=playlist["id"] if playlist else "",
+                        items=batch,
+                    )
+                    await asyncio.sleep(0.5)  # Small delay to prevent rate limiting
 
-            playlist_id = result["id"]
+            if playlist is not None:
+                return playlist["id"]
+            else:
+                raise ValueError("Failed to create playlist, received None")
+        except spotipy.SpotifyException as e:
+            logger.error(f"Spotify API error: {e}")
+            raise
 
-            if domain_playlist.tracks:
-                spotify_track_uris = [
-                    f"spotify:track:{t.connector_track_ids['spotify']}"
-                    for t in domain_playlist.tracks
-                    if "spotify" in t.connector_track_ids
-                ]
-                if spotify_track_uris:
-                    # Add tracks in batches of 100 (Spotify API limit)
-                    for i in range(0, len(spotify_track_uris), 100):
-                        batch = spotify_track_uris[i : i + 100]
-                        await asyncio.to_thread(
-                            self.client.playlist_add_items,
-                            playlist_id,
-                            batch,
-                        )
+    @resilient_operation("update_spotify_playlist")
+    @backoff.on_exception(backoff.expo, spotipy.SpotifyException, max_tries=3)
+    async def update_playlist(
+        self,
+        playlist_id: str,
+        playlist: Playlist,
+        replace: bool = True,
+    ) -> None:
+        """Update an existing Spotify playlist.
 
-            return playlist_id
+        Args:
+            playlist_id: Spotify ID of the playlist to update
+            playlist: Domain playlist with the tracks to use
+            replace: If True, replace all tracks; if False, append
+        """
+        # Extract Spotify track URIs from domain playlist
+        spotify_track_uris = [
+            f"spotify:track:{t.connector_track_ids['spotify']}"
+            for t in playlist.tracks
+            if "spotify" in t.connector_track_ids
+        ]
 
-        except (KeyError, TypeError) as e:
-            raise ValueError("Invalid response structure from Spotify API") from e
-            raise ValueError("Invalid response structure from Spotify API") from e
+        logger.info(
+            f"{'Replacing' if replace else 'Appending to'} playlist {playlist_id} "
+            f"with {len(spotify_track_uris)} tracks",
+        )
+
+        try:
+            if replace:
+                # Replace entire playlist contents
+                await asyncio.to_thread(
+                    self.client.playlist_replace_items,
+                    playlist_id=playlist_id,
+                    items=spotify_track_uris[:100] if spotify_track_uris else [],
+                )
+
+                # If we have more than 100 tracks, add them in batches
+                remaining_tracks = (
+                    spotify_track_uris[100:] if len(spotify_track_uris) > 100 else []
+                )
+            else:
+                # When appending, start with all tracks
+                remaining_tracks = spotify_track_uris
+
+            # Add remaining tracks in batches of 50
+            for i in range(0, len(remaining_tracks), 50):
+                batch = remaining_tracks[i : i + 50]
+                await asyncio.to_thread(
+                    self.client.playlist_add_items,
+                    playlist_id=playlist_id,
+                    items=batch,
+                )
+                await asyncio.sleep(0.5)  # Small delay to prevent rate limiting
+
+        except spotipy.SpotifyException as e:
+            logger.error(f"Spotify API error: {e}")
+            raise
 
 
 def convert_spotify_track_to_domain(spotify_track: dict[str, Any]) -> Track:

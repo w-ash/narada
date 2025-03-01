@@ -424,6 +424,19 @@ def run_workflow(
                         completed=progress.tasks[workflow_task_id].completed + 1,
                     )
 
+                    # Add track count display when result contains a tracklist
+                    result = event_data.get("result", {})
+                    if isinstance(result, dict) and "tracklist" in result:
+                        tracklist = result["tracklist"]
+                        track_count = len(tracklist.tracks)
+                        task_name = event_data.get("task_name", "Unknown")
+                        task_type = event_data.get("task_type", "")
+
+                        # Display track count with task info
+                        console.print(
+                            f"  [cyan]→ Node:[/cyan] {task_name} ({task_type}) [green]produced {track_count} tracks[/green]",
+                        )
+
         # Register our callback with Prefect
         register_progress_callback(update_progress)
 

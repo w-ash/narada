@@ -82,20 +82,30 @@ def filter_duplicates(tracklist: TrackList | None = None) -> Transform | TrackLi
     """
 
     def transform(t: TrackList) -> TrackList:
-        seen = set()
+        seen_ids = set()
         unique_tracks = []
+        duplicates_removed = 0
+        original_count = len(t.tracks)
+        tracks_without_ids = 0
 
         for track in t.tracks:
-            key = (
-                track.id
-                if track.id
-                else f"{track.artists[0].name if track.artists else 'Unknown'}:{track.title}"
-            )
-            if key not in seen:
-                seen.add(key)
+            if track.id is None:
+                # If track has no ID, keep it (can't properly deduplicate)
                 unique_tracks.append(track)
+                tracks_without_ids += 1
+            elif track.id not in seen_ids:
+                seen_ids.add(track.id)
+                unique_tracks.append(track)
+            else:
+                duplicates_removed += 1
 
-        return t.with_tracks(unique_tracks)
+        result = t.with_tracks(unique_tracks)
+        # Add metadata for reporting
+        return (
+            result.with_metadata("duplicates_removed", duplicates_removed)
+            .with_metadata("original_count", original_count)
+            .with_metadata("tracks_without_ids", tracks_without_ids)
+        )
 
     return transform(tracklist) if tracklist is not None else transform
 

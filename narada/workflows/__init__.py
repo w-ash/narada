@@ -22,13 +22,15 @@ def validate_registry():
         "filter.by_release_date",
         "filter.not_in_playlist",
         "filter.not_artist_in_playlist",
-        "sorter.by_spotify_popularity",  # Corrected from by_popularity
-        "sorter.sort_by_user_plays",
-        "selector.limit_tracks",  # Corrected from limit
+        "sorter.by_spotify_popularity",
+        "sorter.by_user_plays",
+        "selector.limit_tracks",
         "combiner.merge_playlists",
         "combiner.concatenate_playlists",
         "combiner.interleave_playlists",
+        "destination.create_internal_playlist",
         "destination.create_spotify_playlist",
+        "destination.update_spotify_playlist",
     ]
 
     registered = set(registry.list_nodes().keys())

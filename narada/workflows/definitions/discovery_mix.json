@@ -2,7 +2,7 @@
   "id": "discovery_mix",
   "name": "Latest Discovery Mix",
   "description": "Multi-source filtered new release discovery mix",
-  "version": "1.1",
+  "version": "1.2",
   "tasks": [
     {
       "id": "source_serotonin",
@@ -23,7 +23,7 @@
     },
     {
       "id": "limit_serotonin",
-      "type": "selector.limit",
+      "type": "selector.limit_tracks",
       "config": {
         "count": 15,
         "method": "first"
@@ -51,7 +51,7 @@
     },
     {
       "id": "limit_pollen",
-      "type": "selector.limit",
+      "type": "selector.limit_tracks",
       "config": {
         "count": 10
       },
@@ -78,7 +78,7 @@
     },
     {
       "id": "limit_metropolis",
-      "type": "selector.limit",
+      "type": "selector.limit_tracks",
       "config": {
         "count": 10
       },
@@ -105,7 +105,7 @@
     },
     {
       "id": "limit_stereogum",
-      "type": "selector.limit",
+      "type": "selector.limit_tracks",
       "config": {
         "count": 5
       },
@@ -145,7 +145,7 @@
       "id": "source_release_radar",
       "type": "source.spotify_playlist",
       "config": {
-        "playlist_id": "37i9dQZF1DWYMroOc5KTTh"
+        "playlist_id": "00U3FfaARqbWZAYKvjyGjh"
       }
     },
     {
@@ -171,21 +171,39 @@
       ]
     },
     {
-      "id": "source_interesting",
+      "id": "source_interesting_24",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "0Yo4rqmFjZWABgS36pDZJR"
+      }
+    },
+    {
+      "id": "filter_not_in_interesting_24",
+      "type": "filter.not_in_playlist",
+      "config": {
+        "reference": "source_interesting_24"
+      },
+      "upstream": [
+        "deduplicate",
+        "source_interesting_24"
+      ]
+    },
+    {
+      "id": "source_interesting_25",
       "type": "source.spotify_playlist",
       "config": {
         "playlist_id": "14GT9ahKyAR9SObC7GdwtO"
       }
     },
     {
-      "id": "filter_not_in_interesting",
+      "id": "filter_not_in_interesting_25",
       "type": "filter.not_in_playlist",
       "config": {
-        "reference": "source_interesting"
+        "reference": "source_interesting_25"
       },
       "upstream": [
-        "deduplicate",
-        "source_interesting"
+        "filter_not_in_interesting_24",
+        "source_interesting_25"
       ]
     },
     {
@@ -202,8 +220,26 @@
         "reference": "source_later"
       },
       "upstream": [
-        "filter_not_in_interesting",
+        "filter_not_in_interesting_25",
         "source_later"
+      ]
+    },
+    {
+      "id": "source_nah",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "4RhQO9hYrEOjUni3WqyNW7"
+      }
+    },
+    {
+      "id": "filter_not_in_nah",
+      "type": "filter.not_in_playlist",
+      "config": {
+        "reference": "source_nah"
+      },
+      "upstream": [
+        "filter_not_in_later",
+        "source_nah"
       ]
     },
     {
@@ -220,7 +256,7 @@
         "reference": "source_blech"
       },
       "upstream": [
-        "filter_not_in_later",
+        "filter_not_in_nah",
         "source_blech"
       ]
     },

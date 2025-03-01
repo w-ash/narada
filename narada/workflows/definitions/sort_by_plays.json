@@ -28,14 +28,13 @@
       "id": "source",
       "type": "source.spotify_playlist",
       "config": {
-        "playlist_id": "{parameters.source_playlist_id}"
+        "playlist_id": "2CupvTx2VRLdvk5EAf7jKd"
       }
     },
     {
       "id": "resolve",
       "type": "enricher.resolve_lastfm",
       "config": {
-        "username": "{parameters.username}",
         "batch_size": 50,
         "concurrency": 5
       },
@@ -45,7 +44,7 @@
     },
     {
       "id": "sort",
-      "type": "sorter.sort_by_user_plays",
+      "type": "sorter.by_user_plays",
       "config": {
         "reverse": true,
         "min_confidence": 60
@@ -58,7 +57,7 @@
       "id": "destination",
       "type": "destination.create_spotify_playlist",
       "config": {
-        "name": "{parameters.target_name|Sorted by Play Count}",
+        "name": "Sorted by Play Count",
         "description": "Tracks sorted by Last.fm play count"
       },
       "upstream": [

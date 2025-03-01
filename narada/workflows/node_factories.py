@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, TypedDict, TypeVar, cast
 
+from narada.config import get_logger
 from narada.core.models import Playlist, Track, TrackList
 from narada.core.transforms import (
     concatenate,
@@ -23,7 +24,10 @@ from narada.core.transforms import (
     sort_by_attribute,
 )
 
-# Type definitions
+logger = get_logger(__name__)
+
+# === TYPE DEFINITIONS ===
+
 T = TypeVar("T")
 NodeFn = Callable[[dict, dict], Awaitable[dict]]
 TransformFn = Callable[[TrackList], TrackList]
@@ -155,6 +159,76 @@ def make_node(transform_factory: Callable, operation: str) -> NodeFn:
                 raise TypeError(f"Unsupported transform type: {type(transform)}")
 
     return node_impl
+
+
+async def persist_tracks_and_playlist(
+    tracks: list[Track],
+    playlist_name: str | None = None,
+    playlist_description: str | None = None,
+    playlist_connector_ids: dict[str, str] | None = None,
+) -> tuple[list[Track], str | None, dict[str, int]]:
+    """Persist tracks and optionally a playlist to the database.
+
+    Args:
+        tracks: List of track domain models
+        playlist_name: Optional playlist name (if playlist should be saved)
+        playlist_description: Optional playlist description
+        playlist_connector_ids: Optional connector IDs for the playlist
+
+    Returns:
+        Tuple of (persisted tracks with IDs, playlist DB ID if created, persistence stats)
+    """
+    from narada.core.models import Playlist
+    from narada.core.repositories import PlaylistRepository, TrackRepository
+    from narada.data.database import get_session
+
+    # Statistics for tracking persistence operation
+    new_tracks = 0
+    updated_tracks = 0
+    playlist_id = None
+
+    async with get_session(rollback=False) as session:
+        track_repo = TrackRepository(session)
+
+        # Save all tracks to get database IDs
+        db_tracks = []
+        for track in tracks:
+            try:
+                original_id = track.id
+                saved_track = await track_repo.save_track(track)
+
+                # Track whether this was new or updated
+                if original_id != saved_track.id:
+                    if original_id is None:
+                        new_tracks += 1
+                    else:
+                        updated_tracks += 1
+
+                db_tracks.append(saved_track)
+            except Exception as e:
+                logger.error(f"Error persisting track {track.title}: {e!s}")
+                db_tracks.append(track)  # Use original track if save fails
+
+        # If playlist info provided, save playlist too
+        if playlist_name:
+            try:
+                playlist_repo = PlaylistRepository(session)
+                playlist = Playlist(
+                    name=playlist_name,
+                    description=playlist_description,
+                    tracks=db_tracks,
+                    connector_track_ids=playlist_connector_ids or {},
+                )
+                playlist_id = await playlist_repo.save_playlist(playlist, track_repo)
+                logger.debug(f"Saved playlist {playlist_name} with ID: {playlist_id}")
+            except Exception as e:
+                logger.error(f"Error saving playlist {playlist_name}: {e!s}")
+
+    return (
+        db_tracks,
+        playlist_id,
+        {"new_tracks": new_tracks, "updated_tracks": updated_tracks},
+    )
 
 
 # === TRANSFORM FACTORIES ===
@@ -371,3 +445,115 @@ def combiner_factory(ctx: Context, config: dict) -> TransformFn:
         raise ValueError("No tracklists found for combiner")
 
     return make_combiner(tracklists, interleaved)
+
+
+# Replace the duplicated playlist_destination_factory with this single cleaner version
+
+
+async def playlist_destination_factory(
+    ctx: Context,
+    config: dict,
+    operation: str,
+) -> dict:
+    """Factory for playlist destination operations."""
+    tracklist = ctx.extract_tracklist()
+    name = config.get("name", "Narada Playlist")
+    description = config.get("description", "Created by Narada")
+
+    match operation:
+        case "create_internal":
+            # Only persist to internal database
+            db_tracks, playlist_id, stats = await persist_tracks_and_playlist(
+                tracklist.tracks,
+                playlist_name=name,
+                playlist_description=description,
+            )
+
+            return {
+                "playlist_id": playlist_id,
+                "playlist_name": name,
+                "track_count": len(tracklist.tracks),
+                "operation": "create_internal_playlist",
+                **stats,
+            }
+
+        case "create_spotify":
+            from narada.integrations.spotify import SpotifyConnector
+
+            # Create on Spotify first
+            spotify = SpotifyConnector()
+            spotify_id = await spotify.create_playlist(
+                name,
+                tracklist.tracks,
+                description,
+            )
+
+            # Then persist to our database with Spotify ID
+            db_tracks, playlist_id, stats = await persist_tracks_and_playlist(
+                tracklist.tracks,
+                playlist_name=name,
+                playlist_description=description,
+                playlist_connector_ids={"spotify": spotify_id},
+            )
+
+            return {
+                "playlist_id": playlist_id,
+                "spotify_playlist_id": spotify_id,
+                "playlist_name": name,
+                "track_count": len(tracklist.tracks),
+                "operation": "create_spotify_playlist",
+                **stats,
+            }
+
+        case "update_spotify":
+            spotify_id = config.get("playlist_id")
+            append = config.get("append", False)
+
+            if not spotify_id:
+                raise ValueError("Missing required playlist_id for update operation")
+
+            from narada.core.repositories import PlaylistRepository, TrackRepository
+            from narada.data.database import get_session
+
+            # First persist all tracks to ensure they have IDs
+            db_tracks, _, stats = await persist_tracks_and_playlist(tracklist.tracks)
+
+            # Get existing playlist from database
+            async with get_session(rollback=False) as session:
+                track_repo = TrackRepository(session)
+                playlist_repo = PlaylistRepository(session)
+                existing = await playlist_repo.get_playlist("spotify", spotify_id)
+
+                if not existing:
+                    raise ValueError(f"Playlist with Spotify ID {spotify_id} not found")
+
+                # Create updated playlist
+                updated = existing.with_tracks(
+                    existing.tracks + db_tracks if append else db_tracks,
+                )
+
+                # Update on Spotify
+                from narada.integrations.spotify import SpotifyConnector
+
+                spotify = SpotifyConnector()
+                await spotify.update_playlist(spotify_id, updated, replace=not append)
+
+                # Update in database
+                await playlist_repo.update_playlist(
+                    str(existing.id),
+                    updated,
+                    track_repo,
+                )
+
+            return {
+                "playlist_id": str(existing.id),
+                "spotify_playlist_id": spotify_id,
+                "track_count": len(updated.tracks),
+                "original_count": len(existing.tracks),
+                "operation": "update_spotify_playlist",
+                "append_mode": append,
+                **stats,
+            }
+
+        case _:
+            raise ValueError(f"Unsupported operation type: {operation}")

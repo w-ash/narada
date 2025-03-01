@@ -6,6 +6,7 @@ nodes using the unified factory system. Nodes are organized by
 functional category with consistent patterns.
 """
 
+from narada.config import get_logger
 from narada.core.matcher import batch_match_tracks
 from narada.core.models import TrackList
 from narada.integrations.lastfm import LastFmConnector
@@ -17,36 +18,69 @@ from narada.workflows.node_factories import (
     make_date_filter,
     make_dedup_filter,
     make_node,
+    make_sorter,
+    persist_tracks_and_playlist,
+    playlist_destination_factory,
     selector_factory,
-    sorter_factory,
+    spotify_popularity_key,
+    user_play_count_key,
 )
 from narada.workflows.node_registry import node
+
+logger = get_logger(__name__)
 
 # === SOURCE NODES ===
 
 
 @node(
     "source.spotify_playlist",
-    description="Fetches a playlist from Spotify",
+    description="Fetches a playlist from Spotify and persists to database",
     output_type="tracklist",
 )
-async def spotify_playlist_source(context: dict, config: dict) -> dict:
-    """Load a playlist from Spotify and convert to tracklist."""
-    ctx = Context(context)
-    playlist_id = ctx.require(config.get("playlist_id_param", "playlist_id"))
+async def spotify_playlist_source(_context: dict, config: dict) -> dict:
+    """Load a playlist from Spotify, persist to database, and convert to tracklist."""
+    if "playlist_id" not in config:
+        raise ValueError("Missing required config parameter: playlist_id")
+
+    playlist_id = config["playlist_id"]
+    logger.info(f"Fetching Spotify playlist: {playlist_id}")
 
     # Initialize Spotify client and fetch playlist
     spotify = SpotifyConnector()
-    playlist = await spotify.get_spotify_playlist(playlist_id)
+    spotify_playlist = await spotify.get_spotify_playlist(playlist_id)
 
-    # Create tracklist from playlist
-    tracklist = TrackList.from_playlist(playlist) if playlist.tracks else TrackList()
+    # Persist all tracks and the playlist to database
+    db_tracks, db_playlist_id, stats = await persist_tracks_and_playlist(
+        spotify_playlist.tracks,
+        playlist_name=spotify_playlist.name,
+        playlist_description=spotify_playlist.description,
+        playlist_connector_ids={"spotify": playlist_id},
+    )
+
+    # Create tracklist from persisted tracks
+    tracklist = TrackList(tracks=db_tracks)
+    if spotify_playlist.name:
+        tracklist = tracklist.with_metadata(
+            "source_playlist_name",
+            spotify_playlist.name,
+        )
+        tracklist = tracklist.with_metadata("spotify_playlist_id", playlist_id)
+
+    # Add database ID to metadata
+    if db_playlist_id:
+        tracklist = tracklist.with_metadata("db_playlist_id", db_playlist_id)
+
+    # Add stats to metadata
+    for key, value in stats.items():
+        tracklist = tracklist.with_metadata(key, value)
 
     return {
         "tracklist": tracklist,
         "source_id": playlist_id,
-        "source_name": playlist.name,
-        "track_count": len(playlist.tracks),
+        "source_name": spotify_playlist.name,
+        "track_count": len(tracklist.tracks),
+        "db_playlist_id": db_playlist_id,
+        **stats,
     }
 
 
@@ -129,16 +163,23 @@ async def filter_by_date(context: dict, config: dict) -> dict:
 )
 async def filter_not_in_playlist(context: dict, config: dict) -> dict:
     """Exclude tracks present in reference playlist."""
-    return await make_node(
-        lambda ctx, cfg: make_node(
-            lambda c, cf: exclusion_predicate(
-                c,
-                {"reference_task_id": cf.get("reference")},
-            ),
-            "exclude_tracks",
-        )(ctx, cfg),
-        "filter_not_in_playlist",
-    )(context, {"reference": config.get("reference", config.get("upstream", [])[-1])})
+    # Get required reference parameter - no fallback needed
+    reference = config.get("reference")
+
+    if not reference:
+        raise ValueError(
+            "Missing required 'reference' parameter in filter.not_in_playlist node",
+        )
+
+    # Create a simple transform factory that directly returns the filter function
+    async def transform_factory(ctx, _):  # noqa
+        predicate = exclusion_predicate(ctx, {"reference_task_id": reference})
+        from narada.core.transforms import filter_by_predicate
+
+        return filter_by_predicate(predicate)
+
+    # Use a single make_node call with our async factory
+    return await make_node(transform_factory, "filter_not_in_playlist")(context, {})
 
 
 @node(
@@ -149,36 +190,64 @@ async def filter_not_in_playlist(context: dict, config: dict) -> dict:
 )
 async def filter_not_artist_in_playlist(context: dict, config: dict) -> dict:
     """Exclude tracks whose artists appear in reference playlist."""
-    return await make_node(
-        lambda ctx, cfg: make_node(
-            lambda c, cf: exclusion_predicate(
-                c,
-                {"reference_task_id": cf.get("reference"), "exclude_artists": True},
-            ),
-            "exclude_artists",
-        )(ctx, cfg),
-        "filter_not_artist_in_playlist",
-    )(context, {"reference": config.get("reference", config.get("upstream", [])[-1])})
+    # Get required reference parameter - no fallback needed
+    reference = config.get("reference")
+
+    if not reference:
+        raise ValueError(
+            "Missing required 'reference' parameter in filter.not_artist_in_playlist node",
+        )
+
+    # Create a simple transform factory that directly returns the filter function
+    async def transform_factory(ctx, _):  # noqa
+        predicate = exclusion_predicate(
+            ctx,
+            {"reference_task_id": reference, "exclude_artists": True},
+        )
+        from narada.core.transforms import filter_by_predicate
+
+        return filter_by_predicate(predicate)
+
+    # Use a single make_node call with our async factory
+    return await make_node(transform_factory, "filter_not_artist_in_playlist")(
+        context,
+        {},
+    )
 
 
 # === SORTER NODES ===
 
 
 @node(
-    "sorter.sort_by_user_plays",
+    "sorter.by_user_plays",
     description="Sorts tracks by user play counts",
     input_type="tracklist",
     output_type="tracklist",
 )
-async def sort_by_user_plays(context: dict, config: dict) -> dict:
+async def sort_by_user_plays(context: dict, config: dict) -> dict:  # noqa
     """Sort tracks by user's play count."""
-    return await make_node(
-        lambda ctx, cfg: make_node(
-            lambda c, cf: sorter_factory(c, {"sort_by": "play_count", **cf}),
-            "sort_by_plays",
-        )(ctx, cfg),
-        "sort_by_play_count",
-    )(context, config)
+    ctx = Context(context)
+    tracklist = ctx.extract_tracklist()
+    original_count = len(tracklist.tracks)
+
+    # Extract config parameters
+    reverse = config.get("reverse", True)
+
+    # Use factory directly to create key function
+    key_fn = user_play_count_key(ctx, config)
+
+    # Create and apply sorter
+    sorter = make_sorter(key_fn, reverse)
+    sorted_tracklist = sorter(tracklist)
+
+    # Return raw dictionary to satisfy type system
+    return {
+        "tracklist": sorted_tracklist,
+        "operation": "sort_by_plays",
+        "original_count": original_count,
+        "tracks_count": len(sorted_tracklist.tracks),
+        "metric": "user_play_count",
+    }
 
 
 @node(
@@ -187,15 +256,30 @@ async def sort_by_user_plays(context: dict, config: dict) -> dict:
     input_type="tracklist",
     output_type="tracklist",
 )
-async def sort_by_spotify_popularity(context: dict, config: dict) -> dict:
+async def sort_by_spotify_popularity(context: dict, config: dict) -> dict:  # noqa
     """Sort tracks by Spotify popularity."""
-    return await make_node(
-        lambda ctx, cfg: make_node(
-            lambda c, cf: sorter_factory(c, {"sort_by": "popularity", **cf}),
-            "sort_by_popularity",
-        )(ctx, cfg),
-        "sort_by_popularity",
-    )(context, config)
+    ctx = Context(context)
+    tracklist = ctx.extract_tracklist()
+    original_count = len(tracklist.tracks)
+
+    # Extract config parameters
+    reverse = config.get("reverse", True)
+
+    # Use factory directly to create key function
+    key_fn = spotify_popularity_key(ctx, config)
+
+    # Create and apply sorter
+    sorter = make_sorter(key_fn, reverse)
+    sorted_tracklist = sorter(tracklist)
+
+    # Return raw dictionary to satisfy type system
+    return {
+        "tracklist": sorted_tracklist,
+        "operation": "sort_by_popularity",
+        "original_count": original_count,
+        "tracks_count": len(sorted_tracklist.tracks),
+        "metric": "popularity",
+    }
 
 
 # === SELECTOR NODES ===
@@ -278,25 +362,43 @@ async def interleave_playlists(context: dict, config: dict) -> dict:
     input_type="tracklist",
     output_type="playlist_id",
 )
-async def create_spotify_playlist(context: dict, config: dict) -> dict:
-    """Create a new Spotify playlist with the transformed tracks."""
+# Replace the existing create_spotify_playlist node and add the other two nodes
+@node(
+    "destination.create_internal_playlist",
+    description="Creates a playlist in the internal database only",
+    input_type="tracklist",
+    output_type="playlist_id",
+)
+async def create_internal_playlist(context: dict, config: dict) -> dict:
+    """Create a playlist in the internal database only."""
     ctx = Context(context)
-    tracklist = ctx.extract_tracklist()
-    name = config.get("name", "Narada Playlist")
-    description = config.get("description", "Created by Narada")
+    return await playlist_destination_factory(ctx, config, "create_internal")
 
-    # Convert tracklist to playlist
-    from narada.core.models import Playlist
 
-    playlist = Playlist(name=name, description=description, tracks=tracklist.tracks)
+@node(
+    "destination.create_spotify_playlist",
+    description="Creates a playlist on Spotify and in the database",
+    input_type="tracklist",
+    output_type="playlist_id",
+)
+async def create_spotify_playlist(context: dict, config: dict) -> dict:
+    """Create a new playlist on Spotify and save to database."""
+    ctx = Context(context)
+    return await playlist_destination_factory(ctx, config, "create_spotify")
 
-    # Initialize Spotify client and create playlist
-    spotify = SpotifyConnector()
-    playlist_id = await spotify.create_spotify_playlist(playlist)
 
-    return {
-        "playlist_id": playlist_id,
-        "playlist_name": name,
-        "track_count": len(playlist.tracks),
-        "operation": "create_playlist",
-    }
+@node(
+    "destination.update_spotify_playlist",
+    description="Updates an existing Spotify playlist",
+    input_type="tracklist",
+    output_type="playlist_id",
+)
+async def update_spotify_playlist(context: dict, config: dict) -> dict:
+    """Update an existing Spotify playlist.
+
+    Configuration:
+        playlist_id: Spotify playlist ID to update
+        append: If True, append tracks; if False, replace (default: False)
+    """
+    ctx = Context(context)
+    return await playlist_destination_factory(ctx, config, "update_spotify")
