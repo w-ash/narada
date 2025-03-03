@@ -11,6 +11,7 @@ Narada's workflow architecture enables declarative transformation pipelines thro
 3. **Directed Acyclic Graphs** - Tasks execute in dependency order without circular references
 4. **Immutable Data Flow** - Each transformation produces new state rather than mutating existing state
 5. **Standardized Interfaces** - Nodes follow consistent contracts for composability
+6. **Registry-Based Discovery** - Transform implementations are registered in a central registry for maintainability
 
 ## Workflow JSON Structure
 
@@ -62,45 +63,45 @@ A workflow is defined in JSON as a directed acyclic graph (DAG) of tasks:
 
 | Node Type | Description | Configuration |
 |----------------|-------------|--------------|
-| `enricher.resolve_lastfm` | Resolves tracks to Last.fm and fetches play counts | (Uses environment configuration) |
+| `enricher.resolve_lastfm` | Resolves tracks to Last.fm and fetches play counts | `username`: Optional Last.fm username<br>`batch_size`: Optional batch size for requests<br>`concurrency`: Optional concurrency limit |
 
 ### Filter Nodes
 
 | Node Type | Description | Configuration |
 |----------------|-------------|--------------|
-| `filter.by_release_date` | Filters tracks by release date | `max_age_days`: Maximum age in days<br>`min_age_days`: Minimum age in days |
-| `filter.not_in_playlist` | Excludes tracks found in another playlist | (Requires two upstream tasks: main and reference) |
-| `filter.not_artist_in_playlist` | Excludes tracks whose artist appears in another playlist | (Requires two upstream tasks: main and reference) |
 | `filter.deduplicate` | Removes duplicate tracks | (No configuration required) |
+| `filter.by_release_date` | Filters tracks by release date | `max_age_days`: Maximum age in days<br>`min_age_days`: Minimum age in days |
+| `filter.by_tracks` | Excludes tracks from input that are present in exclusion source | `exclusion_source`: Task ID of exclusion source |
+| `filter.by_artists` | Excludes tracks whose artists appear in exclusion source | `exclusion_source`: Task ID of exclusion source<br>`exclude_all_artists`: Boolean, if true, excludes tracks if any artist is present in the exclusion source |
 
 ### Sorter Nodes
-
 
 | Node Type | Description | Configuration |
 |----------------|-------------|--------------|
 | `sorter.by_user_plays` | Sorts tracks by user play counts | `reverse`: Boolean to reverse sort order<br>`min_confidence`: Minimum match confidence threshold |
-| `sorter.sort_by_spotify_popularity` | Sorts tracks by Spotify popularity | `reverse`: Boolean to reverse sort order |
+| `sorter.by_spotify_popularity` | Sorts tracks by Spotify popularity | `reverse`: Boolean to reverse sort order |
 
 ### Selector Nodes
 
 | Node Type | Description | Configuration |
 |----------------|-------------|--------------|
-| `selector.limit_tracks` | Limits playlist to specified number of tracks | `count`: Maximum number of tracks |
-
-
+| `selector.limit_tracks` | Limits playlist to specified number of tracks | `count`: Maximum number of tracks<br>`method`: Selection method (`first`, `last`, or `random`) |
 
 ### Combiner Nodes
 
 | Node Type | Description | Configuration |
 |----------------|-------------|--------------|
-| `combiner.merge_playlists` | Combines multiple playlists into one | (No configuration required) |
+| `combiner.merge_playlists` | Combines multiple playlists into one | `sources`: Array of task IDs to combine |
 | `combiner.concatenate_playlists` | Joins playlists in specified order | `order`: Array of task IDs in desired concatenation order |
+| `combiner.interleave_playlists` | Interleaves tracks from multiple playlists | `sources`: Array of task IDs to interleave |
 
 ### Destination Nodes
 
 | Node Type | Description | Configuration |
 |----------------|-------------|--------------|
+| `destination.create_internal_playlist` | Creates a playlist in internal database | `name`: Name for the playlist<br>`description`: Optional description |
 | `destination.create_spotify_playlist` | Creates a new Spotify playlist | `name`: Name for the new playlist<br>`description`: Optional description |
+| `destination.update_spotify_playlist` | Updates an existing Spotify playlist | `playlist_id`: Spotify playlist ID<br>`append`: Boolean, if true, append tracks rather than replace |
 
 ## Workflow Patterns
 
@@ -113,7 +114,7 @@ This pattern combines tracks from multiple sources:
   "tasks": [
     { "id": "source1", "type": "source.spotify_playlist", "config": {"playlist_id": "id1"} },
     { "id": "source2", "type": "source.spotify_playlist", "config": {"playlist_id": "id2"} },
-    { "id": "combine", "type": "combiner.merge_playlists", "upstream": ["source1", "source2"] }
+    { "id": "combine", "type": "combiner.merge_playlists", "config": {"sources": ["source1", "source2"]}, "upstream": ["source1", "source2"] }
   ]
 }
 ```
@@ -126,8 +127,8 @@ This pattern applies multiple sequential filters:
 {
   "tasks": [
     { "id": "source", "type": "source.spotify_playlist", "config": {"playlist_id": "id"} },
-    { "id": "filter1", "type": "transformer.filter_by_release_date", "config": {"max_age_days": 90}, "upstream": ["source"] },
-    { "id": "filter2", "type": "filter.not_in_playlist", "upstream": ["filter1", "exclude_source"] }
+    { "id": "filter1", "type": "filter.by_release_date", "config": {"max_age_days": 90}, "upstream": ["source"] },
+    { "id": "filter2", "type": "filter.not_in_playlist", "config": {"reference": "exclude_source"}, "upstream": ["filter1", "exclude_source"] }
   ]
 }
 ```
@@ -141,7 +142,7 @@ This pattern enhances tracks with external data before transformation:
   "tasks": [
     { "id": "source", "type": "source.spotify_playlist", "config": {"playlist_id": "id"} },
     { "id": "enrich", "type": "enricher.resolve_lastfm", "upstream": ["source"] },
-    { "id": "transform", "type": "transformer.sort_by_plays", "config": {"reverse": true}, "upstream": ["enrich"] }
+    { "id": "transform", "type": "sorter.by_user_plays", "config": {"reverse": true}, "upstream": ["enrich"] }
   ]
 }
 ```
@@ -157,10 +158,10 @@ This pattern enhances tracks with external data before transformation:
 
 ## Extending the System
 
-The node-based architecture allows for system extension without modifying the workflow engine itself:
+The node-based architecture allows for system extension through the transform registry:
 
-1. Add new node implementations to `nodes.py`
-2. Register with the appropriate decorator
+1. Add transform implementations to the `TRANSFORM_REGISTRY` in node_factories.py
+2. Register the node with appropriate metadata in workflow_nodes.py
 3. Document the node's purpose and configuration
 4. Create workflows that leverage the new node
 
@@ -184,7 +185,7 @@ This extensibility model enables continuous evolution without increasing archite
     },
     {
       "id": "filter_date",
-      "type": "transformer.filter_by_release_date",
+      "type": "filter.by_release_date",
       "config": {
         "max_age_days": 90
       },
@@ -198,7 +199,7 @@ This extensibility model enables continuous evolution without increasing archite
     },
     {
       "id": "sort",
-      "type": "transformer.sort_by_plays",
+      "type": "sorter.by_user_plays",
       "config": {
         "reverse": true,
         "min_confidence": 50
@@ -207,9 +208,10 @@ This extensibility model enables continuous evolution without increasing archite
     },
     {
       "id": "limit",
-      "type": "transformer.limit_tracks",
+      "type": "selector.limit_tracks",
       "config": {
-        "count": 50
+        "count": 50,
+        "method": "first"
       },
       "upstream": ["sort"]
     },
@@ -226,4 +228,12 @@ This extensibility model enables continuous evolution without increasing archite
 }
 ```
 
-This architecture balances power and simplicity, enabling complex workflows through simple, composable nodes while maintaining a clean system design.
+## Implementation Architecture
+
+The workflow system architecture consists of three key components:
+
+1. **Node Registry** - Central registration point for all node types
+2. **Transform Registry** - Maps node categories and types to their implementations
+3. **Node Factories** - Creates node functions with standardized interfaces
+
+This layered approach separates node definition from implementation details, allowing for clean extension and maintenance of the workflow system.

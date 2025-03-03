@@ -20,17 +20,14 @@ from narada.workflows import run_workflow, validate_registry
 from narada.workflows.node_registry import get_node, node
 
 __all__ = [
-    # CLI interfaces
     "app",
-    "main",
-    # Configuration and utilities
     "get_logger",
+    "get_node",
+    "main",
+    "node",
     "resilient_operation",
-    # Workflow system
     "run_workflow",
     "validate_registry",
-    "get_node",
-    "node",
 ]
 
 # Trigger workflows validation during package import

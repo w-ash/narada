@@ -179,9 +179,9 @@
     },
     {
       "id": "filter_not_in_interesting_24",
-      "type": "filter.not_in_playlist",
+      "type": "filter.by_tracks",
       "config": {
-        "reference": "source_interesting_24"
+        "exclusion_source": "source_interesting_24"
       },
       "upstream": [
         "deduplicate",
@@ -197,9 +197,9 @@
     },
     {
       "id": "filter_not_in_interesting_25",
-      "type": "filter.not_in_playlist",
+      "type": "filter.by_tracks",
       "config": {
-        "reference": "source_interesting_25"
+        "exclusion_source": "source_interesting_25"
       },
       "upstream": [
         "filter_not_in_interesting_24",
@@ -215,9 +215,9 @@
     },
     {
       "id": "filter_not_in_later",
-      "type": "filter.not_in_playlist",
+      "type": "filter.by_tracks",
       "config": {
-        "reference": "source_later"
+        "exclusion_source": "source_later"
       },
       "upstream": [
         "filter_not_in_interesting_25",
@@ -233,9 +233,9 @@
     },
     {
       "id": "filter_not_in_nah",
-      "type": "filter.not_in_playlist",
+      "type": "filter.by_tracks",
       "config": {
-        "reference": "source_nah"
+        "exclusion_source": "source_nah"
       },
       "upstream": [
         "filter_not_in_later",
@@ -251,9 +251,10 @@
     },
     {
       "id": "filter_not_artist_in_blech",
-      "type": "filter.not_artist_in_playlist",
+      "type": "filter.by_artists",
       "config": {
-        "reference": "source_blech"
+        "exclusion_source": "source_blech",
+        "exclude_all_artists": true
       },
       "upstream": [
         "filter_not_in_nah",

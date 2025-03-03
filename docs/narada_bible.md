@@ -15,7 +15,7 @@ Narada is a personal music metadata hub that integrates Spotify, Last.fm, and Mu
 
 ### Core Dependencies
 
-| Node             | Package        | Version | Purpose                                                         |
+| Node                  | Package        | Version | Purpose                                                         |
 | --------------------- | -------------- | ------- | --------------------------------------------------------------- |
 | Runtime               | Python         | ≥3.13.0 | Modern language features, pattern matching, improved type hints |
 | Database Engine       | SQLite         | ≥3.49.1 | Zero-config, embedded database with async support               |
@@ -96,8 +96,9 @@ narada/                        # Project root
 │   ├── core/                  # Domain core
 │   │   ├── models.py          # Entity definitions (Track, Playlist)
 │   │   ├── matcher.py         # Entity resolution engine
+│   │   ├── protocols.py       # Shared core protocols
 │   │   ├── repositories.py    # Persistence abstractions
-│   │   └── transforms.py    # pure functional primitives
+│   │   └── transforms.py      # Pure functional primitives
 │   │
 │   ├── data/                  # Data persistence
 │   │   ├── database.py        # Database connection management
@@ -109,8 +110,9 @@ narada/                        # Project root
 │   │   └── musicbrainz.py     # MusicBrainz integration
 │   │
 ├── workflows/                 # Consolidated workflow system
-│   ├── nodes.py          # All node implementations
-│   ├── registry.py            # Node type registration
+│   ├── workflow_nodes.py      # All node implementations
+│   ├── node_registry.py       # Node type registration
+│   ├── node_factory.py        # Factories for node creation
 │   ├── prefect.py             # Prefect adapter (thin layer)
 │   ├── definitions/           # JSON workflow definitions
 │   │   ├── sort_by_plays.json # Use case 1A definition
@@ -202,6 +204,7 @@ Narada uses Prefect as its workflow orchestration layer, providing several archi
 2. **Robust Execution Model** - Built-in handling of retries, failures, and concurrency
 3. **Minimal Overhead** - Embedded execution mode requires no additional infrastructure
 4. **Progressive Scaling** - Path to distributed execution when workflows increase in complexity
+5. **Real-time Progress Tracking** - Custom callback system for workflow visualization
 
 The architecture follows a task-based model where:
 
@@ -209,6 +212,7 @@ The architecture follows a task-based model where:
 - **Flows** define the directed acyclic graph (DAG) of task dependencies
 - **Parameters** enable runtime configuration of workflows
 - **Task Results** are tracked and passed between execution steps
+- **Context Propagation** ensures data flows correctly between nodes
 
 This approach allows us to leverage our existing functional transformation primitives while gaining enterprise-grade execution reliability.
 
@@ -613,7 +617,7 @@ This approach yields a system that performs complex cross-connector operations w
 - Sort by configurable metrics
 - Generate new playlist
 
-#### 1N: Discovery Mix Generation
+#### 1N: Additional Playlist Generation
 **Description**: Support dozens of complex DAG flows, flexibly extending 1A & 1B to any number of workflows  
 
 

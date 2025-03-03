@@ -437,20 +437,11 @@ class PlaylistRepository(BaseRepository[DBPlaylist]):
     async def save_playlist(
         self,
         playlist: Playlist,
-        track_repo: TrackRepository,
     ) -> str:
-        """Save playlist with efficient batch operations.
-
-        Args:
-            playlist: Domain playlist to save
-            track_repo: Repository for saving tracks
-
-        Returns:
-            str: Internal playlist ID
-        """
+        """Save playlist with efficient batch operations."""
 
         async def save_playlist_operation() -> str:
-            # Create playlist record
+            # Create the playlist record first
             db_playlist = DBPlaylist(
                 name=playlist.name,
                 description=playlist.description,
@@ -459,31 +450,36 @@ class PlaylistRepository(BaseRepository[DBPlaylist]):
             self.session.add(db_playlist)
             await self.session.flush()
 
-            # Add connector mappings
-            for connector, connector_id in playlist.connector_track_ids.items():
-                self.session.add(
-                    DBPlaylistMapping(
+            # Save external mappings if present
+            if playlist.connector_track_ids:
+                for (
+                    connector_name,
+                    connector_id,
+                ) in playlist.connector_track_ids.items():
+                    mapping = DBPlaylistMapping(
                         playlist_id=db_playlist.id,
-                        connector_name=connector,
+                        connector_name=connector_name,
                         connector_id=connector_id,
-                    ),
+                    )
+                    self.session.add(mapping)
+
+            # Add playlist-track associations one by one to avoid strftime() incompatibility
+            for i, track in enumerate(playlist.tracks):
+                if not track.id:
+                    continue
+
+                # Create sort key for ordering
+                sort_key = f"a{i:08d}"
+
+                # Add as individual ORM object instead of bulk insert
+                playlist_track = DBPlaylistTrack(
+                    playlist_id=db_playlist.id,
+                    track_id=track.id,
+                    sort_key=sort_key,
                 )
+                self.session.add(playlist_track)
 
-            # Save tracks and create playlist associations
-            for idx, track in enumerate(playlist.tracks):
-                # Save track first to ensure it exists
-                saved_track = await track_repo.save_track(track)
-                track_id = int(saved_track.connector_track_ids["db"])
-
-                # Create playlist track mapping with sort key
-                self.session.add(
-                    DBPlaylistTrack(
-                        playlist_id=db_playlist.id,
-                        track_id=track_id,
-                        sort_key=self._generate_sort_key(idx),
-                    ),
-                )
-
+            # Commit all changes
             await self.session.flush()
             return str(db_playlist.id)
 

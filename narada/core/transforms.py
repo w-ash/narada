@@ -171,6 +171,7 @@ def exclude_tracks(
 @curry
 def exclude_artists(
     reference_tracks: list[Track],
+    exclude_all_artists: bool = False,
     tracklist: TrackList | None = None,
 ) -> Transform | TrackList:
     """
@@ -178,19 +179,38 @@ def exclude_artists(
 
     Args:
         reference_tracks: List of tracks with artists to exclude
+        exclude_all_artists: If True, checks all artists on a track, not just primary
         tracklist: Optional tracklist to transform immediately
 
     Returns:
         Transformation function or transformed tracklist if provided
     """
-    exclude_artists = {
-        track.artists[0].name.lower()
-        for track in reference_tracks
-        if track.artists and track.artists
-    }
+    # Create set of artist names to exclude (case-insensitive)
+    exclude_artists = set()
+
+    for track in reference_tracks:
+        if not track.artists:
+            continue
+
+        if exclude_all_artists:
+            # Add all artists from the track
+            exclude_artists.update(artist.name.lower() for artist in track.artists)
+        else:
+            # Add only the primary artist
+            exclude_artists.add(track.artists[0].name.lower())
 
     def not_artist_in_reference(track: Track) -> bool:
-        return not (track.artists and track.artists[0].name.lower() in exclude_artists)
+        if not track.artists:
+            return True
+
+        if exclude_all_artists:
+            # Check if any artist on the track is in the exclusion set
+            return not any(
+                artist.name.lower() in exclude_artists for artist in track.artists
+            )
+        else:
+            # Check only the primary artist
+            return track.artists[0].name.lower() not in exclude_artists
 
     return cast(
         "Transform | TrackList",

@@ -127,9 +127,7 @@ def build_flow(workflow_def: dict) -> Any:
     @flow(
         name=flow_name,
         description=flow_description,
-        flow_run_name=generate_flow_run_name(
-            flow_name,
-        ),  # Dynamic flow run name with timestamp
+        flow_run_name=generate_flow_run_name(flow_name),
     )
     async def workflow_flow(**parameters):
         """Dynamically generated Prefect flow from workflow definition."""
@@ -139,6 +137,7 @@ def build_flow(workflow_def: dict) -> Any:
 
         # Initialize execution context with parameters
         context = {"parameters": parameters}
+        task_results = {}
 
         # Execute tasks in dependency order
         for task_def in sorted_tasks:
@@ -157,15 +156,39 @@ def build_flow(workflow_def: dict) -> Any:
             # Resolve configuration with current context
             config = task_def.get("config", {})
 
-            # Execute node as a task - Prefect v3 automatically tracks dependencies
-            result = await execute_node(node_type, context, config)
+            # Create task-specific context with upstream results
+            task_context = context.copy()
 
-            # Store result in context with task ID as key
+            if task_def.get("upstream"):
+                if len(task_def["upstream"]) == 1:
+                    # Single upstream case
+                    task_context["upstream_task_id"] = task_def["upstream"][0]
+                else:
+                    # Multiple upstream case - first one is primary by convention
+                    # (unless config specifies a primary_input)
+                    primary_input = config.get("primary_input")
+                    if primary_input and primary_input in task_def["upstream"]:
+                        task_context["upstream_task_id"] = primary_input
+                    else:
+                        task_context["upstream_task_id"] = task_def["upstream"][0]
+
+                # Add all upstream tasks as a list for nodes that need multiple inputs
+                task_context["upstream_task_ids"] = task_def["upstream"]
+
+                # Copy upstream task results into context
+                for upstream_id in task_def["upstream"]:
+                    if upstream_id in task_results:
+                        task_context[upstream_id] = task_results[upstream_id]
+
+            # Execute node as a task
+            result = await execute_node(node_type, task_context, config)
+
+            # Store result in context and task_results
             context[task_id] = result
+            task_results[task_id] = result
 
             # Also store in context under node-specified result key if present
             if result_key := task_def.get("result_key"):
-                # Simplified logging with f-string
                 flow_logger.debug(f"Storing result under key: {result_key}")
                 context[result_key] = result
 

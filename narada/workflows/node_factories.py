@@ -1,14 +1,12 @@
 """
 Factory system for workflow nodes with unified patterns.
 
-This module provides a streamlined approach to node creation, consolidating
-the various factory patterns into a cohesive system with minimal boilerplate.
+Provides a declarative, configuration-driven approach to node creation that
+minimizes code surface area while maintaining maximum flexibility.
 """
 
-from asyncio import iscoroutinefunction
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
-from typing import Any, TypedDict, TypeVar, cast
+from typing import Any
 
 from narada.config import get_logger
 from narada.core.models import Playlist, Track, TrackList
@@ -17,7 +15,6 @@ from narada.core.transforms import (
     exclude_artists,
     exclude_tracks,
     filter_by_date_range,
-    filter_by_predicate,
     filter_duplicates,
     interleave,
     select_by_method,
@@ -27,460 +24,272 @@ from narada.core.transforms import (
 logger = get_logger(__name__)
 
 # === TYPE DEFINITIONS ===
-
-T = TypeVar("T")
-NodeFn = Callable[[dict, dict], Awaitable[dict]]
-TransformFn = Callable[[TrackList], TrackList]
-KeyFn = Callable[[Track], Any]
-PredicateFn = Callable[[Track], bool]
-
-
-class Result(TypedDict, total=False):
-    """Standard node result structure."""
-
-    tracklist: TrackList
-    playlist: Playlist
-    operation: str
-    tracks_count: int
-    original_count: int
-    removed_count: int
-    match_results: dict
-    source_count: int
+type NodeFn = Callable[[dict, dict], Awaitable[dict]]
+type KeyFn = Callable[[Track], Any]
+type PredicateFn = Callable[[Track], bool]
 
 
 class Context:
-    """Context extractor with simplified path-based access."""
+    """Context extractor with path-based access."""
 
     def __init__(self, data: dict) -> None:
         self.data = data
 
     def get(self, path: str, default: Any = None) -> Any:
-        """Get a value from nested context using dot notation."""
+        """Get value from nested context using dot notation."""
         parts = path.split(".")
         current = self.data
-
         for part in parts:
             if not isinstance(current, dict) or part not in current:
                 return default
             current = current[part]
-
         return current
 
-    def require(self, path: str) -> Any:
-        """Get a required value, raising error if missing."""
-        result = self.get(path)
-        if result is None:
-            raise ValueError(f"Required value missing: {path}")
-        return result
-
     def extract_tracklist(self) -> TrackList:
-        """Extract tracklist from context with fallback paths."""
-        # Try direct paths first
-        for path in ["tracklist", "result.tracklist"]:
-            tracklist = self.get(path)
-            if isinstance(tracklist, TrackList):
-                return tracklist
+        """Extract tracklist from upstream node."""
+        # Get the sole upstream task ID (assuming single input)
+        if "upstream_task_id" in self.data:
+            upstream_id = self.data["upstream_task_id"]
+            if upstream_id in self.data and "tracklist" in self.data[upstream_id]:
+                return self.data[upstream_id]["tracklist"]
 
-        # Try to find in any task result
-        for value in self.data.values():
-            if isinstance(value, dict) and isinstance(
-                value.get("tracklist"),
-                TrackList,
-            ):
-                return value["tracklist"]
-
-        raise ValueError("Missing required tracklist in context")
+        raise ValueError("Missing required tracklist from upstream node")
 
     def collect_tracklists(self, task_ids: list[str]) -> list[TrackList]:
         """Collect tracklists from multiple task results."""
-        return [
-            self.data[task_id]["tracklist"]
-            for task_id in task_ids
-            if task_id in self.data
-            and isinstance(self.data[task_id].get("tracklist"), TrackList)
-        ]
+        tracklists = []
+        for task_id in task_ids:
+            if task_id not in self.data:
+                logger.warning(f"Task ID not found in context: {task_id}")
+                continue
+
+            task_result = self.data[task_id]
+            if not isinstance(task_result, dict) or not isinstance(
+                task_result.get("tracklist"),
+                TrackList,
+            ):
+                logger.warning(
+                    f"Missing or invalid tracklist in task result: {task_id}",
+                )
+                continue
+
+            tracklists.append(task_result["tracklist"])
+
+        if not tracklists:
+            # This should raise an exception rather than just logging
+            raise ValueError(f"No valid tracklists found in upstream tasks: {task_ids}")
+
+        return tracklists
 
 
-def make_result(tracklist: TrackList, operation: str, **extras) -> Result:
-    """Create standard result dictionary."""
-    return cast(
-        "Result",
-        {
-            "tracklist": tracklist,
-            "operation": operation,
-            "tracks_count": len(tracklist.tracks),
-            **extras,
-        },
-    )
+# === TRANSFORM REGISTRY ===
+# This declarative approach maps node types to their implementations
+TRANSFORM_REGISTRY = {
+    "filter": {
+        "deduplicate": lambda _ctx, _cfg: filter_duplicates(),
+        "by_release_date": lambda _ctx, cfg: filter_by_date_range(
+            cfg.get("min_age_days"),
+            cfg.get("max_age_days"),
+        ),
+        "by_tracks": lambda ctx, cfg: exclude_tracks(
+            ctx.data[cfg["exclusion_source"]]["tracklist"].tracks,
+        ),  # Return transform function, don't apply immediately
+        "by_artists": lambda ctx, cfg: exclude_artists(
+            ctx.data[cfg["exclusion_source"]]["tracklist"].tracks,
+            cfg.get("exclude_all_artists", False),
+        ),  # Return transform function, don't apply immediately
+    },
+    "sorter": {
+        "by_user_plays": lambda ctx, cfg: sort_by_attribute(
+            lambda track: (
+                ctx.get(f"match_results.{track.id}.user_play_count", 0)
+                if track.id
+                else 0
+            ),
+            cfg.get("reverse", True),
+        ),
+        "by_spotify_popularity": lambda _ctx, cfg: sort_by_attribute(
+            lambda track: track.get_connector_attribute("spotify", "popularity", 0),
+            cfg.get("reverse", True),
+        ),
+    },
+    "selector": {
+        "limit_tracks": lambda _ctx, cfg: select_by_method(
+            cfg.get("count", 10),
+            cfg.get("method", "first"),
+        ),
+    },
+    "combiner": {
+        "merge_playlists": lambda ctx, cfg: concatenate(
+            ctx.collect_tracklists(cfg.get("sources", [])),
+        ),
+        "concatenate_playlists": lambda ctx, cfg: concatenate(
+            ctx.collect_tracklists(cfg.get("order", [])),
+        ),
+        "interleave_playlists": lambda ctx, cfg: interleave(
+            ctx.collect_tracklists(cfg.get("sources", [])),
+        ),
+    },
+}
 
 
-def make_node(transform_factory: Callable, operation: str) -> NodeFn:
+# === CORE NODE FACTORY ===
+def make_node(
+    category: str,
+    node_type: str,
+    operation_name: str | None = None,
+) -> NodeFn:
     """
-    Unified node factory that handles all node types.
+    Create a node function from registry configuration.
 
-    This factory consolidates the patterns from multiple specialized factories.
+    Args:
+        category: Node category (filter, sorter, etc.)
+        node_type: Specific node type within category
+        operation_name: Optional operation name for logging
+
+    Returns:
+        Async node function compatible with workflow system
     """
+    if category not in TRANSFORM_REGISTRY:
+        raise ValueError(f"Unknown node category: {category}")
 
-    async def node_impl(context: dict, config: dict) -> dict:
+    if node_type not in TRANSFORM_REGISTRY[category]:
+        raise ValueError(f"Unknown node type: {node_type} in category {category}")
+
+    # Get transform factory from registry
+    transform_factory = TRANSFORM_REGISTRY[category][node_type]
+    operation = operation_name or f"{category}.{node_type}"
+
+    # Create node implementation
+
+    async def node_impl(context: dict, config: dict) -> dict:  # noqa: RUF029
         ctx = Context(context)
 
-        # Handle potentially async transform_factory
-        transform: Any
-        if iscoroutinefunction(transform_factory):
-            transform = await transform_factory(ctx, config)
-        else:
+        # Special handling for combiners which use multiple upstreams
+        if category == "combiner":
+            # Get upstream task IDs
+            upstream_task_ids = context.get("upstream_task_ids", [])
+
+            if not upstream_task_ids:
+                raise ValueError(f"Combiner node {operation} requires upstream tasks")
+
+            # Collect tracklists from all upstream tasks
+            upstream_tracklists = ctx.collect_tracklists(upstream_task_ids)
+
+            if not upstream_tracklists:
+                raise ValueError(
+                    f"No valid tracklists found in upstream tasks for {operation}",
+                )
+
+            # Create the appropriate transform
             transform = transform_factory(ctx, config)
 
-        # Handle different transform types
-        match transform:
-            case fn if callable(fn):
-                # Function-based transform (filter, sort, etc.)
-                tracklist = ctx.extract_tracklist()
-                original_count = len(tracklist.tracks)
+            # Apply transformation using collected tracklists
+            # Note: The transform expects a list of tracklists for combiners
+            result = transform(
+                TrackList(),
+            )  # Empty tracklist as base, transform handles collection
 
-                # Handle potentially async transform function with proper typing
-                transformed: TrackList
-                if iscoroutinefunction(fn):
-                    # Since we know it's a coroutine function, we can safely await it
-                    result = await fn(tracklist)  # type: ignore
-                    transformed = cast("TrackList", result)
-                else:
-                    # For synchronous functions
-                    result = fn(tracklist)
-                    transformed = cast("TrackList", result)
+            # Return result with operation metadata
+            return {
+                "tracklist": result,
+                "operation": operation,
+                "input_count": len(upstream_tracklists),
+                "output_count": len(result.tracks),
+            }
+        else:
+            # Standard case - single upstream dependency
+            try:
+                # Extract tracklist from primary upstream task
+                tracklist = ctx.extract_tracklist()
+
+                # Create and apply the transformation
+                transform = transform_factory(ctx, config)
+                result = transform(tracklist)
 
                 return {
-                    "tracklist": transformed,
+                    "tracklist": result,
                     "operation": operation,
-                    "original_count": original_count,
-                    "removed_count": original_count - len(transformed.tracks),
+                    "input_count": len(tracklist.tracks),
+                    "output_count": len(result.tracks),
                 }
-            case _:
-                raise TypeError(f"Unsupported transform type: {type(transform)}")
+            except Exception as e:
+                logger.error(f"Error in node {operation}: {e}")
+                raise
 
     return node_impl
 
 
-async def persist_tracks_and_playlist(
-    tracks: list[Track],
-    playlist_name: str | None = None,
-    playlist_description: str | None = None,
-    playlist_connector_ids: dict[str, str] | None = None,
-) -> tuple[list[Track], str | None, dict[str, int]]:
-    """Persist tracks and optionally a playlist to the database.
-
-    Args:
-        tracks: List of track domain models
-        playlist_name: Optional playlist name (if playlist should be saved)
-        playlist_description: Optional playlist description
-        playlist_connector_ids: Optional connector IDs for the playlist
-
-    Returns:
-        Tuple of (persisted tracks with IDs, playlist DB ID if created, persistence stats)
-    """
-    from narada.core.models import Playlist
-    from narada.core.repositories import PlaylistRepository, TrackRepository
-    from narada.data.database import get_session
-
-    # Statistics for tracking persistence operation
-    new_tracks = 0
-    updated_tracks = 0
-    playlist_id = None
-
-    async with get_session(rollback=False) as session:
-        track_repo = TrackRepository(session)
-
-        # Save all tracks to get database IDs
-        db_tracks = []
-        for track in tracks:
-            try:
-                original_id = track.id
-                saved_track = await track_repo.save_track(track)
-
-                # Track whether this was new or updated
-                if original_id != saved_track.id:
-                    if original_id is None:
-                        new_tracks += 1
-                    else:
-                        updated_tracks += 1
-
-                db_tracks.append(saved_track)
-            except Exception as e:
-                logger.error(f"Error persisting track {track.title}: {e!s}")
-                db_tracks.append(track)  # Use original track if save fails
-
-        # If playlist info provided, save playlist too
-        if playlist_name:
-            try:
-                playlist_repo = PlaylistRepository(session)
-                playlist = Playlist(
-                    name=playlist_name,
-                    description=playlist_description,
-                    tracks=db_tracks,
-                    connector_track_ids=playlist_connector_ids or {},
-                )
-                playlist_id = await playlist_repo.save_playlist(playlist, track_repo)
-                logger.debug(f"Saved playlist {playlist_name} with ID: {playlist_id}")
-            except Exception as e:
-                logger.error(f"Error saving playlist {playlist_name}: {e!s}")
-
-    return (
-        db_tracks,
-        playlist_id,
-        {"new_tracks": new_tracks, "updated_tracks": updated_tracks},
-    )
-
-
-# === TRANSFORM FACTORIES ===
-
-
-def make_filter(predicate_fn: PredicateFn) -> TransformFn:
-    """Create a tracklist filter using the provided predicate."""
-    return cast("TransformFn", filter_by_predicate(predicate_fn))
-
-
-def make_date_filter(
-    min_age: int | None = None,
-    max_age: int | None = None,
-) -> TransformFn:
-    """Create a date range filter."""
-    return cast("TransformFn", filter_by_date_range(min_age, max_age))
-
-
-def make_dedup_filter() -> TransformFn:
-    """Create a deduplication filter."""
-    return cast("TransformFn", filter_duplicates())
-
-
-def make_exclusion_filter(
-    reference_tracks: list[Track],
-    by_artist: bool = False,
-) -> TransformFn:
-    """Create an exclusion filter (by track or artist)."""
-    return cast(
-        "TransformFn",
-        exclude_artists(reference_tracks)
-        if by_artist
-        else exclude_tracks(reference_tracks),
-    )
-
-
-def make_sorter(key_fn: KeyFn, reverse: bool = False) -> TransformFn:
-    """Create a sorter using the provided key function."""
-    return cast("TransformFn", sort_by_attribute(key_fn, reverse))
-
-
-def make_selector(count: int, method: str = "first") -> TransformFn:
-    """Create a track selector (first, last, random)."""
-    return cast("TransformFn", select_by_method(count, method))
-
-
-def make_combiner(
-    tracklists: list[TrackList],
-    interleaved: bool = False,
-) -> TransformFn:
-    """Create a tracklist combiner."""
-    if interleaved:
-        return cast("TransformFn", interleave(tracklists))
-    return cast("TransformFn", concatenate(tracklists))
-
-
-# === KEY FACTORIES ===
-
-
-def user_play_count_key(ctx: Context, config: dict) -> Callable[[Track], int]:
-    """Create key function for user play count sorting."""
-    min_confidence = config.get("min_confidence", 60)
-
-    # Try to find match results in context
-    match_results = (
-        ctx.get("match_results")
-        or ctx.get("result.match_results")
-        or next(
-            (
-                v.get("match_results")
-                for k, v in ctx.data.items()
-                if isinstance(v, dict) and v.get("match_results")
-            ),
-            {},
-        )
-    )
-
-    def get_play_count(track: Track) -> int:
-        if not track.id or not match_results or track.id not in match_results:
-            return 0
-        result = match_results[track.id]
-        return (
-            result.user_play_count
-            if result.success and result.confidence >= min_confidence
-            else 0
-        )
-
-    return get_play_count
-
-
-def spotify_popularity_key(_ctx: Context, config: dict) -> Callable[[Track], int]:
-    """Create key function for Spotify popularity sorting."""
-    # Example of how you could use config if needed
-    default_popularity = config.get("default_popularity", 0)
-
-    return lambda track: track.get_connector_attribute(
-        "spotify",
-        "popularity",
-        default_popularity,
-    )
-
-
-# === PREDICATE FACTORIES ===
-
-
-def date_range_predicate(_ctx: Context, config: dict) -> PredicateFn:
-    """Create a predicate for date range filtering."""
-    min_age_days = config.get("min_age_days")
-    max_age_days = config.get("max_age_days")
-    now = datetime.now(tz=UTC)
-
-    def in_date_range(track: Track) -> bool:
-        if not track.release_date:
-            return False
-
-        age_days = (now - track.release_date).days
-
-        if max_age_days is not None and age_days > max_age_days:
-            return False
-
-        return not (min_age_days is not None and age_days < min_age_days)
-
-    return in_date_range
-
-
-def exclusion_predicate(ctx: Context, config: dict) -> PredicateFn:
-    """Create a predicate for exclusion filtering."""
-    # Get reference playlist from another task
-    ref_task_id = config.get("reference_task_id")
-    exclude_artists_flag = config.get("exclude_artists", False)
-
-    if not ref_task_id or ref_task_id not in ctx.data:
-        raise ValueError(f"Missing reference task: {ref_task_id}")
-
-    reference = ctx.data[ref_task_id].get("tracklist") or ctx.data[ref_task_id].get(
-        "playlist",
-    )
-
-    if not reference or not hasattr(reference, "tracks"):
-        raise ValueError(f"No tracks found in reference task: {ref_task_id}")
-
-    if exclude_artists_flag:
-        # Create artist exclusion set
-        artist_names = {
-            track.artists[0].name.lower() for track in reference.tracks if track.artists
-        }
-
-        return lambda track: not (
-            track.artists and track.artists[0].name.lower() in artist_names
-        )
-    else:
-        # Create track ID exclusion set
-        track_ids = {track.id for track in reference.tracks if track.id}
-
-        return lambda track: track.id not in track_ids
-
-
-# === NODE FACTORY FUNCTIONS ===
-# These integrate with your node registry
-
-
-def filter_factory(ctx: Context, config: dict) -> TransformFn:
-    """Factory for filter nodes."""
-    filter_type = config.get("filter_type", "predicate")
-
-    match filter_type:
-        case "date_range":
-            return make_date_filter(
-                config.get("min_age_days"),
-                config.get("max_age_days"),
-            )
-        case "deduplicate":
-            return make_dedup_filter()
-        case "exclusion":
-            return make_filter(exclusion_predicate(ctx, config))
-        case _:
-            raise ValueError(f"Unknown filter type: {filter_type}")
-
-
-def sorter_factory(ctx: Context, config: dict) -> TransformFn:
-    """Factory for sorter nodes."""
-    sort_by = config.get("sort_by", "popularity")
-    reverse = config.get("reverse", True)
-
-    match sort_by:
-        case "play_count":
-            return make_sorter(user_play_count_key(ctx, config), reverse)
-        case "popularity":
-            return make_sorter(spotify_popularity_key(ctx, config), reverse)
-        case "date":
-            return make_sorter(
-                lambda t: t.release_date or datetime.min.replace(tzinfo=UTC),
-                reverse,
-            )
-        case _:
-            raise ValueError(f"Unknown sort type: {sort_by}")
-
-
-def selector_factory(_ctx: Context, config: dict) -> TransformFn:
-    """Factory for selector nodes."""
-    count = config.get("count", 10)
-    method = config.get("method", "first")
-
-    return make_selector(count, method)
-
-
-def combiner_factory(ctx: Context, config: dict) -> TransformFn:
-    """Factory for combiner nodes."""
-    source_tasks = config.get("sources", [])
-    interleaved = config.get("interleaved", False)
-
-    tracklists = ctx.collect_tracklists(source_tasks)
-    if not tracklists:
-        raise ValueError("No tracklists found for combiner")
-
-    return make_combiner(tracklists, interleaved)
-
-
-# Replace the duplicated playlist_destination_factory with this single cleaner version
-
-
-async def playlist_destination_factory(
-    ctx: Context,
+# === DESTINATION FACTORY ===
+async def destination_factory(
+    destination_type: str,
+    context: dict,
     config: dict,
-    operation: str,
 ) -> dict:
-    """Factory for playlist destination operations."""
+    """Factory for destination nodes with persistence logic."""
+    ctx = Context(context)
     tracklist = ctx.extract_tracklist()
     name = config.get("name", "Narada Playlist")
     description = config.get("description", "Created by Narada")
 
-    match operation:
-        case "create_internal":
-            # Only persist to internal database
-            db_tracks, playlist_id, stats = await persist_tracks_and_playlist(
-                tracklist.tracks,
-                playlist_name=name,
-                playlist_description=description,
-            )
+    # Common persistence function
+    from narada.core.repositories import PlaylistRepository, TrackRepository
+    from narada.data.database import get_session
+
+    async def persist_tracks() -> tuple[list[Track], dict]:
+        """Persist tracks and return stats."""
+        stats = {"new_tracks": 0, "updated_tracks": 0}
+
+        async with get_session(rollback=False) as session:
+            track_repo = TrackRepository(session)
+            db_tracks = []
+
+            for track in tracklist.tracks:
+                try:
+                    original_id = track.id
+                    saved_track = await track_repo.save_track(track)
+
+                    if original_id != saved_track.id:
+                        if original_id is None:
+                            stats["new_tracks"] += 1
+                        else:
+                            stats["updated_tracks"] += 1
+
+                    db_tracks.append(saved_track)
+                except Exception as e:
+                    logger.error(f"Error persisting track {track.title}: {e}")
+                    db_tracks.append(track)
+
+            return db_tracks, stats
+
+    # Handle different destination types
+    match destination_type:
+        case "internal":
+            db_tracks, stats = await persist_tracks()
+
+            async with get_session(rollback=False) as session:
+                playlist_repo = PlaylistRepository(session)
+                track_repo = TrackRepository(session)
+
+                playlist = Playlist(
+                    name=name,
+                    description=description,
+                    tracks=db_tracks,
+                )
+
+                playlist_id = await playlist_repo.save_playlist(playlist)
 
             return {
                 "playlist_id": playlist_id,
                 "playlist_name": name,
-                "track_count": len(tracklist.tracks),
+                "track_count": len(db_tracks),
                 "operation": "create_internal_playlist",
                 **stats,
             }
 
-        case "create_spotify":
+        case "spotify":
             from narada.integrations.spotify import SpotifyConnector
 
-            # Create on Spotify first
             spotify = SpotifyConnector()
             spotify_id = await spotify.create_playlist(
                 name,
@@ -488,13 +297,20 @@ async def playlist_destination_factory(
                 description,
             )
 
-            # Then persist to our database with Spotify ID
-            db_tracks, playlist_id, stats = await persist_tracks_and_playlist(
-                tracklist.tracks,
-                playlist_name=name,
-                playlist_description=description,
-                playlist_connector_ids={"spotify": spotify_id},
-            )
+            db_tracks, stats = await persist_tracks()
+
+            async with get_session(rollback=False) as session:
+                playlist_repo = PlaylistRepository(session)
+                track_repo = TrackRepository(session)
+
+                playlist = Playlist(
+                    name=name,
+                    description=description,
+                    tracks=db_tracks,
+                    connector_track_ids={"spotify": spotify_id},
+                )
+
+                playlist_id = await playlist_repo.save_playlist(playlist)
 
             return {
                 "playlist_id": playlist_id,
@@ -512,13 +328,10 @@ async def playlist_destination_factory(
             if not spotify_id:
                 raise ValueError("Missing required playlist_id for update operation")
 
-            from narada.core.repositories import PlaylistRepository, TrackRepository
-            from narada.data.database import get_session
+            from narada.integrations.spotify import SpotifyConnector
 
-            # First persist all tracks to ensure they have IDs
-            db_tracks, _, stats = await persist_tracks_and_playlist(tracklist.tracks)
+            db_tracks, stats = await persist_tracks()
 
-            # Get existing playlist from database
             async with get_session(rollback=False) as session:
                 track_repo = TrackRepository(session)
                 playlist_repo = PlaylistRepository(session)
@@ -527,18 +340,13 @@ async def playlist_destination_factory(
                 if not existing:
                     raise ValueError(f"Playlist with Spotify ID {spotify_id} not found")
 
-                # Create updated playlist
                 updated = existing.with_tracks(
                     existing.tracks + db_tracks if append else db_tracks,
                 )
 
-                # Update on Spotify
-                from narada.integrations.spotify import SpotifyConnector
-
                 spotify = SpotifyConnector()
                 await spotify.update_playlist(spotify_id, updated, replace=not append)
 
-                # Update in database
                 await playlist_repo.update_playlist(
                     str(existing.id),
                     updated,
@@ -556,4 +364,163 @@ async def playlist_destination_factory(
             }
 
         case _:
-            raise ValueError(f"Unsupported operation type: {operation}")
+            raise ValueError(f"Unsupported destination type: {destination_type}")
+
+
+# === ENRICHER FACTORY ===
+
+
+async def lastfm_enricher(context: dict, config: dict) -> dict:
+    """Enrich tracks with Last.fm metadata including play counts."""
+    from narada.core.matcher import batch_match_tracks
+    from narada.integrations.lastfm import LastFmConnector
+
+    ctx = Context(context)
+    tracklist = ctx.extract_tracklist()
+
+    # Configuration parameters
+    username = config.get("username")
+    batch_size = config.get("batch_size", 50)
+    concurrency = config.get("concurrency", 5)
+
+    # Match tracks to Last.fm
+    lastfm = LastFmConnector(username=username)
+    match_results = await batch_match_tracks(
+        tracklist.tracks,
+        lastfm,
+        username=username or lastfm.username,
+        batch_size=batch_size,
+        concurrency=concurrency,
+    )
+
+    successful_matches = sum(1 for r in match_results.values() if r.success)
+
+    return {
+        "tracklist": tracklist,
+        "match_results": match_results,
+        "match_success_rate": f"{successful_matches}/{len(tracklist.tracks)}",
+        "operation": "lastfm_resolution",
+    }
+
+
+def create_enricher_node(enricher_type: str) -> NodeFn:
+    """Create an enricher node of specified type."""
+    enrichers = {
+        "lastfm": lastfm_enricher,
+    }
+
+    if enricher_type not in enrichers:
+        raise ValueError(f"Unknown enricher type: {enricher_type}")
+
+    return enrichers[enricher_type]
+
+
+# === NODE CREATION HELPERS ===
+# These functions create specific node types using the factory system
+
+
+def create_filter_node(filter_type: str, operation_name: str | None = None) -> NodeFn:
+    """Create a filter node of specified type."""
+    return make_node("filter", filter_type, operation_name)
+
+
+def create_sorter_node(sorter_type: str, operation_name: str | None = None) -> NodeFn:
+    """Create a sorter node of specified type."""
+    return make_node("sorter", sorter_type, operation_name)
+
+
+def create_selector_node(
+    selector_type: str,
+    operation_name: str | None = None,
+) -> NodeFn:
+    """Create a selector node of specified type."""
+    return make_node("selector", selector_type, operation_name)
+
+
+def create_combiner_node(
+    combiner_type: str,
+    operation_name: str | None = None,
+) -> NodeFn:
+    """Create a combiner node of specified type."""
+    return make_node("combiner", combiner_type, operation_name)
+
+
+def create_destination_node(destination_type: str) -> NodeFn:
+    """Create a destination node of specified type."""
+
+    async def node_impl(context: dict, config: dict) -> dict:
+        return await destination_factory(destination_type, context, config)
+
+    return node_impl
+
+
+# === SOURCE NODE FACTORY ===
+# Special case for source nodes which don't follow the transform pattern
+
+
+async def spotify_playlist_source(_context: dict, config: dict) -> dict:
+    """Source node for Spotify playlists."""
+    from narada.core.models import Playlist, TrackList
+    from narada.integrations.spotify import SpotifyConnector
+
+    if "playlist_id" not in config:
+        raise ValueError("Missing required config parameter: playlist_id")
+
+    playlist_id = config["playlist_id"]
+    logger.info(f"Fetching Spotify playlist: {playlist_id}")
+
+    # Fetch playlist
+    spotify = SpotifyConnector()
+    spotify_playlist = await spotify.get_spotify_playlist(playlist_id)
+
+    # Persist tracks and create tracklist
+    stats = {"new_tracks": 0, "updated_tracks": 0}
+
+    from narada.core.repositories import PlaylistRepository, TrackRepository
+    from narada.data.database import get_session
+
+    db_playlist_id = None
+    db_tracks = []
+
+    async with get_session(rollback=False) as session:
+        track_repo = TrackRepository(session)
+
+        # Save tracks individually first to avoid bulk insert issues
+        for track in spotify_playlist.tracks:
+            try:
+                saved_track = await track_repo.save_track(track)
+                db_tracks.append(saved_track)
+
+                if track.id is None:
+                    stats["new_tracks"] += 1
+                else:
+                    stats["updated_tracks"] += 1
+            except Exception as e:
+                logger.error(f"Error saving track {track.title}: {e}")
+
+        # Create internal playlist reference
+        playlist_repo = PlaylistRepository(session)
+        internal_playlist = Playlist(
+            name=spotify_playlist.name,
+            tracks=db_tracks,
+            description=f"Source: Spotify playlist {playlist_id}",
+            connector_track_ids={"spotify": playlist_id},
+        )
+
+        # Save playlist - this will handle track associations
+        db_playlist_id = await playlist_repo.save_playlist(internal_playlist)
+
+    # Create tracklist from saved tracks
+    tracklist = TrackList(tracks=db_tracks)
+    tracklist = tracklist.with_metadata("source_playlist_name", spotify_playlist.name)
+    tracklist = tracklist.with_metadata("spotify_playlist_id", playlist_id)
+    tracklist = tracklist.with_metadata("db_playlist_id", db_playlist_id)
+
+    return {
+        "tracklist": tracklist,
+        "source_id": playlist_id,
+        "source_name": spotify_playlist.name,
+        "track_count": len(tracklist.tracks),
+        "db_playlist_id": db_playlist_id,
+        **stats,
+    }
