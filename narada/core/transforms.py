@@ -18,6 +18,7 @@ from typing import Any, TypeVar, cast
 
 from toolz import compose_left, curry
 
+from narada.config import get_logger
 from narada.core.models import Playlist, Track, TrackList
 
 # Type variables for generic transformations
@@ -224,24 +225,65 @@ def exclude_artists(
 @curry
 def sort_by_attribute(
     key_fn: Callable[[Track], Any],
+    metric_name: str,
     reverse: bool = False,
     tracklist: TrackList | None = None,
 ) -> Transform | TrackList:
-    """
-    Sort tracks by any attribute or derived value.
-
-    Args:
-        key_fn: Function extracting sort key from each track
-        reverse: Whether to sort in descending order
-        tracklist: Optional tracklist to transform immediately
-
-    Returns:
-        Transformation function or transformed tracklist if provided
-    """
+    """Sort tracks by any attribute or derived value."""
 
     def transform(t: TrackList) -> TrackList:
+        logger = get_logger(__name__)
+
+        # Log input tracklist before any processing
+        logger.debug(
+            f"Starting sort_by_attribute with metric {metric_name}",
+            track_count=len(t.tracks),
+            existing_metrics=list(t.metadata.get("metrics", {}).keys()),
+        )
+
+        # Sort tracks as usual
         sorted_tracks = sorted(t.tracks, key=key_fn, reverse=reverse)
-        return t.with_tracks(sorted_tracks)
+        result = t.with_tracks(sorted_tracks)
+
+        # Debug specific values for first few tracks to verify key_fn
+        sample_values = [
+            (str(track.id), key_fn(track)) for track in t.tracks[:5] if track.id
+        ]
+        logger.debug(
+            f"Sample key values for {metric_name}",
+            sample_values=sample_values,
+        )
+
+        # Create metrics dictionary - convert dict_keys to list for logging
+        metric_values = {str(track.id): key_fn(track) for track in t.tracks if track.id}
+
+        # Log details of what's being stored
+        logger.debug(
+            f"Creating {metric_name} metrics dictionary",
+            metrics_count=len(metric_values),
+            metrics_keys=list(metric_values.keys()),
+            sample_values=list(metric_values.values())[:5] if metric_values else [],
+        )
+
+        # Store metrics in tracklist metadata
+        result = result.with_metadata(
+            "metrics",
+            {
+                **result.metadata.get("metrics", {}),
+                metric_name: metric_values,
+            },
+        )
+
+        # Verify metrics were stored correctly
+        stored_metrics = result.metadata.get("metrics", {}).get(metric_name, {})
+        logger.debug(
+            f"Stored {metric_name} metrics in tracklist",
+            stored_count=len(stored_metrics),
+            stored_keys=list(stored_metrics.keys())[:5],
+            all_metric_names=list(result.metadata.get("metrics", {}).keys()),
+        )
+
+        return result
 
     return transform(tracklist) if tracklist is not None else transform
 

@@ -28,6 +28,8 @@ type NodeFn = Callable[[dict, dict], Awaitable[dict]]
 type KeyFn = Callable[[Track], Any]
 type PredicateFn = Callable[[Track], bool]
 
+# === CONTEXT HANDLING ===
+
 
 class Context:
     """Context extractor with path-based access."""
@@ -82,6 +84,30 @@ class Context:
         return tracklists
 
 
+# === HELPER FUNCTIONS ===
+
+
+def _get_spotify_popularity(track: Track) -> int:
+    """Get Spotify popularity with better logging and fallback."""
+    popularity = 0
+    logger = get_logger(__name__)
+
+    # Check connector_metadata
+    if "spotify" in track.connector_metadata:
+        popularity = track.connector_metadata["spotify"].get("popularity", 0)
+
+    # Logging to debug issues
+    if popularity == 0 and "spotify" in track.connector_track_ids:
+        logger.debug(
+            "Missing popularity for track with Spotify ID",
+            track_id=track.id,
+            spotify_id=track.connector_track_ids["spotify"],
+            connector_metadata=track.connector_metadata.get("spotify", {}),
+        )
+
+    return popularity
+
+
 # === TRANSFORM REGISTRY ===
 # This declarative approach maps node types to their implementations
 TRANSFORM_REGISTRY = {
@@ -101,16 +127,18 @@ TRANSFORM_REGISTRY = {
     },
     "sorter": {
         "by_user_plays": lambda ctx, cfg: sort_by_attribute(
-            lambda track: (
+            key_fn=lambda track: (
                 ctx.get(f"match_results.{track.id}.user_play_count", 0)
                 if track.id
                 else 0
             ),
-            cfg.get("reverse", True),
+            metric_name="user_play_count",
+            reverse=cfg.get("reverse", True),
         ),
         "by_spotify_popularity": lambda _ctx, cfg: sort_by_attribute(
-            lambda track: track.get_connector_attribute("spotify", "popularity", 0),
-            cfg.get("reverse", True),
+            key_fn=lambda track: _get_spotify_popularity(track),
+            metric_name="spotify_popularity",
+            reverse=cfg.get("reverse", True),
         ),
     },
     "selector": {
@@ -226,9 +254,54 @@ async def destination_factory(
     context: dict,
     config: dict,
 ) -> dict:
-    """Factory for destination nodes with persistence logic."""
+    """Create destination node endpoints that persist tracklists to various platforms.
+
+    This factory function handles the final stage of a workflow by persisting tracks
+    to the database and creating/updating playlists in internal or external services.
+    It maintains metadata consistency through the workflow pipeline, ensuring that
+    metrics and track IDs are preserved in the returned tracklist.
+
+    Args:
+        destination_type: Type of destination ("internal", "spotify", "update_spotify")
+        context: Workflow execution context containing upstream results
+        config: Node-specific configuration with name, description, and other options
+
+    Returns:
+        Dictionary with operation details including:
+            - tracklist: TrackList with persisted database IDs and preserved metadata
+            - playlist_id: Internal database ID of created/updated playlist
+            - track_count: Number of tracks in the playlist
+            - operation: Description of the operation performed
+            - Any platform-specific IDs (e.g. spotify_playlist_id)
+
+    Raises:
+        ValueError: If destination_type is unsupported or required config is missing
+    """
     ctx = Context(context)
-    tracklist = ctx.extract_tracklist()
+
+    # Get the INPUT tracklist with all its metadata
+    input_tracklist = ctx.extract_tracklist()
+
+    logger = get_logger(__name__)
+    # Log detailed metrics information at destination entry point
+    logger.debug(
+        "Destination received tracklist metrics",
+        metrics_keys=list(input_tracklist.metadata.get("metrics", {}).keys()),
+        spotify_popularity_count=len(
+            input_tracklist.metadata.get("metrics", {}).get("spotify_popularity", {}),
+        ),
+        spotify_popularity_keys=list(
+            input_tracklist.metadata.get("metrics", {})
+            .get("spotify_popularity", {})
+            .keys(),
+        )[:5],
+        spotify_popularity_values=list(
+            input_tracklist.metadata.get("metrics", {})
+            .get("spotify_popularity", {})
+            .values(),
+        )[:5],
+    )
+
     name = config.get("name", "Narada Playlist")
     description = config.get("description", "Created by Narada")
 
@@ -244,7 +317,7 @@ async def destination_factory(
             track_repo = TrackRepository(session)
             db_tracks = []
 
-            for track in tracklist.tracks:
+            for track in input_tracklist.tracks:
                 try:
                     original_id = track.id
                     saved_track = await track_repo.save_track(track)
@@ -279,11 +352,34 @@ async def destination_factory(
 
                 playlist_id = await playlist_repo.save_playlist(playlist)
 
+            # PRESERVE METADATA: Create new tracklist with db_tracks but KEEP the metadata
+            result_tracklist = TrackList(
+                tracks=db_tracks,
+                metadata=input_tracklist.metadata,
+            )
+
+            logger.debug(
+                "Result tracklist metrics after preservation",
+                metrics_keys=result_tracklist.metadata.get("metrics", {}).keys(),
+                preserved_spotify_popularity_count=len(
+                    result_tracklist.metadata.get("metrics", {}).get(
+                        "spotify_popularity",
+                        {},
+                    ),
+                ),
+                preserved_spotify_popularity_keys=list(
+                    result_tracklist.metadata.get("metrics", {})
+                    .get("spotify_popularity", {})
+                    .keys(),
+                )[:5],
+            )
+
             return {
                 "playlist_id": playlist_id,
                 "playlist_name": name,
                 "track_count": len(db_tracks),
                 "operation": "create_internal_playlist",
+                "tracklist": result_tracklist,  # Use the tracklist with preserved metadata
                 **stats,
             }
 
@@ -293,7 +389,7 @@ async def destination_factory(
             spotify = SpotifyConnector()
             spotify_id = await spotify.create_playlist(
                 name,
-                tracklist.tracks,
+                input_tracklist.tracks,
                 description,
             )
 
@@ -312,12 +408,34 @@ async def destination_factory(
 
                 playlist_id = await playlist_repo.save_playlist(playlist)
 
+            # PRESERVE METADATA: Create new tracklist with db_tracks but KEEP the metadata
+            result_tracklist = TrackList(
+                tracks=db_tracks,
+                metadata=input_tracklist.metadata,
+            )
+
+            logger.debug(
+                "Result tracklist metrics after preservation",
+                metrics_keys=list(result_tracklist.metadata.get("metrics", {}).keys()),
+                preserved_spotify_popularity_count=len(
+                    result_tracklist.metadata.get("metrics", {}).get(
+                        "spotify_popularity",
+                        {},
+                    ),
+                ),
+                preserved_spotify_popularity_keys=list(
+                    result_tracklist.metadata.get("metrics", {})
+                    .get("spotify_popularity", {})
+                    .keys(),
+                )[:5],
+            )
             return {
                 "playlist_id": playlist_id,
                 "spotify_playlist_id": spotify_id,
                 "playlist_name": name,
-                "track_count": len(tracklist.tracks),
+                "track_count": len(db_tracks),
                 "operation": "create_spotify_playlist",
+                "tracklist": result_tracklist,  # Use the tracklist with preserved metadata
                 **stats,
             }
 
@@ -353,6 +471,28 @@ async def destination_factory(
                     track_repo,
                 )
 
+            # PRESERVE METADATA: Create new tracklist with db_tracks but KEEP the metadata
+            result_tracklist = TrackList(
+                tracks=db_tracks,
+                metadata=input_tracklist.metadata,
+            )
+
+            logger.debug(
+                "Result tracklist metrics after preservation",
+                metrics_keys=result_tracklist.metadata.get("metrics", {}).keys(),
+                preserved_spotify_popularity_count=len(
+                    result_tracklist.metadata.get("metrics", {}).get(
+                        "spotify_popularity",
+                        {},
+                    ),
+                ),
+                preserved_spotify_popularity_keys=list(
+                    result_tracklist.metadata.get("metrics", {})
+                    .get("spotify_popularity", {})
+                    .keys(),
+                )[:5],
+            )
+
             return {
                 "playlist_id": str(existing.id),
                 "spotify_playlist_id": spotify_id,
@@ -360,9 +500,9 @@ async def destination_factory(
                 "original_count": len(existing.tracks),
                 "operation": "update_spotify_playlist",
                 "append_mode": append,
+                "tracklist": result_tracklist,  # Use the tracklist with preserved metadata
                 **stats,
             }
-
         case _:
             raise ValueError(f"Unsupported destination type: {destination_type}")
 
@@ -459,7 +599,30 @@ def create_destination_node(destination_type: str) -> NodeFn:
 
 
 async def spotify_playlist_source(_context: dict, config: dict) -> dict:
-    """Source node for Spotify playlists."""
+    """Source node for Spotify playlists with immediate track persistence.
+
+    This node fetches a playlist from Spotify and immediately persists each track to the
+    database, ensuring all tracks have database IDs before being processed by downstream nodes.
+    This is essential for operations that depend on stable track identifiers, such as deduplication,
+    sorting metrics, and cross-playlist filtering.
+
+    Args:
+        _context: Workflow execution context (unused in source nodes)
+        config: Node configuration containing "playlist_id" for the Spotify playlist
+
+    Returns:
+        Dictionary with:
+            - tracklist: TrackList with database-persisted tracks (with IDs)
+            - source_id: Spotify playlist ID
+            - source_name: Spotify playlist name
+            - track_count: Number of tracks in the playlist
+            - db_playlist_id: Internal database ID for the playlist
+            - new_tracks: Count of newly added tracks
+            - updated_tracks: Count of updated existing tracks
+
+    Raises:
+        ValueError: If playlist_id is missing from config
+    """
     from narada.core.models import Playlist, TrackList
     from narada.integrations.spotify import SpotifyConnector
 
@@ -469,11 +632,11 @@ async def spotify_playlist_source(_context: dict, config: dict) -> dict:
     playlist_id = config["playlist_id"]
     logger.info(f"Fetching Spotify playlist: {playlist_id}")
 
-    # Fetch playlist
+    # Fetch playlist from Spotify
     spotify = SpotifyConnector()
     spotify_playlist = await spotify.get_spotify_playlist(playlist_id)
 
-    # Persist tracks and create tracklist
+    # Track persistence statistics
     stats = {"new_tracks": 0, "updated_tracks": 0}
 
     from narada.core.repositories import PlaylistRepository, TrackRepository
@@ -482,21 +645,25 @@ async def spotify_playlist_source(_context: dict, config: dict) -> dict:
     db_playlist_id = None
     db_tracks = []
 
+    # CRITICAL: Persist tracks immediately to ensure database IDs
     async with get_session(rollback=False) as session:
         track_repo = TrackRepository(session)
 
-        # Save tracks individually first to avoid bulk insert issues
+        # Process each track, ensuring it has a database ID
         for track in spotify_playlist.tracks:
-            try:
-                saved_track = await track_repo.save_track(track)
-                db_tracks.append(saved_track)
+            # Save track to database and get updated version with ID
+            updated_track = await track_repo.save_track(track)
+            db_tracks.append(updated_track)
 
-                if track.id is None:
-                    stats["new_tracks"] += 1
-                else:
-                    stats["updated_tracks"] += 1
-            except Exception as e:
-                logger.error(f"Error saving track {track.title}: {e}")
+            # Update statistics
+            if updated_track.id is not None and track.id is None:
+                stats["new_tracks"] += 1
+            else:
+                stats["updated_tracks"] += 1
+
+        logger.debug(
+            f"Persisted {len(db_tracks)} tracks: {stats['new_tracks']} new, {stats['updated_tracks']} updated",
+        )
 
         # Create internal playlist reference
         playlist_repo = PlaylistRepository(session)
@@ -510,11 +677,17 @@ async def spotify_playlist_source(_context: dict, config: dict) -> dict:
         # Save playlist - this will handle track associations
         db_playlist_id = await playlist_repo.save_playlist(internal_playlist)
 
-    # Create tracklist from saved tracks
+    # Create tracklist from persisted tracks (now with database IDs)
     tracklist = TrackList(tracks=db_tracks)
     tracklist = tracklist.with_metadata("source_playlist_name", spotify_playlist.name)
     tracklist = tracklist.with_metadata("spotify_playlist_id", playlist_id)
     tracklist = tracklist.with_metadata("db_playlist_id", db_playlist_id)
+
+    # Log how many tracks have database IDs for debugging
+    tracks_with_ids = sum(1 for t in db_tracks if t.id is not None)
+    logger.info(
+        f"Created tracklist with {len(db_tracks)} tracks, {tracks_with_ids} have database IDs",
+    )
 
     return {
         "tracklist": tracklist,

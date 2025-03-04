@@ -1,6 +1,7 @@
 """Repository layer for database operations."""
 
 from collections.abc import Callable
+import datetime
 from typing import Any, ClassVar, TypeVar
 
 from sqlalchemy import Select, func, select
@@ -268,6 +269,7 @@ class TrackRepository(BaseRepository[DBTrack]):
             artists={"names": [a.name for a in track.artists]},
             album=track.album,
             duration_ms=track.duration_ms,
+            release_date=track.release_date,
             isrc=track.isrc,
             spotify_id=track.connector_track_ids.get("spotify"),
             mappings=[
@@ -333,17 +335,7 @@ class TrackRepository(BaseRepository[DBTrack]):
         )
 
     async def save_track(self, track: Track) -> Track:
-        """Save track and mappings efficiently.
-
-        Args:
-            track: Domain track model to save
-
-        Returns:
-            Track: Updated domain track with database ID
-
-        Raises:
-            ValueError: If track validation fails
-        """
+        """Save track and mappings efficiently."""
         if not track.title or not track.artists:
             raise ValueError("Track must have title and artists")
 
@@ -359,8 +351,96 @@ class TrackRepository(BaseRepository[DBTrack]):
         )
 
         if existing := await self._execute_select(stmt):
-            # Return existing track with updated ID
-            return track.with_connector_track_id("db", str(existing.id))
+            # We found an existing track - merge connector metadata
+            updated_track = Track(
+                id=existing.id,  # Set the actual ID field here
+                title=track.title,
+                artists=track.artists,
+                album=track.album,
+                duration_ms=track.duration_ms,
+                release_date=track.release_date,
+                isrc=track.isrc,
+                play_count=track.play_count,
+                connector_track_ids={
+                    **track.connector_track_ids,
+                    "db": str(existing.id),
+                },
+                connector_metadata=track.connector_metadata.copy(),
+            )
+
+            # Check if we need to update core track attributes
+            track_updated = False
+
+            # Update release_date if the existing record is missing it but new data has it
+            if not existing.release_date and track.release_date:
+                existing.release_date = track.release_date
+                track_updated = True
+                logger.debug(f"Added missing release_date for track {existing.id}")
+
+            # Add additional core attributes updates here if needed
+            # For example, if duration_ms is missing...
+            if existing.duration_ms is None and track.duration_ms:
+                existing.duration_ms = track.duration_ms
+                track_updated = True
+
+            # If any core attributes were updated, save the track
+            if track_updated:
+                self.session.add(existing)
+                await self.session.flush()
+
+            # Update mappings for all connectors
+            now = datetime.datetime.now(datetime.UTC)
+            for mapping in existing.mappings:
+                connector = mapping.connector_name
+
+                # Check if new metadata is available for this connector
+                if connector in track.connector_metadata:
+                    should_update = False
+                    incoming_metadata = track.connector_metadata[connector]
+
+                    # Always update if mapping data is missing
+                    if not mapping.connector_metadata:
+                        should_update = True
+                    # For all connectors, check if metadata is different
+                    else:
+                        # Detect if any values in the incoming metadata differ from what we have stored
+                        for key, value in incoming_metadata.items():
+                            existing_value = mapping.connector_metadata.get(key)
+
+                            # Simple consistent comparison for all field types
+                            if existing_value != value:
+                                logger.debug(
+                                    f"Updating {connector} metadata for track {existing.id}, value changed for {key} "
+                                    f"(was: {type(existing_value).__name__}:{existing_value}, "
+                                    f"now: {type(value).__name__}:{value})",
+                                )
+                                should_update = True
+                                break
+
+                    # If we should update, do it
+                    if should_update:
+                        # Ensure mapping has connector_metadata
+                        if mapping.connector_metadata is None:
+                            mapping.connector_metadata = {}
+
+                        # Create a new dictionary instead of updating in-place
+                        mapping.connector_metadata = {
+                            **mapping.connector_metadata,
+                            **incoming_metadata,
+                        }
+
+                        # Update verification timestamp
+                        mapping.last_verified = now
+                        self.session.add(mapping)
+
+                        # Explicitly flag the attribute as modified for SQLAlchemy
+                        from sqlalchemy.orm.attributes import flag_modified
+
+                        flag_modified(mapping, "connector_metadata")
+
+                        await self.session.flush()
+
+            return updated_track
 
         # Create new track within transaction
         db_track = self.domain_track_to_db(track)
@@ -372,29 +452,6 @@ class TrackRepository(BaseRepository[DBTrack]):
 
         saved_track = await self._execute_transaction(save_transaction)
         return track.with_connector_track_id("db", str(saved_track.id))
-
-    async def get_playlists_for_track(self, track_id: int) -> list[Playlist]:
-        """Get all playlists containing a track."""
-        stmt = (
-            self._select_active(DBPlaylist)
-            .join(DBPlaylistTrack)
-            .options(selectinload(DBPlaylist.mappings))
-            .where(DBPlaylistTrack.track_id == track_id)
-        )
-
-        result = await self._execute_select(stmt, multi=True)
-        return [
-            Playlist(
-                id=p.id,
-                name=p.name,
-                description=p.description,
-                tracks=[],  # Skip loading tracks for efficiency
-                connector_track_ids={
-                    m.connector_name: m.connector_id for m in p.mappings
-                },
-            )
-            for p in result
-        ]
 
 
 class PlaylistRepository(BaseRepository[DBPlaylist]):
@@ -441,46 +498,54 @@ class PlaylistRepository(BaseRepository[DBPlaylist]):
         """Save playlist with efficient batch operations."""
 
         async def save_playlist_operation() -> str:
-            # Create the playlist record first
+            # Create DB playlist
             db_playlist = DBPlaylist(
                 name=playlist.name,
                 description=playlist.description,
-                track_count=len(playlist.tracks),
             )
+
+            # Add mappings for external IDs
+            for connector, external_id in playlist.connector_track_ids.items():
+                db_playlist.mappings.append(
+                    DBPlaylistMapping(
+                        connector_name=connector,
+                        connector_id=external_id,
+                    ),
+                )
+
+            # Add to session to get ID
             self.session.add(db_playlist)
             await self.session.flush()
 
-            # Save external mappings if present
-            if playlist.connector_track_ids:
-                for (
-                    connector_name,
-                    connector_id,
-                ) in playlist.connector_track_ids.items():
-                    mapping = DBPlaylistMapping(
-                        playlist_id=db_playlist.id,
-                        connector_name=connector_name,
-                        connector_id=connector_id,
-                    )
-                    self.session.add(mapping)
+            # Create playlist tracks with current timestamp
+            current_time = datetime.datetime.now(
+                datetime.UTC,
+            )  # Get current timestamp in UTC
+            playlist_tracks = []
 
-            # Add playlist-track associations one by one to avoid strftime() incompatibility
             for i, track in enumerate(playlist.tracks):
                 if not track.id:
+                    # Skip tracks without IDs
+                    logger.warning(f"Skipping track without ID: {track.title}")
                     continue
 
-                # Create sort key for ordering
-                sort_key = f"a{i:08d}"
-
-                # Add as individual ORM object instead of bulk insert
-                playlist_track = DBPlaylistTrack(
-                    playlist_id=db_playlist.id,
-                    track_id=track.id,
-                    sort_key=sort_key,
+                playlist_tracks.append(
+                    DBPlaylistTrack(
+                        playlist_id=db_playlist.id,
+                        track_id=track.id,
+                        sort_key=self._generate_sort_key(i),
+                        created_at=current_time,  # Use Python timestamp
+                        updated_at=current_time,  # Use Python timestamp
+                    ),
                 )
-                self.session.add(playlist_track)
 
-            # Commit all changes
-            await self.session.flush()
+            # Add all playlist tracks at once
+            if playlist_tracks:
+                self.session.add_all(playlist_tracks)
+
+            # Update track count
+            db_playlist.track_count = len(playlist_tracks)
+
             return str(db_playlist.id)
 
         # Use base repository transaction management

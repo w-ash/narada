@@ -14,6 +14,7 @@ from rich.table import Table
 import typer
 
 from narada.config import get_config, get_logger, resilient_operation
+from narada.core.models import WorkflowResult
 
 # Initialize console and logger
 console = Console()
@@ -40,8 +41,7 @@ def register_commands(app: typer.Typer) -> None:
     """Register all commands with the Typer app."""
     app.command()(status)
     app.command()(setup)
-    app.command(name="workflow")(run_workflow)  # Replace sort_playlist
-    app.command()(dashboard)
+    app.command(name="workflow")(run_workflow)
 
 
 @resilient_operation("spotify_check")
@@ -266,11 +266,92 @@ def setup(
     console.print("\n")
 
 
+def display_workflow_result(
+    result: WorkflowResult,
+    output_format: str = "table",
+) -> None:
+    """Display workflow execution results with associated metrics."""
+    logger = get_logger(__name__)
+
+    # debug lines
+    console.print(f"Tracks in result: {len(result.tracks)}")
+
+    # Enhanced debug of metrics
+    metric_keys = list(result.metrics.keys())
+    console.print(f"Metrics in result: {metric_keys}")
+
+    # Debug metric structure and types
+    if "spotify_popularity" in result.metrics:
+        sample_keys = list(result.metrics["spotify_popularity"].keys())[:5]
+        sample_values = [result.metrics["spotify_popularity"][k] for k in sample_keys]
+        logger.debug(
+            "Spotify popularity metrics structure",
+            key_type=str(type(sample_keys[0])) if sample_keys else "N/A",
+            sample_keys=sample_keys,
+            sample_values=sample_values,
+        )
+
+    console.print(f"Tracks with IDs: {sum(1 for t in result.tracks if t.id)}")
+
+    if not result.tracks:
+        console.print("[yellow]No tracks in result[/yellow]")
+        return
+
+    # Create table with dynamic columns
+    table = Table(title=f"Results: {result.workflow_name}")
+
+    # Standard columns
+    table.add_column("Artist", style="cyan")
+    table.add_column("Track", style="green")
+
+    # Add metric columns dynamically
+    metric_columns = sorted(result.metrics.keys())
+    for metric_name in metric_columns:
+        display_name = metric_name.replace("_", " ").title()
+        table.add_column(display_name, style="yellow", justify="right")
+
+    # Add rows for each track
+    for track in result.tracks:
+        # Get primary artist and track name
+        artist_name = track.artists[0].name if track.artists else ""
+
+        # Build row with metrics
+        row = [artist_name, track.title]
+        for metric_name in metric_columns:
+            # Get the metric value for this track
+            value = result.get_metric(track.id, metric_name, default="—")
+            # Format the value nicely
+            if isinstance(value, int | float):
+                row.append(f"{value}")
+            else:
+                row.append(str(value))
+
+        table.add_row(*row)
+
+    # Display in requested format
+    if output_format == "json":
+        import json
+
+        console.print_json(json.dumps(result.to_dict()))
+    else:  # Default to table format
+        console.print("\n")
+        console.print(table)
+        console.print("\n")
+
+
 def run_workflow(
     workflow_id: Annotated[
         str | None,
         typer.Argument(help="Workflow ID to execute"),
     ] = None,
+    show_results: Annotated[
+        bool,
+        typer.Option("--show-results/--no-results", help="Show result metrics"),
+    ] = True,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format (table, json)"),
+    ] = "table",
 ) -> None:
     """Run a workflow from available definitions."""
     import json
@@ -285,6 +366,7 @@ def run_workflow(
     )
 
     from narada.config import get_config, get_logger
+    from narada.core.models import WorkflowResult
     from narada.workflows.prefect import (
         register_progress_callback,
         run_workflow as execute_workflow,
@@ -392,14 +474,13 @@ def run_workflow(
         expand=True,
         transient=False,  # Keep progress history visible
     ) as progress:
-        # Add overall workflow progress task
+        # Set up progress tracking tasks
         workflow_task_id = progress.add_task(
             f"[bold]Workflow: {workflow_name}",
             total=task_count,
             completed=0,
         )
 
-        # Add a task for the current node being processed
         node_task_id = progress.add_task("Initializing...", total=1, completed=0)
 
         # Define progress callback for Prefect
@@ -442,7 +523,7 @@ def run_workflow(
 
         try:
             # Execute workflow with progress tracking
-            result = asyncio.run(execute_workflow(workflow_def))
+            _, result = asyncio.run(execute_workflow(workflow_def))
 
             # Display success and results
             console.print()
@@ -450,9 +531,9 @@ def run_workflow(
                 f"[green bold]✓ Workflow completed successfully:[/green bold] {workflow_name}",
             )
 
-            # Extract and display key results
-            if isinstance(result, dict):
-                pass
+            # Display metrics visualization if requested
+            if show_results and isinstance(result, WorkflowResult):
+                display_workflow_result(result, output_format)
 
         except Exception as e:
             console.print()
@@ -460,34 +541,3 @@ def run_workflow(
             console.print(f"[red]Error: {e!s}[/red]")
             logger.exception("Workflow execution failed")
             raise typer.Exit(1) from e
-
-
-def dashboard(
-    refresh: Annotated[
-        int,
-        typer.Option(
-            "--refresh",
-            "-r",
-            help="Refresh interval in seconds",
-            min=1,
-            max=3600,
-        ),
-    ] = 60,
-) -> None:
-    """Launch interactive music dashboard."""
-    logger.info("Dashboard requested", refresh_interval=refresh)
-
-    console.print(
-        Panel(
-            f"[bold yellow]The Narada Dashboard is coming soon![/bold yellow]\n\n"
-            f"[dim]Auto-refresh interval: {refresh} seconds[/dim]\n\n"
-            "This interactive interface will show your:\n"
-            "• [cyan]Top artists across platforms[/cyan]\n"
-            "• [cyan]Listening history visualizations[/cyan]\n"
-            "• [cyan]Smart playlist recommendations[/cyan]",
-            title="[bold]Narada Dashboard[/bold]",
-            border_style="yellow",
-        ),
-    )
-
-    logger.debug("Dashboard initialized", refresh_interval=refresh)

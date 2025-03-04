@@ -10,10 +10,11 @@ from collections.abc import Callable
 import datetime
 from typing import Any, NotRequired, TypedDict
 
-from prefect import flow, task
+from prefect import flow, tags, task
 from prefect.logging import get_run_logger
 
 from narada.config import configure_prefect_logging, get_logger
+from narada.core.models import WorkflowResult
 from narada.workflows.node_registry import get_node
 
 # Initialize Prefect logging to use our Loguru setup
@@ -213,19 +214,148 @@ def build_flow(workflow_def: dict) -> Any:
 # --- Workflow execution ---
 
 
-async def run_workflow(workflow_def: dict, **parameters) -> dict:
-    """Run a workflow with the given parameters."""
-    # Use module logger for code outside of tasks/flows
+@task(
+    name="extract_workflow_result",
+    description="Extract workflow result with metrics",
+)
+async def extract_workflow_result(  # noqa: RUF029
+    workflow_def: dict,
+    task_results: dict,
+    flow_run_name: str,
+    execution_time: float,
+) -> WorkflowResult:
+    """Extract final workflow result with metrics from task results."""
+    logger = get_logger(__name__)
+
+    # Find the destination task - it should be the last one in the workflow
+    destination_task = next(
+        (
+            t
+            for t in reversed(workflow_def.get("tasks", []))
+            if t.get("type", "").startswith("destination.")
+        ),
+        None,
+    )
+
+    if not destination_task:
+        raise ValueError("No destination task found in workflow")
+
+    destination_id = destination_task["id"]
+
+    if destination_id not in task_results:
+        raise ValueError(f"Destination task result not found: {destination_id}")
+
+    # Get the tracklist from the destination result - this is the FINAL filtered list
+    destination_result = task_results[destination_id]
+    if "tracklist" not in destination_result:
+        raise ValueError(f"Destination task has no tracklist: {destination_id}")
+
+    # Use the FINAL filtered tracks from destination
+    final_tracks = destination_result["tracklist"].tracks
+
+    # Extract all metrics from task results
+    all_metrics = {}
+
+    for task_id, result in task_results.items():
+        if isinstance(result, dict) and "tracklist" in result:
+            task_metrics = result["tracklist"].metadata.get("metrics", {})
+
+            # Log detailed metrics information
+            if "spotify_popularity" in task_metrics:
+                sp_keys = list(task_metrics["spotify_popularity"].keys())
+                logger.debug(
+                    f"Spotify popularity metrics in {task_id}",
+                    key_count=len(sp_keys),
+                    key_type=str(type(sp_keys[0])) if sp_keys else "N/A",
+                    sample_keys=sp_keys[:5],
+                    sample_values=[
+                        task_metrics["spotify_popularity"].get(k) for k in sp_keys[:5]
+                    ]
+                    if sp_keys
+                    else [],
+                )
+
+            # Add to all_metrics
+            for metric_name, values in task_metrics.items():
+                if metric_name not in all_metrics:
+                    all_metrics[metric_name] = {}
+                all_metrics[metric_name].update(values)
+
+    # Verify final metrics
+    if "spotify_popularity" in all_metrics:
+        sp_keys = list(all_metrics["spotify_popularity"].keys())
+        logger.debug(
+            "Final spotify_popularity metrics",
+            key_count=len(sp_keys),
+            key_type=str(type(sp_keys[0])) if sp_keys else "N/A",
+            sample_keys=sp_keys[:5],
+            sample_values=[
+                all_metrics["spotify_popularity"].get(k) for k in sp_keys[:5]
+            ]
+            if sp_keys
+            else [],
+        )
+
+    logger.debug(
+        "Final extracted metrics",
+        metric_names=list(all_metrics.keys()),
+        spotify_popularity_count=len(all_metrics.get("spotify_popularity", {})),
+    )
+
+    return WorkflowResult(
+        tracks=final_tracks,
+        metrics=all_metrics,
+        workflow_name=workflow_def.get("name", flow_run_name),
+        execution_time=execution_time,
+    )
+
+
+@flow(name="run_workflow")
+async def run_workflow(workflow_def: dict, **parameters) -> tuple[dict, WorkflowResult]:
+    """Execute a workflow definition with dynamic parameters.
+
+    Orchestrates workflow execution including flow construction,
+    parameter passing, and metrics collection.
+
+    Args:
+        workflow_def: Workflow definition dictionary
+        **parameters: Dynamic parameters for workflow nodes
+
+    Returns:
+        Tuple of (execution context, structured result)
+    """
+
+    logger = get_run_logger()
     workflow_name = workflow_def.get("name", "unnamed")
-    logger.info(f"Running workflow: {workflow_name}")
 
-    # Build the flow
-    workflow = build_flow(workflow_def)
+    try:
+        with tags("workflow", workflow_name):
+            logger.info(f"Running workflow: {workflow_name}")
 
-    # Execute the flow - consider passing deployment-specific parameters if needed
-    result = await workflow(**parameters)
+            # Start timing
+            start_time = datetime.datetime.now(datetime.UTC)
 
-    # Log completion
-    logger.info(f"Workflow execution complete: {workflow_name}")
+            # Build and execute the workflow
+            workflow = build_flow(workflow_def)
+            context = await workflow(**parameters)
 
-    return result
+            # Calculate execution time
+            end_time = datetime.datetime.now(datetime.UTC)
+            execution_time = (end_time - start_time).total_seconds()
+
+            # Add metadata to context
+            context["workflow_name"] = workflow_name
+
+            # Submit task and get result with actual execution time
+            flow_run_name = workflow.flow_run_name
+            result = await extract_workflow_result(
+                workflow_def,
+                context,
+                flow_run_name,
+                execution_time,
+            )
+
+            return context, result
+    except Exception as e:
+        logger.exception(f"Workflow execution failed: {e!s}")
+        raise

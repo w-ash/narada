@@ -208,3 +208,61 @@ class ConnectorTrackMapping:
         validator=[validators.instance_of(int), validators.ge(0), validators.le(100)],
     )
     metadata: dict[str, Any] = field(factory=dict)
+
+
+@define(frozen=True)
+class WorkflowResult:
+    """Immutable result of a workflow execution with associated metrics."""
+
+    tracks: list[Track] = field(factory=list)
+    metrics: dict[str, dict[str, Any]] = field(
+        factory=dict,
+    )  # metric_name -> {track_id(str) -> value}
+    workflow_name: str = field(default="")
+    execution_time: float = field(default=0.0)
+
+    def get_metric(
+        self,
+        track_id: int | None,
+        metric_name: str,
+        default: Any = None,
+    ) -> Any:
+        """Get specific metric value for a track."""
+        if track_id is None:
+            return None
+        # Convert track_id to string for lookup
+        return self.metrics.get(metric_name, {}).get(str(track_id), default)
+
+    def with_metric(self, metric_name: str, values: dict[int, Any]) -> "WorkflowResult":
+        """Add or update a metric, returning a new instance."""
+        metrics = self.metrics.copy()
+        metrics[metric_name] = {str(k): v for k, v in values.items()}
+        return self.__class__(
+            tracks=self.tracks,
+            metrics=metrics,
+            workflow_name=self.workflow_name,
+            execution_time=self.execution_time,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to serializable dictionary for API responses."""
+        return {
+            "workflow_name": self.workflow_name,
+            "execution_time": self.execution_time,
+            "track_count": len(self.tracks),
+            "tracks": [
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "artists": [a.name for a in t.artists],
+                    "metrics": {
+                        name: values.get(t.id)
+                        for name, values in self.metrics.items()
+                        if t.id and t.id in values
+                    }
+                    if t.id
+                    else {},
+                }
+                for t in self.tracks
+            ],
+        }

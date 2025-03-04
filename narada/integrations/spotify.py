@@ -202,27 +202,26 @@ class SpotifyConnector:
 
 
 def convert_spotify_track_to_domain(spotify_track: dict[str, Any]) -> Track:
-    """Convert Spotify track data to domain model.
-
-    Args:
-        spotify_track: Raw track data from Spotify API
-
-    Returns:
-        Domain Track model with all available metadata
-    """
+    """Convert Spotify track data to domain model."""
     artists = [Artist(name=artist["name"]) for artist in spotify_track["artists"]]
 
-    try:
-        release_date = (
-            datetime.strptime(
-                spotify_track["album"]["release_date"],
-                "%Y-%m-%d",
-            ).replace(tzinfo=UTC)
-            if "release_date" in spotify_track["album"]
-            else None
-        )
-    except ValueError:
-        release_date = None
+    # Parse release date based on precision
+    release_date = None
+    if "album" in spotify_track and "release_date" in spotify_track["album"]:
+        date_str = spotify_track["album"]["release_date"]
+        precision = spotify_track["album"].get("release_date_precision", "day")
+
+        try:
+            if precision == "year":
+                release_date = datetime.strptime(date_str, "%Y").replace(tzinfo=UTC)
+            elif precision == "month":
+                release_date = datetime.strptime(date_str, "%Y-%m").replace(tzinfo=UTC)
+            else:  # day precision
+                release_date = datetime.strptime(date_str, "%Y-%m-%d").replace(
+                    tzinfo=UTC,
+                )
+        except ValueError as e:
+            logger.warning(f"Failed to parse release date '{date_str}': {e}")
 
     track = Track(
         title=spotify_track["name"],
@@ -239,7 +238,6 @@ def convert_spotify_track_to_domain(spotify_track: dict[str, Any]) -> Track:
         {
             "popularity": spotify_track.get("popularity", 0),
             "album_id": spotify_track["album"].get("id"),
-            "preview_url": spotify_track.get("preview_url"),
             "explicit": spotify_track.get("explicit", False),
         },
     )

@@ -215,21 +215,19 @@ class DBPlaylistTrack(NaradaDBBase):
 # Database Operations
 @asynccontextmanager
 async def get_session(
-    rollback: bool = True,
+    rollback: bool = False,
 ) -> AsyncGenerator[AsyncSession]:
     """Get database session with automatic transaction management.
 
     Args:
         rollback: If True, rolls back changes (for tests)
-                 If False, commits changes (for development/inspection)
-        expire_on_commit: If True, invalidates objects after commit
-                         If False, keeps objects valid (better for testing)
+                 If False, commits changes (for development/production)
 
     Yields:
         AsyncSession: Managed database session
 
     Example:
-        async with get_session(rollback=False) as session:
+        async with get_session() as session:
             stmt = select(DBTrack)
             result = await session.scalar(stmt)  # New SQLAlchemy 2.0 pattern
     """

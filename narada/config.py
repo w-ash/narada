@@ -67,9 +67,9 @@ Best Practices:
 
 import logging
 import os
-import sys
 from pathlib import Path
-from typing import Any, Dict
+import sys
+from typing import Any
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -78,7 +78,7 @@ from loguru import logger
 load_dotenv()
 
 # Module-level configuration dictionary
-_config: Dict[str, Any] = {
+_config: dict[str, Any] = {
     # Database settings
     "DATABASE_URL": os.getenv("DATABASE_URL", "sqlite+aiosqlite:///narada.db"),
     "DATABASE_ECHO": os.getenv("DATABASE_ECHO", "false").lower() == "true",
@@ -172,7 +172,7 @@ def get_logger(name: str) -> Any:  # Use Any for Loguru logger type
     )
 
 
-async def log_startup_info() -> None:
+async def log_startup_info() -> None:  # noqa: RUF029
     """Log application configuration on startup."""
     local_logger = get_logger(__name__)  # Get a properly bound logger
     separator = "=" * 50
@@ -213,7 +213,7 @@ def resilient_operation(operation_name=None):
             try:
                 return await func(*args, **kwargs)
             except Exception as e:
-                logger.exception(f"Error in {op_name}: {str(e)}")
+                logger.exception(f"Error in {op_name}: {e!s}")
                 # Re-raise certain exceptions, swallow others based on type
                 raise
 
