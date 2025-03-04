@@ -1,8 +1,8 @@
 {
   "id": "sort_by_plays",
   "name": "Sort by Play Count",
-  "description": "Sort a Spotify playlist by Last.fm play counts",
-  "version": "1.1",
+  "description": "Sort a Spotify playlist by Last.fm play counts and create a ranked version",
+  "version": "1.2",
   "tasks": [
     {
       "id": "source",
@@ -12,7 +12,7 @@
       }
     },
     {
-      "id": "resolve",
+      "id": "enrich",
       "type": "enricher.resolve_lastfm",
       "config": {
         "batch_size": 50,
@@ -30,7 +30,7 @@
         "min_confidence": 60
       },
       "upstream": [
-        "resolve"
+        "enrich"
       ]
     },
     {
@@ -38,7 +38,7 @@
       "type": "destination.create_spotify_playlist",
       "config": {
         "name": "Sorted by Play Count",
-        "description": "Tracks sorted by Last.fm play count"
+        "description": "Tracks sorted by Last.fm play count (most played first)"
       },
       "upstream": [
         "sort"
