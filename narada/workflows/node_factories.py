@@ -6,9 +6,10 @@ minimizes code surface area while maintaining maximum flexibility.
 """
 
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Protocol, TypedDict
 
 from narada.config import get_logger
+from narada.core.matcher import MatchResult, batch_match_tracks, create_engine
 from narada.core.models import Playlist, Track, TrackList
 from narada.core.repositories import TrackRepository
 from narada.core.transforms import (
@@ -21,6 +22,7 @@ from narada.core.transforms import (
     select_by_method,
     sort_by_attribute,
 )
+from narada.data.database import get_session
 
 logger = get_logger(__name__)
 
@@ -28,6 +30,29 @@ logger = get_logger(__name__)
 type NodeFn = Callable[[dict, dict], Awaitable[dict]]
 type KeyFn = Callable[[Track], Any]
 type PredicateFn = Callable[[Track], bool]
+type TrackExtractor = Callable[[Track], Any]
+type ResultExtractor = Callable[[MatchResult], Any]
+type AnyExtractor = TrackExtractor | ResultExtractor
+
+
+# === RESOLUTION ENGINE ===
+
+
+class Extractor(Protocol):
+    """Protocol for attribute extractors."""
+
+    def __call__(self, result: MatchResult, track: Track) -> Any: ...
+
+
+class ConnectorConfig(TypedDict):
+    """Configuration for a connector in the enricher."""
+
+    track_extractors: dict[str, TrackExtractor]
+    result_extractors: dict[str, ResultExtractor]
+    dependencies: list[str]
+    factory: Callable[[dict], Any]  # Factory function for creating connector instances
+    metrics: dict[str, str]
+
 
 # === CONTEXT HANDLING ===
 
@@ -85,30 +110,49 @@ class Context:
         return tracklists
 
 
-# === HELPER FUNCTIONS ===
+# === CONNECTOR REGISTRY ===
 
 
-def _get_spotify_popularity(track: Track) -> int:
-    """Get Spotify popularity with better logging and fallback."""
-    popularity = 0
-    logger = get_logger(__name__)
-
-    # Check connector_metadata
-    if "spotify" in track.connector_metadata:
-        popularity = track.connector_metadata["spotify"].get("popularity", 0)
-
-    # Logging to debug issues
-    if popularity == 0 and "spotify" in track.connector_track_ids:
-        logger.debug(
-            "Missing popularity for track with Spotify ID",
-            track_id=track.id,
-            spotify_id=track.connector_track_ids["spotify"],
-            connector_metadata=track.connector_metadata.get("spotify", {}),
-        )
-
-    return popularity
+# Lightweight factory functions for creating extractors
+def track_attr(connector: str, attr: str, default: Any = None) -> TrackExtractor:
+    """Create an extractor that pulls from track connector metadata."""
+    return lambda t: t.get_connector_attribute(connector, attr, default)
 
 
+def result_attr(attr: str) -> ResultExtractor:
+    """Create an extractor that pulls from match result."""
+    # Create property accessors with improved safety
+    if attr == "user_play_count":
+        return lambda r: r.play_count.user_play_count if r.play_count else 0
+    elif attr == "global_play_count":
+        return lambda r: r.play_count.global_play_count if r.play_count else 0
+    else:
+        return lambda r: getattr(r, attr, None)
+
+
+# Clean registry that explicitly separates extraction sources
+CONNECTORS: dict[str, ConnectorConfig] = {
+    "lastfm": {
+        "track_extractors": {},  # Last.fm doesn't need track extractors
+        "result_extractors": {
+            "user_play_count": result_attr("user_play_count"),
+            "global_play_count": result_attr("global_play_count"),
+        },
+        "dependencies": ["musicbrainz"],
+        "factory": lambda _params: None,  # Placeholder for LastFM connector factory
+        "metrics": {"user_play_count": "play_count"},
+    },
+    "spotify": {
+        "track_extractors": {
+            "popularity": track_attr("spotify", "popularity", 0),
+            "explicit": track_attr("spotify", "explicit", False),
+        },
+        "result_extractors": {},  # Spotify doesn't need result extractors
+        "dependencies": [],
+        "factory": lambda _params: None,  # Placeholder for Spotify connector factory
+        "metrics": {"popularity": "popularity"},
+    },
+}
 # === TRANSFORM REGISTRY ===
 # This declarative approach maps node types to their implementations
 TRANSFORM_REGISTRY = {
@@ -137,7 +181,11 @@ TRANSFORM_REGISTRY = {
             reverse=cfg.get("reverse", True),
         ),
         "by_spotify_popularity": lambda _ctx, cfg: sort_by_attribute(
-            key_fn=lambda track: _get_spotify_popularity(track),
+            key_fn=lambda track: track.get_connector_attribute(
+                "spotify",
+                "popularity",
+                0,
+            ),
             metric_name="spotify_popularity",
             reverse=cfg.get("reverse", True),
         ),
@@ -511,101 +559,77 @@ async def destination_factory(
 # === ENRICHER FACTORY ===
 
 
-async def lastfm_enricher(context: dict, config: dict) -> dict:
-    """Enrich tracks with Last.fm data using database-first resolution strategy."""
-    from narada.core.matcher import batch_match_tracks
-    from narada.data.database import get_session
-    from narada.integrations.lastfm import LastFmConnector
-    from narada.integrations.musicbrainz import MusicBrainzConnector
+def create_enricher_node(config: dict) -> NodeFn:
+    """Create connector-specific enricher node.
 
-    # Extract execution context
-    ctx = Context(context)
-    tracklist = ctx.extract_tracklist()
+    Args:
+        config: Static configuration
+            connector: Service name ("lastfm", "spotify")
+    """
+    connector_name = config.get("connector")
 
-    # Extract configuration with sensible defaults
-    username = config.get("username")
-    batch_size = config.get("batch_size", 50)
-    concurrency = config.get("concurrency", 5)
-    max_age_hours = config.get("max_age_hours", 24)
+    if connector_name not in CONNECTORS:
+        raise ValueError(f"Unsupported connector: {connector_name}")
 
-    # Create service connectors
-    lastfm = LastFmConnector(username=username)
-    musicbrainz = (
-        MusicBrainzConnector() if config.get("use_musicbrainz", True) else None
-    )
+    connector = CONNECTORS[connector_name]
 
-    # Execute database-first resolution within a session
-    async with get_session() as session:
-        # Create repository with the active session
-        track_repo = TrackRepository(session)
+    async def node_impl(context: dict, node_config: dict) -> dict:
+        """Enricher node implementation."""
+        ctx = Context(context)
+        tracklist = ctx.extract_tracklist()
 
-        # Run the matcher with the repository
-        match_results = await batch_match_tracks(
-            tracklist.tracks,
-            lastfm,
-            track_repo=track_repo,
-            musicbrainz_connector=musicbrainz,
-            username=username,
-            max_age_hours=max_age_hours,
-            batch_size=batch_size,
-            concurrency=concurrency,
-        )
+        # Create resolution engine with main connector + dependencies
+        engine = create_engine()
+        engine.register_connector(connector_name, connector["factory"](node_config))
 
-    # Calculate success metrics
-    successful_matches = sum(1 for r in match_results.values() if r.success)
-    total_tracks = len(tracklist.tracks)
-    db_sourced = sum(
-        1
-        for r in match_results.values()
-        if r.success and r.mapping and r.mapping.match_method == "database"
-    )
+        for dep in connector["dependencies"]:
+            if dep in CONNECTORS:
+                engine.register_connector(dep, CONNECTORS[dep]["factory"](node_config))
 
-    # Update tracks with play counts
-    updated_tracks = []
-    for track in tracklist.tracks:
-        if track.id in match_results and match_results[track.id].success:
-            result = match_results[track.id]
-            # Use resolved track with updated mappings
-            updated_tracks.append(result.track)
-        else:
-            updated_tracks.append(track)
+        # Resolve tracks to connector
+        async with get_session() as session:
+            track_repo = TrackRepository(session)
+            match_results = await batch_match_tracks(
+                tracklist.tracks,
+                connector_name,
+                engine,
+                track_repo,
+            )
 
-    # Capture metrics in tracklist metadata
-    metrics = {}
-    for track_id, result in match_results.items():
-        if result.success and result.play_count:
-            metrics[str(track_id)] = result.user_play_count
+            # Extract and build metrics
+            metrics = {}
 
-    # Create new tracklist with updated tracks and metrics
-    updated_tracklist = tracklist.with_tracks(updated_tracks)
-    updated_tracklist = updated_tracklist.with_metadata(
-        "metrics",
-        {
-            **updated_tracklist.metadata.get("metrics", {}),
-            "user_play_count": metrics,
-        },
-    )
+            # Process track-based attributes
+            for attr, extractor in connector["track_extractors"].items():
+                values = {}
+                for track in tracklist.tracks:
+                    if track.id is not None:
+                        values[str(track.id)] = extractor(track)
+                if values:
+                    metrics[attr] = values
 
-    return {
-        "tracklist": updated_tracklist,
-        "match_results": match_results,
-        "db_resolution_count": db_sourced,
-        "api_resolution_count": successful_matches - db_sourced,
-        "match_success_rate": f"{successful_matches}/{total_tracks}",
-        "operation": "lastfm_resolution",
-    }
+            # Process result-based attributes
+            for attr, extractor in connector["result_extractors"].items():
+                values = {}
+                for track in tracklist.tracks:
+                    if track.id in match_results and match_results[track.id].success:
+                        values[str(track.id)] = extractor(match_results[track.id])
+                if values:
+                    metrics[attr] = values
 
+            # Add collected metrics to tracklist metadata
+            enriched = tracklist
+            if metrics:
+                current = enriched.metadata.get("metrics", {})
+                enriched = enriched.with_metadata("metrics", {**current, **metrics})
 
-def create_enricher_node(enricher_type: str) -> NodeFn:
-    """Create an enricher node of specified type."""
-    enrichers = {
-        "lastfm": lastfm_enricher,
-    }
+        return {
+            "tracklist": enriched,
+            "match_results": match_results,
+            "operation": f"{connector_name}_enrichment",
+        }
 
-    if enricher_type not in enrichers:
-        raise ValueError(f"Unknown enricher type: {enricher_type}")
-
-    return enrichers[enricher_type]
+    return node_impl
 
 
 # === NODE CREATION HELPERS ===

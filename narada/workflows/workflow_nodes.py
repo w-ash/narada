@@ -5,7 +5,6 @@ This module registers all available nodes using a declarative pattern,
 focusing on node definition rather than implementation details.
 """
 
-from narada.config import get_logger
 from narada.workflows.node_factories import (
     create_combiner_node,
     create_destination_node,
@@ -17,8 +16,6 @@ from narada.workflows.node_factories import (
 )
 from narada.workflows.node_registry import node
 
-logger = get_logger(__name__)
-
 # === SOURCE NODES ===
 node(
     "source.spotify_playlist",
@@ -27,13 +24,31 @@ node(
 )(spotify_playlist_source)
 
 # === ENRICHER NODES ===
+# LastFm enricher
 node(
-    "enricher.resolve_lastfm",
+    "enricher.lastfm",
     description="Resolves tracks to Last.fm and fetches play counts",
     input_type="tracklist",
     output_type="tracklist",
-)(create_enricher_node("lastfm"))
+)(
+    create_enricher_node({
+        "connector": "lastfm",
+        "attributes": ["user_play_count", "global_play_count"],
+    }),
+)
 
+# Spotify metadata enricher
+node(
+    "enricher.spotify",
+    description="Enriches tracks with Spotify popularity and explicit flags",
+    input_type="tracklist",
+    output_type="tracklist",
+)(
+    create_enricher_node({
+        "connector": "spotify",
+        "attributes": ["popularity", "explicit"],
+    }),
+)
 # === FILTER NODES ===
 node(
     "filter.deduplicate",

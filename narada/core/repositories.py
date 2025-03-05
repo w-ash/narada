@@ -436,6 +436,42 @@ class TrackRepository(BaseRepository[DBTrack]):
             logger.error(f"Error fetching track metrics: {e}")
             return {}
 
+    async def get_track_mapping_details(
+        self,
+        track_id: int,
+        connector_name: str,
+    ) -> DBTrackMapping | None:
+        """Get detailed mapping information between a track and connector.
+
+        This method retrieves complete mapping metadata needed for resolution
+        decisions, including confidence scores, match methods, and freshness.
+
+        Args:
+            track_id: Internal track ID
+            connector_name: Name of connector (e.g., "spotify", "lastfm")
+
+        Returns:
+            Full track mapping record or None if not found
+        """
+        if not track_id:
+            return None
+
+        try:
+            # Build targeted query with SQLAlchemy 2.0 style
+            stmt = select(DBTrackMapping).where(
+                DBTrackMapping.track_id == track_id,
+                DBTrackMapping.connector_name == connector_name,
+                DBTrackMapping.is_deleted == False,  # noqa: E712
+            )
+
+            # Execute query efficiently
+            result = await self.session.execute(stmt)
+            return result.scalars().first()
+
+        except Exception as e:
+            logger.exception(f"Error retrieving mapping details: {e}")
+            return None
+
     async def save_connector_mappings(
         self,
         mappings: list[tuple[int, str, str, int, str, dict]],
