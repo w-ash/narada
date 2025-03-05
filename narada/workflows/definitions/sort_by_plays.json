@@ -13,7 +13,7 @@
     },
     {
       "id": "enrich",
-      "type": "enricher.resolve_lastfm",
+      "type": "enricher.lastfm",
       "config": {
         "batch_size": 50,
         "concurrency": 5
