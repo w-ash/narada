@@ -1,55 +1,41 @@
-"""Entity resolution and cross-service matching with functional composition.
-
-This module implements a cascading resolution strategy that maps tracks between
-music services while supporting functional transformation patterns.
-"""
+"""Entity resolution with database-first strategy and efficient batch processing."""
 
 import asyncio
-from collections.abc import Callable
 from typing import TypeVar
 
 from attrs import define
 
 from narada.config import get_logger
 from narada.core.models import ConnectorTrackMapping, Track
+from narada.core.repositories import TrackRepository
 from narada.integrations.lastfm import LastFmConnector, LastFmPlayCount
 from narada.integrations.musicbrainz import MusicBrainzConnector
 
-# Get contextual logger
+# Get logger
 logger = get_logger(__name__)
 
-# Type aliases for functional composition
+# Type aliases
 T = TypeVar("T", bound=Track)
-TrackTransform = Callable[[T], T]
 
-# Resolution configuration with tunable parameters
+# Resolution configuration
 RESOLUTION_CONFIG = {
     "confidence": {
-        "isrc_mbid": 95,  # Base confidence for ISRC→MBID path
-        "direct": 85,  # Base confidence for direct artist/title path
-        "duration_missing": 5,  # Penalty for missing duration
-        "duration_mismatch": 20,  # Penalty for mismatched duration
-    },
-    "tolerances": {
-        "duration_ms": 2000,  # 2 seconds tolerance for duration comparison
+        "isrc_mbid": 95,  # ISRC→MBID path
+        "direct": 85,  # Artist/title path
+        "database": 98,  # Database-sourced (highest confidence)
+        "duration_missing": 5,
     },
     "methods": {
         "isrc_mbid": "isrc_mbid",
         "direct": "direct",
+        "database": "database",
     },
 }
 
 
 @define(frozen=True, slots=True)
 class MatchResult:
-    """Immutable result of track resolution across services.
-
-    Attributes:
-        track: The resolved track with any additional identifiers
-        play_count: Last.fm play count data if available
-        mapping: Service mapping with confidence scoring
-        success: Whether the match was successful
-    """
+    """Immutable result of track resolution across services."""
 
     track: Track
     play_count: LastFmPlayCount | None = None
@@ -67,254 +53,268 @@ class MatchResult:
         return self.play_count.user_play_count if self.play_count else 0
 
 
-async def resolve_mbid_from_isrc(
-    track: Track,
-    musicbrainz_connector: MusicBrainzConnector,
-) -> tuple[str | None, Track]:
-    """Resolve MBID from ISRC using MusicBrainz.
-
-    Args:
-        track: Track to resolve
-        musicbrainz_connector: MusicBrainz client
-
-    Returns:
-        Tuple of (mbid if found, updated track with mbid if resolved)
-    """
-    if not track.isrc:
-        return None, track
-
-    # Check if track already has MBID
-    if "musicbrainz" in track.connector_track_ids:
-        return track.connector_track_ids["musicbrainz"], track
-
-    # Try to resolve from MusicBrainz
-    try:
-        match await musicbrainz_connector.get_recording_by_isrc(track.isrc):
-            case {"id": mbid}:
-                logger.debug(
-                    "Resolved MBID from ISRC",
-                    track_id=track.id,
-                    isrc=track.isrc,
-                    mbid=mbid,
-                )
-                return mbid, track.with_connector_track_id("musicbrainz", mbid)
-            case _:
-                return None, track
-    except Exception as e:
-        logger.error(f"Error resolving MBID: {e}", track_id=track.id, isrc=track.isrc)
-        return None, track
-
-
-def validate_metadata(track: Track, confidence: int) -> int:
-    """Validate track metadata and adjust confidence score.
-
-    Args:
-        track: Track to validate
-        confidence: Base confidence score
-
-    Returns:
-        Adjusted confidence score
-    """
-    # Apply duration missing penalty if applicable
-    if track.duration_ms is None:
-        confidence -= RESOLUTION_CONFIG["confidence"]["duration_missing"]
-        logger.debug(
-            "Applied duration missing penalty",
-            track_id=track.id,
-            penalty=RESOLUTION_CONFIG["confidence"]["duration_missing"],
-        )
-
-    # Ensure confidence is within 0-100 range
-    return max(0, min(100, confidence))
-
-
-async def match_track(
-    track: Track,
-    lastfm_connector: LastFmConnector,
-    musicbrainz_connector: MusicBrainzConnector | None = None,
-    username: str | None = None,
-) -> MatchResult:
-    """Match a track to Last.fm and retrieve play count.
-
-    Implements a cascading resolution strategy:
-    1. Try ISRC→MBID→Last.fm path if ISRC available
-    2. Fall back to direct artist/title→Last.fm
-
-    Args:
-        track: Track to match
-        lastfm_connector: Last.fm client
-        musicbrainz_connector: Optional MusicBrainz client
-        username: Last.fm username for play counts
-
-    Returns:
-        MatchResult with resolution details
-    """
-    if not track.title or not track.artists:
-        logger.warning("Cannot match track without title/artists", track_id=track.id)
-        return MatchResult(track=track, success=False)
-
-    artist_name = track.artists[0].name if track.artists else ""
-    logger.debug("Starting track match", track_id=track.id, title=track.title)
-
-    play_count = None
-    confidence = 0
-    match_method = None
-    updated_track = track
-
-    # STRATEGY #1: ISRC → MBID → Last.fm
-    if track.isrc and musicbrainz_connector:
-        mbid, updated_track = await resolve_mbid_from_isrc(track, musicbrainz_connector)
-
-        if mbid:
-            play_count = await lastfm_connector.get_mbid_play_count(mbid, username)
-            if play_count and play_count.track_url:
-                confidence = RESOLUTION_CONFIG["confidence"]["isrc_mbid"]
-                match_method = RESOLUTION_CONFIG["methods"]["isrc_mbid"]
-                logger.info(
-                    "Matched track via ISRC+MBID",
-                    track_id=track.id,
-                    isrc=track.isrc,
-                    mbid=mbid,
-                )
-
-    # STRATEGY #2: Direct artist/title → Last.fm
-    if not play_count or not play_count.track_url:
-        play_count = await lastfm_connector.get_track_play_count(
-            artist_name,
-            track.title,
-            username,
-        )
-
-        if play_count and play_count.track_url:
-            confidence = RESOLUTION_CONFIG["confidence"]["direct"]
-            match_method = RESOLUTION_CONFIG["methods"]["direct"]
-            logger.info(
-                "Matched track via direct artist/title",
-                track_id=track.id,
-                title=track.title,
-            )
-
-    # Handle no match found
-    if not play_count or not play_count.track_url:
-        logger.warning("Failed to match track", track_id=track.id, title=track.title)
-        return MatchResult(track=updated_track, success=False)
-
-    # Validate metadata and adjust confidence
-    confidence = validate_metadata(updated_track, confidence)
-
-    # Create connector mapping
-    mapping = ConnectorTrackMapping(
-        connector_name="lastfm",
-        connector_track_id=play_count.track_url,
-        match_method=match_method or "unknown",
-        confidence=confidence,
-        metadata={"user_play_count": play_count.user_play_count},
-    )
-
-    # Update track with Last.fm URL
-    updated_track = updated_track.with_connector_track_id(
-        "lastfm",
-        play_count.track_url,
-    )
-
-    return MatchResult(
-        track=updated_track,
-        play_count=play_count,
-        mapping=mapping,
-        success=True,
-    )
-
-
 async def batch_match_tracks(
     tracks: list[Track],
     lastfm_connector: LastFmConnector,
+    track_repo: TrackRepository | None = None,
     musicbrainz_connector: MusicBrainzConnector | None = None,
     username: str | None = None,
+    max_age_hours: int = 24,
     batch_size: int = 50,
     concurrency: int = 10,
 ) -> dict[int, MatchResult]:
-    """Match multiple tracks in batches with controlled concurrency.
-
-    Args:
-        tracks: List of tracks to match
-        lastfm_connector: Last.fm client
-        musicbrainz_connector: Optional MusicBrainz client
-        username: Last.fm username for play counts
-        batch_size: Number of tracks per batch
-        concurrency: Maximum concurrent operations
-
-    Returns:
-        Dictionary mapping track IDs to match results
-    """
+    """Match tracks using adaptive database-first or API-only strategy."""
     if not tracks:
         return {}
 
     results: dict[int, MatchResult] = {}
-    total_batches = (len(tracks) + batch_size - 1) // batch_size
+    tracks_to_resolve = list(tracks)
 
-    # Process tracks in batches
-    for batch_idx, batch_start in enumerate(range(0, len(tracks), batch_size)):
-        batch = tracks[batch_start : batch_start + batch_size]
-        logger.info(
-            f"Processing batch {batch_idx + 1}/{total_batches} ({len(batch)} tracks)",
-        )
+    # Phase 1: Database resolution (if enabled)
+    if track_repo is not None:
+        # Extract tracks with IDs for database lookup
+        valid_tracks = [
+            (i, t) for i, t in enumerate(tracks_to_resolve) if t.id is not None
+        ]
 
-        # Create a semaphore to limit concurrency
+        if valid_tracks:
+            db_tracks = [t for _, t in valid_tracks]
+            track_ids = [t.id for t in db_tracks if t.id is not None]
+
+            # Get mappings and metrics in parallel
+            mappings, metrics = await asyncio.gather(
+                track_repo.get_connector_mappings(track_ids, "lastfm"),
+                track_repo.get_track_metrics(
+                    track_ids,
+                    metric_type="user_play_count",
+                    user_id=username or "default",
+                    max_age_hours=max_age_hours,
+                ),
+            )
+
+            # Process tracks with database matches
+            resolved_indices = []
+            for i, track in valid_tracks:
+                track_id = track.id
+                if track_id in mappings and "lastfm" in mappings[track_id]:
+                    lastfm_url = mappings[track_id]["lastfm"]
+                    play_count = metrics.get(track_id, 0)
+
+                    # Create result from database
+                    results[track_id] = MatchResult(
+                        track=track.with_connector_track_id("lastfm", lastfm_url),
+                        play_count=LastFmPlayCount(
+                            user_play_count=play_count,
+                            global_play_count=0,
+                            track_url=lastfm_url,
+                        ),
+                        mapping=ConnectorTrackMapping(
+                            connector_name="lastfm",
+                            connector_track_id=lastfm_url,
+                            match_method=RESOLUTION_CONFIG["methods"]["database"],
+                            confidence=RESOLUTION_CONFIG["confidence"]["database"],
+                            metadata={"user_play_count": play_count},
+                        ),
+                        success=True,
+                    )
+                    resolved_indices.append(i)
+
+            # Remove resolved tracks from to-resolve list
+            for i in sorted(resolved_indices, reverse=True):
+                tracks_to_resolve.pop(i)
+
+            logger.info(
+                f"Database resolution: {len(resolved_indices)}/{len(valid_tracks)} tracks matched",
+            )
+
+    # Phase 2: API resolution for remaining tracks
+    if tracks_to_resolve:
+        logger.info(f"API resolution: processing {len(tracks_to_resolve)} tracks")
+
+        # Create semaphore for concurrency control
         semaphore = asyncio.Semaphore(concurrency)
 
-        async def process_track(
-            track: Track,
-            sem: asyncio.Semaphore,
-        ) -> tuple[int | None, MatchResult]:
-            """Process a single track with rate limiting."""
-            async with sem:
-                # Small delay to avoid API rate limits
-                await asyncio.sleep(0.1)
-                try:
-                    result = await match_track(
-                        track,
-                        lastfm_connector,
-                        musicbrainz_connector,
-                        username,
+        # Single-track resolution function (extracted from previous match_track)
+        async def resolve_track(track: Track) -> tuple[int | None, MatchResult]:
+            """Resolve a single track via API."""
+            async with semaphore:
+                await asyncio.sleep(0.1)  # Rate limiting
+
+                if not track.title or not track.artists:
+                    logger.warning(
+                        "Cannot match track without title/artists",
+                        track_id=track.id,
                     )
-                    return track.id, result
-                except Exception as e:
-                    logger.error(f"Match error: {e}", track_id=track.id)
                     return track.id, MatchResult(track=track, success=False)
 
-        # Process batch concurrently
-        batch_tasks = [process_track(track, semaphore) for track in batch]
-        batch_results = await asyncio.gather(*batch_tasks)
+                artist_name = track.artists[0].name if track.artists else ""
+                play_count = None
+                confidence = 0
+                match_method = None
+                updated_track = track
 
-        # Store valid results using dictionary comprehension
-        results.update({
-            track_id: result
-            for track_id, result in batch_results
-            if track_id is not None
-        })
+                # Strategy 1: ISRC → MBID → Last.fm
+                if track.isrc and musicbrainz_connector:
+                    # Find MBID
+                    mbid = None
+                    if "musicbrainz" in track.connector_track_ids:
+                        mbid = track.connector_track_ids["musicbrainz"]
+                    else:
+                        try:
+                            recording = (
+                                await musicbrainz_connector.get_recording_by_isrc(
+                                    track.isrc,
+                                )
+                            )
+                            if recording and "id" in recording:
+                                mbid = recording["id"]
+                                updated_track = updated_track.with_connector_track_id(
+                                    "musicbrainz",
+                                    mbid,
+                                )
+                        except Exception as e:
+                            logger.error(
+                                f"MBID resolution error: {e}",
+                                track_id=track.id,
+                            )
 
-        # Log batch completion with metrics
-        matched = sum(1 for r in results.values() if r.success)
-        success_rate = matched / max(1, len(results)) * 100
+                    # Use MBID to get play count
+                    if mbid:
+                        play_count = await lastfm_connector.get_mbid_play_count(
+                            mbid,
+                            username,
+                        )
+                        if play_count and play_count.track_url:
+                            confidence = RESOLUTION_CONFIG["confidence"]["isrc_mbid"]
+                            match_method = RESOLUTION_CONFIG["methods"]["isrc_mbid"]
 
-        logger.info(
-            f"Batch {batch_idx + 1}/{total_batches} complete",
-            success_rate=f"{success_rate:.1f}%",
-            matched=f"{matched}/{len(results)}",
-        )
+                # Strategy 2: Direct artist/title matching
+                if not play_count or not play_count.track_url:
+                    play_count = await lastfm_connector.get_track_play_count(
+                        artist_name,
+                        track.title,
+                        username,
+                    )
+                    if play_count and play_count.track_url:
+                        confidence = RESOLUTION_CONFIG["confidence"]["direct"]
+                        match_method = RESOLUTION_CONFIG["methods"]["direct"]
 
-    # Final statistics
-    successful = sum(1 for r in results.values() if r.success)
-    high_confidence = sum(
-        1 for r in results.values() if r.success and r.confidence >= 80
+                # Handle no match found
+                if not play_count or not play_count.track_url:
+                    return track.id, MatchResult(track=updated_track, success=False)
+
+                # Adjust confidence for missing metadata
+                if updated_track.duration_ms is None:
+                    confidence -= RESOLUTION_CONFIG["confidence"]["duration_missing"]
+
+                # Create mapping and result
+                mapping = ConnectorTrackMapping(
+                    connector_name="lastfm",
+                    connector_track_id=play_count.track_url,
+                    match_method=match_method or "unknown",
+                    confidence=max(0, min(100, confidence)),
+                    metadata={"user_play_count": play_count.user_play_count},
+                )
+
+                updated_track = updated_track.with_connector_track_id(
+                    "lastfm",
+                    play_count.track_url,
+                )
+                return track.id, MatchResult(
+                    track=updated_track,
+                    play_count=play_count,
+                    mapping=mapping,
+                    success=True,
+                )
+
+        # Process tracks in batches
+        for batch_start in range(0, len(tracks_to_resolve), batch_size):
+            batch = tracks_to_resolve[batch_start : batch_start + batch_size]
+            batch_tasks = [resolve_track(track) for track in batch]
+            batch_results = await asyncio.gather(*batch_tasks)
+
+            # Update results
+            batch_results_dict = {
+                tid: result for tid, result in batch_results if tid is not None
+            }
+            results.update(batch_results_dict)
+
+            # Log batch progress
+            success_count = sum(1 for r in batch_results_dict.values() if r.success)
+            logger.debug(
+                f"Batch {batch_start // batch_size + 1}: {success_count}/{len(batch)} matched",
+            )
+
+    # Phase 3: Persist API results to database
+    if track_repo is not None:
+        # Prepare mappings and metrics for API results
+        mappings_to_save = []
+        metrics_to_save = []
+
+        for track_id, result in results.items():
+            if (
+                not result.success
+                or not result.mapping
+                or result.mapping.match_method
+                == RESOLUTION_CONFIG["methods"]["database"]
+            ):
+                continue
+
+            mappings_to_save.append((
+                track_id,
+                result.mapping.connector_name,
+                result.mapping.connector_track_id,
+                result.mapping.confidence,
+                result.mapping.match_method,
+                result.mapping.metadata,
+            ))
+
+            if result.play_count:
+                metrics_to_save.append((
+                    track_id,
+                    username or "default",
+                    "play_count",
+                    result.play_count.global_play_count,
+                    result.play_count.user_play_count,
+                ))
+
+        # Persist in parallel
+        if mappings_to_save or metrics_to_save:
+            persist_tasks = []
+            if mappings_to_save:
+                persist_tasks.append(
+                    track_repo.save_connector_mappings(mappings_to_save),
+                )
+            if metrics_to_save:
+                persist_tasks.append(track_repo.save_track_metrics(metrics_to_save))
+
+            await asyncio.gather(*persist_tasks)
+            logger.info(
+                f"Persisted {len(mappings_to_save)} mappings and {len(metrics_to_save)} metrics",
+            )
+
+    # Report statistics
+    db_matched = sum(
+        1
+        for r in results.values()
+        if r.success
+        and r.mapping
+        and r.mapping.match_method == RESOLUTION_CONFIG["methods"]["database"]
+    )
+    api_matched = sum(
+        1
+        for r in results.values()
+        if r.success
+        and r.mapping
+        and r.mapping.match_method != RESOLUTION_CONFIG["methods"]["database"]
     )
 
     logger.info(
-        "Track matching complete",
-        total_tracks=len(tracks),
-        matched=successful,
-        high_confidence=high_confidence,
-        success_rate=f"{(successful / len(tracks)) * 100:.1f}%",
+        "Match resolution complete",
+        total=len(tracks),
+        db_matched=db_matched,
+        api_matched=api_matched,
+        success_rate=f"{(db_matched + api_matched) / max(1, len(tracks)) * 100:.1f}%",
     )
 
     return results

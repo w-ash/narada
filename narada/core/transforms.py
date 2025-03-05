@@ -224,63 +224,86 @@ def exclude_artists(
 
 @curry
 def sort_by_attribute(
-    key_fn: Callable[[Track], Any],
+    key_fn: Callable[[Track], Any] | str,
     metric_name: str,
     reverse: bool = False,
     tracklist: TrackList | None = None,
 ) -> Transform | TrackList:
-    """Sort tracks by any attribute or derived value."""
+    """Sort tracks by any attribute or derived value.
+
+    Args:
+        key_fn: Function to extract sort key or metric name string
+        metric_name: Name for tracking metrics in tracklist metadata
+        reverse: Whether to sort in descending order
+        tracklist: Optional tracklist to transform immediately
+
+    Returns:
+        Transformation function or transformed tracklist if provided
+    """
+    logger = get_logger(__name__)
+
+    # Allow passing metric name directly for common use cases
+    if isinstance(key_fn, str):
+        stored_metric_name = key_fn
+
+        def metric_key_fn(track: Track) -> Any:
+            return _extract_track_metric(track, stored_metric_name, 0)
+
+        key_fn = metric_key_fn
+
+    def _extract_track_metric(track: Track, metric_key: str, default: Any = 0) -> Any:
+        """Extract metric from track or its metadata."""
+        if not track.id:
+            return default
+
+        # First try track's own properties
+        if hasattr(track, metric_key) and getattr(track, metric_key) is not None:
+            return getattr(track, metric_key)
+
+        return default
 
     def transform(t: TrackList) -> TrackList:
-        logger = get_logger(__name__)
+        """Apply the sorting transformation."""
+        # Check for stored metrics in tracklist metadata
+        metrics_dict = t.metadata.get("metrics", {}).get(metric_name, {})
 
-        # Log input tracklist before any processing
-        logger.debug(
-            f"Starting sort_by_attribute with metric {metric_name}",
-            track_count=len(t.tracks),
-            existing_metrics=list(t.metadata.get("metrics", {}).keys()),
-        )
+        # Create a key function that prioritizes stored metrics
+        def enhanced_key_fn(track: Track) -> Any:
+            if track.id and str(track.id) in metrics_dict:
+                # Use pre-computed metric from tracklist metadata
+                return metrics_dict[str(track.id)]
+            # Fall back to the original key function
+            return key_fn(track)
 
-        # Sort tracks as usual
-        sorted_tracks = sorted(t.tracks, key=key_fn, reverse=reverse)
+        # Sort tracks using the enhanced key function
+        sorted_tracks = sorted(t.tracks, key=enhanced_key_fn, reverse=reverse)
         result = t.with_tracks(sorted_tracks)
 
-        # Debug specific values for first few tracks to verify key_fn
-        sample_values = [
-            (str(track.id), key_fn(track)) for track in t.tracks[:5] if track.id
-        ]
-        logger.debug(
-            f"Sample key values for {metric_name}",
-            sample_values=sample_values,
-        )
+        # Log metrics information for debugging
+        if metrics_dict:
+            logger.debug(
+                f"Used {len(metrics_dict)} stored metrics for sorting by {metric_name}",
+                sample_keys=list(metrics_dict.keys())[:5],
+                sample_values=list(metrics_dict.values())[:5],
+            )
+        else:
+            logger.debug(
+                f"No stored metrics found for {metric_name}, using key function",
+            )
 
-        # Create metrics dictionary - convert dict_keys to list for logging
-        metric_values = {str(track.id): key_fn(track) for track in t.tracks if track.id}
+        # Store metrics in tracklist metadata (preserving existing metrics)
+        track_metrics = {
+            str(track.id): enhanced_key_fn(track)
+            for track in t.tracks
+            if track.id is not None
+        }
 
-        # Log details of what's being stored
-        logger.debug(
-            f"Creating {metric_name} metrics dictionary",
-            metrics_count=len(metric_values),
-            metrics_keys=list(metric_values.keys()),
-            sample_values=list(metric_values.values())[:5] if metric_values else [],
-        )
-
-        # Store metrics in tracklist metadata
         result = result.with_metadata(
             "metrics",
             {
                 **result.metadata.get("metrics", {}),
-                metric_name: metric_values,
+                metric_name: track_metrics,
             },
-        )
-
-        # Verify metrics were stored correctly
-        stored_metrics = result.metadata.get("metrics", {}).get(metric_name, {})
-        logger.debug(
-            f"Stored {metric_name} metrics in tracklist",
-            stored_count=len(stored_metrics),
-            stored_keys=list(stored_metrics.keys())[:5],
-            all_metric_names=list(result.metadata.get("metrics", {}).keys()),
         )
 
         return result

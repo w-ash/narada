@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 import datetime
+from datetime import timedelta
 from typing import Any, ClassVar, TypeVar
 
 from sqlalchemy import Select, func, select
@@ -13,6 +14,7 @@ from narada.config import get_logger
 from narada.core.models import Artist, Playlist, Track
 from narada.core.protocols import MappingTable, ModelClass
 from narada.data.database import (
+    DBPlayCount,
     DBPlaylist,
     DBPlaylistMapping,
     DBPlaylistTrack,
@@ -334,6 +336,264 @@ class TrackRepository(BaseRepository[DBTrack]):
             relationships=["mappings"],
         )
 
+    async def get_connector_mappings(
+        self,
+        track_ids: list[int],
+        connector: str | None = None,
+    ) -> dict[int, dict[str, str]]:
+        """Get mappings between tracks and external connectors.
+
+        Args:
+            track_ids: List of track IDs to fetch mappings for
+            connector: Optional connector name to filter results
+
+        Returns:
+            Dictionary mapping {track_id: {connector_name: connector_id}}
+        """
+        if not track_ids:
+            return {}
+
+        try:
+            # Build query for mappings with SQLAlchemy 2.0 style
+            stmt = select(DBTrackMapping).where(
+                DBTrackMapping.track_id.in_(track_ids),
+                DBTrackMapping.is_deleted == False,  # noqa: E712
+            )
+
+            # Add connector filter if specified
+            if connector:
+                stmt = stmt.where(DBTrackMapping.connector_name == connector)
+
+            # Execute query
+            result = await self.session.execute(stmt)
+            mappings = result.scalars().all()
+
+            # Organize results by track_id
+            mapping_dict: dict[int, dict[str, str]] = {}
+            for mapping in mappings:
+                if mapping.track_id not in mapping_dict:
+                    mapping_dict[mapping.track_id] = {}
+                mapping_dict[mapping.track_id][mapping.connector_name] = (
+                    mapping.connector_id
+                )
+
+            return mapping_dict
+
+        except Exception as e:
+            logger.exception(f"Error fetching connector mappings: {e}")
+            return {}
+
+    async def get_track_metrics(
+        self,
+        track_ids: list[int],
+        metric_type: str = "play_count",
+        user_id: str | None = None,
+        max_age_hours: int = 24,
+    ) -> dict[int, int]:
+        """Get cached metrics with TTL awareness.
+
+        Args:
+            track_ids: List of track IDs to fetch metrics for
+            metric_type: Type of metric to fetch (default: play_count)
+            user_id: Optional user ID to filter metrics by
+            max_age_hours: Maximum age of metrics in hours
+
+        Returns:
+            Dictionary mapping {track_id: metric_value}
+        """
+        if not track_ids:
+            return {}
+
+        try:
+            # Calculate cutoff timestamp for TTL
+
+            cutoff = datetime.datetime.now(datetime.UTC) - timedelta(
+                hours=max_age_hours,
+            )
+
+            # Build query for play counts with time filter
+            stmt = select(DBPlayCount).where(
+                DBPlayCount.track_id.in_(track_ids),
+                DBPlayCount.is_deleted == False,  # noqa: E712
+                DBPlayCount.last_updated >= cutoff,
+            )
+
+            # Add user filter if specified
+            if user_id:
+                stmt = stmt.where(DBPlayCount.user_id == user_id)
+
+            # Execute query
+            result = await self.session.execute(stmt)
+            play_counts = result.scalars().all()
+
+            # Organize results by track_id (user or global play count based on metric_type)
+            metrics_dict = {}
+            for pc in play_counts:
+                if metric_type == "user_play_count":
+                    metrics_dict[pc.track_id] = pc.user_play_count
+                else:
+                    metrics_dict[pc.track_id] = pc.play_count
+
+            return metrics_dict
+
+        except Exception as e:
+            logger.exception(f"Error fetching track metrics: {e}")
+            return {}
+
+    async def save_connector_mappings(
+        self,
+        mappings: list[tuple[int, str, str, int, str, dict]],
+    ) -> None:
+        """Save mappings for multiple tracks efficiently.
+
+        Args:
+            mappings: List of tuples with mapping data:
+                (track_id, connector_name, connector_id, confidence, match_method, metadata)
+        """
+        if not mappings:
+            return
+
+        try:
+            # Begin a transaction
+            async with self.session.begin():
+                # Check for existing mappings to avoid duplicates
+                track_ids = [m[0] for m in mappings]
+                connectors = {m[1] for m in mappings}
+
+                # Get existing mappings
+                existing_mappings = {}
+                for connector in connectors:
+                    connector_mappings = await self.get_connector_mappings(
+                        track_ids,
+                        connector,
+                    )
+                    for track_id, conn_map in connector_mappings.items():
+                        if track_id not in existing_mappings:
+                            existing_mappings[track_id] = {}
+                        existing_mappings[track_id].update(conn_map)
+
+                now = datetime.datetime.now(datetime.UTC)
+                new_mappings = []
+
+                for (
+                    track_id,
+                    connector,
+                    connector_id,
+                    confidence,
+                    method,
+                    metadata,
+                ) in mappings:
+                    # Skip if this exact mapping already exists
+                    if (
+                        track_id in existing_mappings
+                        and connector in existing_mappings[track_id]
+                        and existing_mappings[track_id][connector] == connector_id
+                    ):
+                        continue
+
+                    # Create new mapping
+                    mapping = DBTrackMapping(
+                        track_id=track_id,
+                        connector_name=connector,
+                        connector_id=connector_id,
+                        match_method=method,
+                        confidence=confidence,
+                        connector_metadata=metadata,
+                        last_verified=now,
+                    )
+                    new_mappings.append(mapping)
+
+                # Bulk insert if we have new mappings
+                if new_mappings:
+                    self.session.add_all(new_mappings)
+
+                await self.session.flush()
+
+        except Exception as e:
+            logger.exception(f"Error saving connector mappings: {e}")
+            raise
+
+    async def save_track_metrics(
+        self,
+        metrics: list[tuple[int, str, str, int, int]],
+    ) -> None:
+        """Save metrics for multiple tracks efficiently.
+
+        Args:
+            metrics: List of tuples with metric data:
+                (track_id, user_id, metric_type, play_count, user_play_count)
+        """
+        if not metrics:
+            return
+
+        try:
+            # Begin a transaction
+            async with self.session.begin():
+                # Group metrics by track_id and user_id for efficient upsert
+                now = datetime.datetime.now(datetime.UTC)
+                new_metrics = []
+                updates = []
+
+                # First check what exists already
+                track_user_pairs = [(m[0], m[1]) for m in metrics]
+
+                # Build efficient query to find existing records
+                from sqlalchemy import tuple_
+
+                stmt = select(DBPlayCount).where(
+                    tuple_(DBPlayCount.track_id, DBPlayCount.user_id).in_(
+                        track_user_pairs,
+                    ),
+                    DBPlayCount.is_deleted == False,  # noqa: E712
+                )
+
+                result = await self.session.execute(stmt)
+                existing = {
+                    (pc.track_id, pc.user_id): pc for pc in result.scalars().all()
+                }
+
+                # Process each metric
+                for (
+                    track_id,
+                    user_id,
+                    _metric_type,
+                    play_count,
+                    user_play_count,
+                ) in metrics:
+                    key = (track_id, user_id)
+
+                    if key in existing:
+                        # Update existing record
+                        play_count_obj = existing[key]
+                        play_count_obj.play_count = play_count
+                        play_count_obj.user_play_count = user_play_count
+                        play_count_obj.last_updated = now
+                        updates.append(play_count_obj)
+                    else:
+                        # Create new record
+                        play_count_obj = DBPlayCount(
+                            track_id=track_id,
+                            user_id=user_id,
+                            play_count=play_count,
+                            user_play_count=user_play_count,
+                            last_updated=now,
+                        )
+                        new_metrics.append(play_count_obj)
+
+                # Bulk save all at once
+                if updates:
+                    for update in updates:
+                        self.session.add(update)
+
+                if new_metrics:
+                    self.session.add_all(new_metrics)
+
+                await self.session.flush()
+
+        except Exception as e:
+            logger.exception(f"Error saving track metrics: {e}")
+            raise
+
     async def save_track(self, track: Track) -> Track:
         """Save track and mappings efficiently."""
         if not track.title or not track.artists:
@@ -518,9 +778,7 @@ class PlaylistRepository(BaseRepository[DBPlaylist]):
             await self.session.flush()
 
             # Create playlist tracks with current timestamp
-            current_time = datetime.datetime.now(
-                datetime.UTC,
-            )  # Get current timestamp in UTC
+            current_time = datetime.datetime.now(datetime.UTC)
             playlist_tracks = []
 
             for i, track in enumerate(playlist.tracks):

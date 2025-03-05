@@ -10,6 +10,7 @@ from typing import Any
 
 from narada.config import get_logger
 from narada.core.models import Playlist, Track, TrackList
+from narada.core.repositories import TrackRepository
 from narada.core.transforms import (
     concatenate,
     exclude_artists,
@@ -511,34 +512,86 @@ async def destination_factory(
 
 
 async def lastfm_enricher(context: dict, config: dict) -> dict:
-    """Enrich tracks with Last.fm metadata including play counts."""
+    """Enrich tracks with Last.fm data using database-first resolution strategy."""
     from narada.core.matcher import batch_match_tracks
+    from narada.data.database import get_session
     from narada.integrations.lastfm import LastFmConnector
+    from narada.integrations.musicbrainz import MusicBrainzConnector
 
+    # Extract execution context
     ctx = Context(context)
     tracklist = ctx.extract_tracklist()
 
-    # Configuration parameters
+    # Extract configuration with sensible defaults
     username = config.get("username")
     batch_size = config.get("batch_size", 50)
     concurrency = config.get("concurrency", 5)
+    max_age_hours = config.get("max_age_hours", 24)
 
-    # Match tracks to Last.fm
+    # Create service connectors
     lastfm = LastFmConnector(username=username)
-    match_results = await batch_match_tracks(
-        tracklist.tracks,
-        lastfm,
-        username=username or lastfm.username,
-        batch_size=batch_size,
-        concurrency=concurrency,
+    musicbrainz = (
+        MusicBrainzConnector() if config.get("use_musicbrainz", True) else None
     )
 
+    # Execute database-first resolution within a session
+    async with get_session() as session:
+        # Create repository with the active session
+        track_repo = TrackRepository(session)
+
+        # Run the matcher with the repository
+        match_results = await batch_match_tracks(
+            tracklist.tracks,
+            lastfm,
+            track_repo=track_repo,
+            musicbrainz_connector=musicbrainz,
+            username=username,
+            max_age_hours=max_age_hours,
+            batch_size=batch_size,
+            concurrency=concurrency,
+        )
+
+    # Calculate success metrics
     successful_matches = sum(1 for r in match_results.values() if r.success)
+    total_tracks = len(tracklist.tracks)
+    db_sourced = sum(
+        1
+        for r in match_results.values()
+        if r.success and r.mapping and r.mapping.match_method == "database"
+    )
+
+    # Update tracks with play counts
+    updated_tracks = []
+    for track in tracklist.tracks:
+        if track.id in match_results and match_results[track.id].success:
+            result = match_results[track.id]
+            # Use resolved track with updated mappings
+            updated_tracks.append(result.track)
+        else:
+            updated_tracks.append(track)
+
+    # Capture metrics in tracklist metadata
+    metrics = {}
+    for track_id, result in match_results.items():
+        if result.success and result.play_count:
+            metrics[str(track_id)] = result.user_play_count
+
+    # Create new tracklist with updated tracks and metrics
+    updated_tracklist = tracklist.with_tracks(updated_tracks)
+    updated_tracklist = updated_tracklist.with_metadata(
+        "metrics",
+        {
+            **updated_tracklist.metadata.get("metrics", {}),
+            "user_play_count": metrics,
+        },
+    )
 
     return {
-        "tracklist": tracklist,
+        "tracklist": updated_tracklist,
         "match_results": match_results,
-        "match_success_rate": f"{successful_matches}/{len(tracklist.tracks)}",
+        "db_resolution_count": db_sourced,
+        "api_resolution_count": successful_matches - db_sourced,
+        "match_success_rate": f"{successful_matches}/{total_tracks}",
         "operation": "lastfm_resolution",
     }
 

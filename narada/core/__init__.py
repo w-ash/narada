@@ -5,12 +5,7 @@ and business logic that power Narada's music integration capabilities.
 """
 
 # Import matcher functionality
-from narada.core.matcher import (
-    MatchResult,
-    batch_match_tracks,
-    match_track,
-    resolve_mbid_from_isrc,
-)
+from narada.core.matcher import MatchResult, batch_match_tracks
 
 # Import core domain models
 from narada.core.models import Artist, ConnectorTrackMapping, Playlist, Track, TrackList
@@ -60,9 +55,7 @@ __all__ = [
     "filter_duplicates",
     "interleave",
     "limit",
-    "match_track",
     "rename",
-    "resolve_mbid_from_isrc",
     "sample_random",
     "select_by_method",
     "set_description",
