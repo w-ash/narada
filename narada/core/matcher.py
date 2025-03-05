@@ -20,15 +20,15 @@ T = TypeVar("T", bound=Track)
 # Resolution configuration
 RESOLUTION_CONFIG = {
     "confidence": {
-        "isrc_mbid": 95,  # ISRC→MBID path
-        "direct": 85,  # Artist/title path
-        "database": 98,  # Database-sourced (highest confidence)
-        "duration_missing": 5,
+        "mbid": 95,  # MusicBrainz ID matching (high confidence)
+        "artist_title": 85,  # Direct artist+title matching
+        "cached": 98,  # Database-sourced previous matches (highest confidence)
+        "duration_missing": 5,  # Penalty for incomplete metadata
     },
-    "methods": {
-        "isrc_mbid": "isrc_mbid",
-        "direct": "direct",
-        "database": "database",
+    "matching_methods": {  # Renamed from "methods" to "matching_methods"
+        "isrc_mbid": "mbid",  # ISRC→MBID path maps to mbid
+        "direct": "artist_title",  # Direct lookup maps to artist_title
+        "database": "cached",  # Database lookup maps to cached
     },
 }
 
@@ -63,7 +63,7 @@ async def batch_match_tracks(
     batch_size: int = 50,
     concurrency: int = 10,
 ) -> dict[int, MatchResult]:
-    """Match tracks using adaptive database-first or API-only strategy."""
+    """Match tracks with adaptive database-first or API-only strategy."""
     if not tracks:
         return {}
 
@@ -87,7 +87,6 @@ async def batch_match_tracks(
                 track_repo.get_track_metrics(
                     track_ids,
                     metric_type="user_play_count",
-                    user_id=username or "default",
                     max_age_hours=max_age_hours,
                 ),
             )
@@ -111,8 +110,12 @@ async def batch_match_tracks(
                         mapping=ConnectorTrackMapping(
                             connector_name="lastfm",
                             connector_track_id=lastfm_url,
-                            match_method=RESOLUTION_CONFIG["methods"]["database"],
-                            confidence=RESOLUTION_CONFIG["confidence"]["database"],
+                            match_method=RESOLUTION_CONFIG["matching_methods"][
+                                "database"
+                            ],  # Updated to use matching_methods
+                            confidence=RESOLUTION_CONFIG["confidence"][
+                                "cached"
+                            ],  # Updated confidence key
                             metadata={"user_play_count": play_count},
                         ),
                         success=True,
@@ -131,10 +134,52 @@ async def batch_match_tracks(
     if tracks_to_resolve:
         logger.info(f"API resolution: processing {len(tracks_to_resolve)} tracks")
 
-        # Create semaphore for concurrency control
+        # Phase 2.1: Batch MBID resolution for tracks with ISRCs
+        track_mbid_map = {}
+        if musicbrainz_connector:
+            # Collect tracks with ISRCs but without MBIDs
+            tracks_with_isrc = {
+                t.id: t.isrc
+                for t in tracks_to_resolve
+                if t.isrc
+                and t.id is not None
+                and "musicbrainz" not in t.connector_track_ids
+            }
+
+            if tracks_with_isrc:
+                # Execute batch ISRC lookup
+                logger.info(f"Batch resolving {len(tracks_with_isrc)} ISRCs to MBIDs")
+                isrcs = list(tracks_with_isrc.values())
+                try:
+                    isrc_to_mbid = await musicbrainz_connector.batch_isrc_lookup(isrcs)
+
+                    # Map back to track IDs
+                    for track_id, isrc in tracks_with_isrc.items():
+                        if isrc in isrc_to_mbid:
+                            mbid = isrc_to_mbid[isrc]
+                            track_mbid_map[track_id] = mbid
+                            logger.debug(
+                                "MBID resolution successful",
+                                track_id=track_id,
+                                isrc=isrc,
+                                mbid=mbid,
+                            )
+                        else:
+                            logger.debug(
+                                "Failed to resolve MBID for track",
+                                track_id=track_id,
+                                isrc=isrc,
+                            )
+
+                    logger.info(
+                        f"Resolved {len(track_mbid_map)}/{len(tracks_with_isrc)} tracks via ISRC→MBID",
+                    )
+                except Exception as e:
+                    logger.warning(f"Batch MBID resolution error: {e}")
+
+        # Create semaphore for Last.fm API concurrency control
         semaphore = asyncio.Semaphore(concurrency)
 
-        # Single-track resolution function (extracted from previous match_track)
         async def resolve_track(track: Track) -> tuple[int | None, MatchResult]:
             """Resolve a single track via API."""
             async with semaphore:
@@ -153,40 +198,39 @@ async def batch_match_tracks(
                 match_method = None
                 updated_track = track
 
-                # Strategy 1: ISRC → MBID → Last.fm
-                if track.isrc and musicbrainz_connector:
-                    # Find MBID
-                    mbid = None
-                    if "musicbrainz" in track.connector_track_ids:
-                        mbid = track.connector_track_ids["musicbrainz"]
-                    else:
-                        try:
-                            recording = (
-                                await musicbrainz_connector.get_recording_by_isrc(
-                                    track.isrc,
-                                )
-                            )
-                            if recording and "id" in recording:
-                                mbid = recording["id"]
-                                updated_track = updated_track.with_connector_track_id(
-                                    "musicbrainz",
-                                    mbid,
-                                )
-                        except Exception as e:
-                            logger.error(
-                                f"MBID resolution error: {e}",
-                                track_id=track.id,
-                            )
+                # Apply pre-resolved MBID if available
+                mbid = None
+                if track.id in track_mbid_map:
+                    mbid = track_mbid_map[track.id]
+                    updated_track = updated_track.with_connector_track_id(
+                        "musicbrainz",
+                        mbid,
+                    )
+                    logger.debug(
+                        "Using pre-resolved MBID",
+                        track_id=track.id,
+                        mbid=mbid,
+                    )
+                elif "musicbrainz" in track.connector_track_ids:
+                    mbid = track.connector_track_ids["musicbrainz"]
 
-                    # Use MBID to get play count
-                    if mbid:
-                        play_count = await lastfm_connector.get_mbid_play_count(
-                            mbid,
-                            username,
+                # Strategy 1: MBID → Last.fm
+                if mbid:
+                    play_count = await lastfm_connector.get_mbid_play_count(
+                        mbid,
+                        username,
+                    )
+                    if play_count and play_count.track_url:
+                        confidence = RESOLUTION_CONFIG["confidence"]["mbid"]
+                        match_method = RESOLUTION_CONFIG["matching_methods"][
+                            "isrc_mbid"
+                        ]
+                        logger.debug(
+                            "Matched via MBID",
+                            track_id=track.id,
+                            mbid=mbid,
+                            play_count=play_count.user_play_count,
                         )
-                        if play_count and play_count.track_url:
-                            confidence = RESOLUTION_CONFIG["confidence"]["isrc_mbid"]
-                            match_method = RESOLUTION_CONFIG["methods"]["isrc_mbid"]
 
                 # Strategy 2: Direct artist/title matching
                 if not play_count or not play_count.track_url:
@@ -196,11 +240,23 @@ async def batch_match_tracks(
                         username,
                     )
                     if play_count and play_count.track_url:
-                        confidence = RESOLUTION_CONFIG["confidence"]["direct"]
-                        match_method = RESOLUTION_CONFIG["methods"]["direct"]
+                        confidence = RESOLUTION_CONFIG["confidence"]["artist_title"]
+                        match_method = RESOLUTION_CONFIG["matching_methods"]["direct"]
+                        logger.debug(
+                            "Matched via artist/title",
+                            track_id=track.id,
+                            artist=artist_name,
+                            title=track.title,
+                            play_count=play_count.user_play_count,
+                        )
 
                 # Handle no match found
                 if not play_count or not play_count.track_url:
+                    logger.debug(
+                        "No Last.fm match found",
+                        track_id=track.id,
+                        title=track.title,
+                    )
                     return track.id, MatchResult(track=updated_track, success=False)
 
                 # Adjust confidence for missing metadata
@@ -227,7 +283,7 @@ async def batch_match_tracks(
                     success=True,
                 )
 
-        # Process tracks in batches
+        # Process remaining tracks in batches for Last.fm resolution
         for batch_start in range(0, len(tracks_to_resolve), batch_size):
             batch = tracks_to_resolve[batch_start : batch_start + batch_size]
             batch_tasks = [resolve_track(track) for track in batch]
@@ -256,10 +312,11 @@ async def batch_match_tracks(
                 not result.success
                 or not result.mapping
                 or result.mapping.match_method
-                == RESOLUTION_CONFIG["methods"]["database"]
+                == RESOLUTION_CONFIG["matching_methods"]["database"]
             ):
                 continue
 
+            # Add connector mappings
             mappings_to_save.append((
                 track_id,
                 result.mapping.connector_name,
@@ -269,6 +326,18 @@ async def batch_match_tracks(
                 result.mapping.metadata,
             ))
 
+            # Add MusicBrainz mapping if available
+            if result.track.connector_track_ids.get("musicbrainz"):
+                mappings_to_save.append((
+                    track_id,
+                    "musicbrainz",
+                    result.track.connector_track_ids["musicbrainz"],
+                    90,  # High confidence for MBID mappings
+                    "isrc",
+                    {},
+                ))
+
+            # Add metrics if available
             if result.play_count:
                 metrics_to_save.append((
                     track_id,
@@ -288,7 +357,10 @@ async def batch_match_tracks(
             if metrics_to_save:
                 persist_tasks.append(track_repo.save_track_metrics(metrics_to_save))
 
-            await asyncio.gather(*persist_tasks)
+            # Await all tasks at once for parallel execution
+            if persist_tasks:
+                await asyncio.gather(*persist_tasks)
+
             logger.info(
                 f"Persisted {len(mappings_to_save)} mappings and {len(metrics_to_save)} metrics",
             )
@@ -299,14 +371,17 @@ async def batch_match_tracks(
         for r in results.values()
         if r.success
         and r.mapping
-        and r.mapping.match_method == RESOLUTION_CONFIG["methods"]["database"]
+        and r.mapping.match_method
+        == RESOLUTION_CONFIG["matching_methods"][
+            "database"
+        ]  # Updated to use matching_methods
     )
     api_matched = sum(
         1
         for r in results.values()
         if r.success
         and r.mapping
-        and r.mapping.match_method != RESOLUTION_CONFIG["methods"]["database"]
+        and r.mapping.match_method != RESOLUTION_CONFIG["matching_methods"]["database"]
     )
 
     logger.info(

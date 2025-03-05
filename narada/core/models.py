@@ -7,6 +7,7 @@ enforcing invariants while enabling functional transformation patterns.
 from datetime import datetime
 from typing import Any, TypeVar
 
+import attr
 from attrs import define, field, validators
 
 # Type variables for generic operations
@@ -201,8 +202,15 @@ class ConnectorTrackMapping:
 
     connector_name: str = field(validator=validators.instance_of(str))
     connector_track_id: str = field(validator=validators.instance_of(str))
-    match_method: str = field(
-        validator=validators.in_(["direct", "isrc", "mbid", "artist_title", "fuzzy"]),
+    match_method: str = attr.field(
+        validator=attr.validators.in_([
+            "direct",
+            "isrc",
+            "mbid",
+            "artist_title",
+            "fuzzy",
+            "cached",
+        ]),
     )
     confidence: int = field(
         validator=[validators.instance_of(int), validators.ge(0), validators.le(100)],

@@ -93,7 +93,7 @@ async def _check_musicbrainz() -> tuple[bool, str]:
 
     connector = MusicBrainzConnector()
     try:
-        recording = await connector.get_recording_by_isrc("USSM18900468")
+        recording = await connector.batch_isrc_lookup(["USSM18900468"])
         match recording:
             case {"id": _}:
                 return True, "API connected (rate limited to 1 req/sec)"

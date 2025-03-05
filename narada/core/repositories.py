@@ -354,40 +354,44 @@ class TrackRepository(BaseRepository[DBTrack]):
             return {}
 
         try:
-            # Build query for mappings with SQLAlchemy 2.0 style
-            stmt = select(DBTrackMapping).where(
-                DBTrackMapping.track_id.in_(track_ids),
-                DBTrackMapping.is_deleted == False,  # noqa: E712
-            )
+            from narada.data.database import get_session
 
-            # Add connector filter if specified
-            if connector:
-                stmt = stmt.where(DBTrackMapping.connector_name == connector)
-
-            # Execute query
-            result = await self.session.execute(stmt)
-            mappings = result.scalars().all()
-
-            # Organize results by track_id
-            mapping_dict: dict[int, dict[str, str]] = {}
-            for mapping in mappings:
-                if mapping.track_id not in mapping_dict:
-                    mapping_dict[mapping.track_id] = {}
-                mapping_dict[mapping.track_id][mapping.connector_name] = (
-                    mapping.connector_id
+            # Use a fresh session to avoid transaction issues
+            async with get_session() as session:
+                # Build the base query within the session's transaction
+                stmt = select(
+                    DBTrackMapping.track_id,
+                    DBTrackMapping.connector_name,
+                    DBTrackMapping.connector_id,
+                ).where(
+                    DBTrackMapping.track_id.in_(track_ids),
+                    DBTrackMapping.is_deleted == False,  # noqa: E712
                 )
 
-            return mapping_dict
+                # Add connector filter if specified
+                if connector:
+                    stmt = stmt.where(DBTrackMapping.connector_name == connector)
+
+                # Execute the query
+                results = await session.execute(stmt)
+
+                # Process the results while still in the transaction
+                mappings = {}
+                for track_id, connector_name, connector_id in results:
+                    if track_id not in mappings:
+                        mappings[track_id] = {}
+                    mappings[track_id][connector_name] = connector_id
+
+                return mappings
 
         except Exception as e:
-            logger.exception(f"Error fetching connector mappings: {e}")
+            logger.error(f"Error fetching connector mappings: {e}")
             return {}
 
     async def get_track_metrics(
         self,
         track_ids: list[int],
         metric_type: str = "play_count",
-        user_id: str | None = None,
         max_age_hours: int = 24,
     ) -> dict[int, int]:
         """Get cached metrics with TTL awareness.
@@ -395,7 +399,6 @@ class TrackRepository(BaseRepository[DBTrack]):
         Args:
             track_ids: List of track IDs to fetch metrics for
             metric_type: Type of metric to fetch (default: play_count)
-            user_id: Optional user ID to filter metrics by
             max_age_hours: Maximum age of metrics in hours
 
         Returns:
@@ -406,38 +409,31 @@ class TrackRepository(BaseRepository[DBTrack]):
 
         try:
             # Calculate cutoff timestamp for TTL
+            cutoff = func.now() - timedelta(hours=max_age_hours)
 
-            cutoff = datetime.datetime.now(datetime.UTC) - timedelta(
-                hours=max_age_hours,
-            )
-
-            # Build query for play counts with time filter
-            stmt = select(DBPlayCount).where(
+            # Build query directly - no need for separate transaction
+            stmt = select(DBPlayCount.track_id, DBPlayCount.play_count).where(
                 DBPlayCount.track_id.in_(track_ids),
-                DBPlayCount.is_deleted == False,  # noqa: E712
                 DBPlayCount.last_updated >= cutoff,
+                DBPlayCount.is_deleted == False,  # noqa: E712
             )
 
-            # Add user filter if specified
-            if user_id:
-                stmt = stmt.where(DBPlayCount.user_id == user_id)
+            # Execute the query directly in the current transaction
+            results = await self.session.execute(stmt)
 
-            # Execute query
-            result = await self.session.execute(stmt)
-            play_counts = result.scalars().all()
+            # Process results within the current transaction context
+            metrics_dict = {track_id: play_count for track_id, play_count in results}  # noqa: C416
 
-            # Organize results by track_id (user or global play count based on metric_type)
-            metrics_dict = {}
-            for pc in play_counts:
-                if metric_type == "user_play_count":
-                    metrics_dict[pc.track_id] = pc.user_play_count
-                else:
-                    metrics_dict[pc.track_id] = pc.play_count
+            logger.debug(
+                f"Retrieved {len(metrics_dict)}/{len(track_ids)} track metrics",
+                metric_type=metric_type,
+                max_age_hours=max_age_hours,
+            )
 
             return metrics_dict
 
         except Exception as e:
-            logger.exception(f"Error fetching track metrics: {e}")
+            logger.error(f"Error fetching track metrics: {e}")
             return {}
 
     async def save_connector_mappings(
@@ -454,63 +450,53 @@ class TrackRepository(BaseRepository[DBTrack]):
             return
 
         try:
-            # Begin a transaction
-            async with self.session.begin():
-                # Check for existing mappings to avoid duplicates
-                track_ids = [m[0] for m in mappings]
-                connectors = {m[1] for m in mappings}
+            # Process each mapping within the existing transaction
+            for (
+                track_id,
+                connector_name,
+                connector_id,
+                confidence,
+                match_method,
+                metadata,
+            ) in mappings:
+                # Look for existing mapping
+                stmt = select(DBTrackMapping).where(
+                    DBTrackMapping.track_id == track_id,
+                    DBTrackMapping.connector_name == connector_name,
+                    DBTrackMapping.is_deleted == False,  # noqa: E712
+                )
 
-                # Get existing mappings
-                existing_mappings = {}
-                for connector in connectors:
-                    connector_mappings = await self.get_connector_mappings(
-                        track_ids,
-                        connector,
-                    )
-                    for track_id, conn_map in connector_mappings.items():
-                        if track_id not in existing_mappings:
-                            existing_mappings[track_id] = {}
-                        existing_mappings[track_id].update(conn_map)
+                # Execute directly in the current transaction
+                result = await self.session.execute(stmt)
+                existing = result.scalar_one_or_none()
 
-                now = datetime.datetime.now(datetime.UTC)
-                new_mappings = []
-
-                for (
-                    track_id,
-                    connector,
-                    connector_id,
-                    confidence,
-                    method,
-                    metadata,
-                ) in mappings:
-                    # Skip if this exact mapping already exists
-                    if (
-                        track_id in existing_mappings
-                        and connector in existing_mappings[track_id]
-                        and existing_mappings[track_id][connector] == connector_id
-                    ):
-                        continue
-
+                if existing:
+                    # Update existing mapping
+                    existing.connector_id = connector_id
+                    existing.confidence = confidence
+                    existing.match_method = match_method
+                    existing.connector_metadata = metadata
+                    existing.last_verified = func.now()
+                else:
                     # Create new mapping
-                    mapping = DBTrackMapping(
+                    new_mapping = DBTrackMapping(
                         track_id=track_id,
-                        connector_name=connector,
+                        connector_name=connector_name,
                         connector_id=connector_id,
-                        match_method=method,
                         confidence=confidence,
+                        match_method=match_method,
                         connector_metadata=metadata,
-                        last_verified=now,
+                        last_verified=func.now(),
                     )
-                    new_mappings.append(mapping)
+                    self.session.add(new_mapping)
 
-                # Bulk insert if we have new mappings
-                if new_mappings:
-                    self.session.add_all(new_mappings)
+            # Flush changes without committing (let outer transaction handle commit)
+            await self.session.flush()
 
-                await self.session.flush()
+            logger.debug(f"Saved {len(mappings)} connector mappings")
 
         except Exception as e:
-            logger.exception(f"Error saving connector mappings: {e}")
+            logger.error(f"Error saving connector mappings: {e}")
             raise
 
     async def save_track_metrics(
@@ -527,71 +513,40 @@ class TrackRepository(BaseRepository[DBTrack]):
             return
 
         try:
-            # Begin a transaction
-            async with self.session.begin():
-                # Group metrics by track_id and user_id for efficient upsert
-                now = datetime.datetime.now(datetime.UTC)
-                new_metrics = []
-                updates = []
-
-                # First check what exists already
-                track_user_pairs = [(m[0], m[1]) for m in metrics]
-
-                # Build efficient query to find existing records
-                from sqlalchemy import tuple_
-
+            # Process each metric
+            for track_id, user_id, _, play_count, user_play_count in metrics:
+                # Look for existing metric
                 stmt = select(DBPlayCount).where(
-                    tuple_(DBPlayCount.track_id, DBPlayCount.user_id).in_(
-                        track_user_pairs,
-                    ),
+                    DBPlayCount.track_id == track_id,
+                    DBPlayCount.user_id == user_id,
                     DBPlayCount.is_deleted == False,  # noqa: E712
                 )
 
+                # Execute within existing transaction
                 result = await self.session.execute(stmt)
-                existing = {
-                    (pc.track_id, pc.user_id): pc for pc in result.scalars().all()
-                }
+                existing = result.scalar_one_or_none()
 
-                # Process each metric
-                for (
-                    track_id,
-                    user_id,
-                    _metric_type,
-                    play_count,
-                    user_play_count,
-                ) in metrics:
-                    key = (track_id, user_id)
+                if existing:
+                    # Update existing metric
+                    existing.play_count = play_count
+                    existing.user_play_count = user_play_count
+                    existing.last_updated = func.now()
+                else:
+                    # Create new metric
+                    new_metric = DBPlayCount(
+                        track_id=track_id,
+                        user_id=user_id,
+                        play_count=play_count,
+                        user_play_count=user_play_count,
+                        last_updated=func.now(),
+                    )
+                    self.session.add(new_metric)
 
-                    if key in existing:
-                        # Update existing record
-                        play_count_obj = existing[key]
-                        play_count_obj.play_count = play_count
-                        play_count_obj.user_play_count = user_play_count
-                        play_count_obj.last_updated = now
-                        updates.append(play_count_obj)
-                    else:
-                        # Create new record
-                        play_count_obj = DBPlayCount(
-                            track_id=track_id,
-                            user_id=user_id,
-                            play_count=play_count,
-                            user_play_count=user_play_count,
-                            last_updated=now,
-                        )
-                        new_metrics.append(play_count_obj)
-
-                # Bulk save all at once
-                if updates:
-                    for update in updates:
-                        self.session.add(update)
-
-                if new_metrics:
-                    self.session.add_all(new_metrics)
-
-                await self.session.flush()
+            # Flush changes to database but don't commit (let outer transaction handle it)
+            await self.session.flush()
 
         except Exception as e:
-            logger.exception(f"Error saving track metrics: {e}")
+            logger.error(f"Error saving track metrics: {e}")
             raise
 
     async def save_track(self, track: Track) -> Track:

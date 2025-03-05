@@ -8,7 +8,7 @@
       "id": "source",
       "type": "source.spotify_playlist",
       "config": {
-        "playlist_id": "2CupvTx2VRLdvk5EAf7jKd"
+        "playlist_id": "6OQ6j01vhUZJzitkpo36C7"
       }
     },
     {
@@ -27,7 +27,7 @@
       "type": "sorter.by_user_plays",
       "config": {
         "reverse": true,
-        "min_confidence": 60
+        "min_confidence": 80
       },
       "upstream": [
         "enrich"
