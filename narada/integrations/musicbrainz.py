@@ -8,7 +8,6 @@ import backoff
 import musicbrainzngs
 
 from narada.config import get_logger, resilient_operation
-from narada.core.protocols import ConnectorConfig, ExtractorProtocol
 
 # Get contextual logger with service binding
 logger = get_logger(__name__).bind(service="musicbrainz")
@@ -169,34 +168,18 @@ class MusicBrainzConnector:
         return recordings[0] if recordings else None
 
 
-def get_extractors() -> dict[str, ExtractorProtocol]:
-    """Return standardized extractors for MusicBrainz resources."""
+def get_connector_config():
+    """MusicBrainz connector configuration."""
     return {
-        "title": lambda result, _: result.get("title", ""),
-        "artist": lambda result, _: (
-            result.get("artist-credit", [{}])[0].get("name", "")
-            if result.get("artist-credit")
-            else ""
-        ),
-        "mbid": lambda result, _: result.get("id", ""),
-        "release_date": lambda result, _: result.get("date", ""),
-        "tags": lambda result, _: [tag.get("name") for tag in result.get("tags", [])],
-    }
-
-
-def get_canonical_metrics() -> dict[str, str]:
-    """Return canonical metric mappings for MusicBrainz."""
-    return {
-        "rating": "popularity",
-        "tags": "genres",
-    }
-
-
-def get_connector_config() -> ConnectorConfig:
-    """Return connector configuration for MusicBrainz integration."""
-    return {
-        "extractors": get_extractors(),
-        "metrics": get_canonical_metrics(),
+        "extractors": {
+            "mbid": lambda obj: obj.get("id", "")
+            if isinstance(obj, dict)
+            else getattr(obj, "id", ""),
+            "title": lambda obj: obj.get("title", "")
+            if isinstance(obj, dict)
+            else getattr(obj, "title", ""),
+        },
         "dependencies": [],
-        "factory": lambda _: MusicBrainzConnector(),  # Use _ for unused param
+        "factory": lambda _params: MusicBrainzConnector(),
+        "metrics": {"rating": "popularity"},
     }

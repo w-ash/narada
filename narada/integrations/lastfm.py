@@ -9,7 +9,6 @@ import pylast
 
 from narada.config import get_logger, resilient_operation
 from narada.core.models import Artist, Track
-from narada.core.protocols import ConnectorConfig, ExtractorProtocol
 
 # Get contextual logger with service binding
 logger = get_logger(__name__).bind(service="lastfm")
@@ -320,32 +319,18 @@ def convert_lastfm_track_to_domain(lastfm_track: pylast.Track) -> Track:
         raise ValueError(f"Cannot convert Last.fm track: {e}") from e
 
 
-def get_extractors() -> dict[str, ExtractorProtocol]:
-    """Return standardized extractors for Last.fm resources."""
+def get_connector_config():
+    """LastFM connector configuration."""
     return {
-        "title": lambda result, _: result.get("name", ""),
-        "artist": lambda result, _: result.get("artist", {}).get("name", ""),
-        "user_play_count": lambda result, _: result.get("userplaycount", 0),
-        "play_count": lambda result, _: result.get("playcount", 0),
-        "listeners": lambda result, _: result.get("listeners", 0),
-        "mbid": lambda result, _: result.get("mbid", ""),
-    }
-
-
-def get_canonical_metrics() -> dict[str, str]:
-    """Return canonical metric mappings for Last.fm."""
-    return {
-        "playcount": "play_count",
-        "userplaycount": "user_play_count",
-        "listeners": "audience_size",
-    }
-
-
-def get_connector_config() -> ConnectorConfig:
-    """Return connector configuration for Last.fm integration."""
-    return {
-        "extractors": get_extractors(),
-        "metrics": get_canonical_metrics(),
-        "dependencies": ["auth", "spotify"],
-        "factory": lambda _: LastFmConnector(),  # Use _ for unused param
+        "extractors": {
+            "user_play_count": lambda obj: obj.play_count.user_play_count
+            if hasattr(obj, "play_count")
+            else obj.get("userplaycount", 0),
+            "global_play_count": lambda obj: obj.play_count.global_play_count
+            if hasattr(obj, "play_count")
+            else obj.get("playcount", 0),
+        },
+        "dependencies": ["musicbrainz"],
+        "factory": lambda params: LastFmConnector(params.get("username")),
+        "metrics": {"user_play_count": "play_count"},
     }

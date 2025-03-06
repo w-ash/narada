@@ -12,7 +12,6 @@ from spotipy.oauth2 import SpotifyOAuth
 
 from narada.config import get_logger, resilient_operation
 from narada.core.models import Artist, Playlist, Track
-from narada.core.protocols import ConnectorConfig, ExtractorProtocol
 
 # Get contextual logger with service binding
 logger = get_logger(__name__).bind(service="spotify")
@@ -271,33 +270,20 @@ def convert_spotify_playlist_to_domain(spotify_playlist: dict[str, Any]) -> Play
     return playlist.with_connector_track_id("spotify", spotify_playlist["id"])
 
 
-def get_extractors() -> dict[str, ExtractorProtocol]:
-    """Return standardized extractors for Spotify resources."""
+def get_connector_config():
+    """Spotify connector configuration."""
     return {
-        "title": lambda result, _: result.get("name", ""),
-        "artist": lambda result, _: result.get("artists", [{}])[0].get("name", ""),
-        "album": lambda result, _: result.get("album", {}).get("name", ""),
-        "popularity": lambda result, _: result.get("popularity", 0),
-        "duration_ms": lambda result, _: result.get("duration_ms", 0),
-        "preview_url": lambda result, _: result.get("preview_url", ""),
-        "uri": lambda result, _: result.get("uri", ""),
-    }
-
-
-def get_canonical_metrics() -> dict[str, str]:
-    """Return canonical metric mappings for Spotify."""
-    return {
-        "popularity": "popularity",
-        "followers": "audience_size",
-        "duration_ms": "duration",
-    }
-
-
-def get_connector_config() -> ConnectorConfig:
-    """Return connector configuration for Spotify integration."""
-    return {
-        "extractors": get_extractors(),
-        "metrics": get_canonical_metrics(),
+        "extractors": {
+            # Smart extractors that handle both object types
+            "popularity": lambda obj: obj.get_connector_attribute(
+                "spotify",
+                "popularity",
+                0,
+            )
+            if hasattr(obj, "get_connector_attribute")
+            else obj.get("popularity", 0),
+        },
         "dependencies": ["auth"],
-        "factory": lambda _: SpotifyConnector(),
+        "factory": lambda _params: SpotifyConnector(),
+        "metrics": {"popularity": "popularity"},
     }

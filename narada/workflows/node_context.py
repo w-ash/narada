@@ -5,132 +5,70 @@ implementing efficient path-based access to nested domain structures.
 This module decouples data access patterns from orchestration logic.
 """
 
-from collections.abc import Sequence
 from dataclasses import dataclass
-from functools import cached_property
-from typing import Any, Self
+from typing import Any
 
-from narada.core.protocols import Track
+from narada.config import get_logger
+from narada.core.models import TrackList
 
 # Domain types
-type TrackList = list[Track]
 type TaskID = str
 type DataPath = str | list[str]
 type ContextData = dict[str, Any]
 
+logger = get_logger(__name__)
+
 
 @dataclass(frozen=True)
 class Context:
-    """Immutable extraction context with path-based access patterns.
+    """Context extractor with path-based access."""
 
-    Encapsulates data extraction strategies for nested workflow data,
-    providing a consistent interface for accessing domain objects.
-    """
+    data: dict
 
-    data: ContextData
+    def __init__(self, data: dict) -> None:
+        object.__setattr__(self, "data", data)
 
-    def extract(self, path: DataPath) -> Any:
-        """Extract value from nested data structure using path notation.
-
-        Args:
-            path: Dot notation string or list of path segments
-
-        Returns:
-            Extracted value or None if path doesn't exist
-
-        Example:
-            >>> ctx.extract("results.spotify.tracks")
-            [{"title": "Song1", ...}, {"title": "Song2", ...}]
-        """
-        segments = path.split(".") if isinstance(path, str) else path
-
-        # Use walrus operator with pattern matching for elegant traversal
-        if value := self.data:
-            for segment in segments:
-                match value:
-                    case dict() if segment in value:
-                        value = value[segment]
-                    case _:
-                        return None
-            return value
-        return None
+    def get(self, path: str, default: Any = None) -> Any:
+        """Get value from nested context using dot notation."""
+        parts = path.split(".")
+        current = self.data
+        for part in parts:
+            if not isinstance(current, dict) or part not in current:
+                return default
+            current = current[part]
+        return current
 
     def extract_tracklist(self) -> TrackList:
-        """Extract primary tracklist from context.
+        """Extract primary tracklist from context."""
+        if "upstream_task_id" in self.data:
+            upstream_id = self.data["upstream_task_id"]
+            if upstream_id in self.data and "tracklist" in self.data[upstream_id]:
+                return self.data[upstream_id]["tracklist"]
 
-        Returns:
-            List of track objects from primary result
-        """
-        match self.data:
-            case {"result": {"tracks": tracks}} if isinstance(tracks, list):
-                return tracks
-            case {"tracks": tracks} if isinstance(tracks, list):
-                return tracks
-            case _:
-                return []
+        raise ValueError("Missing required tracklist from upstream node")
 
-    def extract_task_result(self, task_id: TaskID) -> Any:
-        """Extract specific task result from the context.
+    def collect_tracklists(self, task_ids: list[str]) -> list[TrackList]:
+        """Collect tracklists from multiple task results."""
+        tracklists = []
+        for task_id in task_ids:
+            if task_id not in self.data:
+                logger.warning(f"Task ID not found in context: {task_id}")
+                continue
 
-        Args:
-            task_id: Identifier of the task to extract
+            task_result = self.data[task_id]
+            if not isinstance(task_result, dict) or not isinstance(
+                task_result.get("tracklist"),
+                list,
+            ):
+                logger.warning(
+                    f"Missing or invalid tracklist in task result: {task_id}",
+                )
+                continue
 
-        Returns:
-            Task result or None if not found
-        """
-        return self.extract(f"task_results.{task_id}")
+            tracklists.append(task_result["tracklist"])
 
-    @cached_property
-    def metadata(self) -> dict[str, Any]:
-        """Extract and cache metadata from context.
+        if not tracklists:
+            # This should raise an exception rather than just logging
+            raise ValueError(f"No valid tracklists found in upstream tasks: {task_ids}")
 
-        Returns:
-            Consolidated metadata dictionary
-        """
-        return self.extract("metadata") or {}
-
-    def collect_tracklists(self, task_ids: Sequence[TaskID]) -> list[TrackList]:
-        """Collect tracklists from multiple task results.
-
-        Args:
-            task_ids: Sequence of task IDs to collect tracklists from
-
-        Returns:
-            List of tracklists from specified tasks
-        """
-        return [
-            tracks
-            for task_id in task_ids
-            if (result := self.extract_task_result(task_id))
-            and (tracks := self._extract_tracks_from_result(result))
-        ]
-
-    def create_child(self, data: ContextData) -> Self:
-        """Create a child context with new data, inheriting parent context.
-
-        Args:
-            data: New data to merge with existing context
-
-        Returns:
-            New context instance with merged data
-        """
-        return type(self)({**self.data, **data})
-
-    def _extract_tracks_from_result(self, result: Any) -> TrackList:
-        """Extract tracks from a task result using pattern matching.
-
-        Args:
-            result: Task result to extract tracks from
-
-        Returns:
-            List of track objects or empty list if not found
-        """
-        match result:
-            case {"tracks": tracks} if isinstance(tracks, list):
-                return tracks
-            case {"result": {"tracks": tracks}} if isinstance(tracks, list):
-                return tracks
-            case list() if all(isinstance(item, dict) for item in result):
-                return result
-            case _:
-                return []
+        return tracklists

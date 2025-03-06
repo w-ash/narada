@@ -6,12 +6,14 @@ minimizes code surface area while maintaining maximum flexibility.
 """
 
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol, TypedDict
+import importlib
+from typing import Any
 
 from narada.config import get_logger
 from narada.core.matcher import MatchResult, batch_match_tracks, create_engine
 from narada.core.models import Playlist, Track, TrackList
-from narada.core.repositories import TrackRepository
+from narada.core.protocols import ConnectorConfig
+from narada.core.repositories import PlaylistRepository, TrackRepository
 from narada.core.transforms import (
     concatenate,
     exclude_artists,
@@ -23,8 +25,10 @@ from narada.core.transforms import (
     sort_by_attribute,
 )
 from narada.data.database import get_session
+from narada.workflows.node_context import Context
 
 logger = get_logger(__name__)
+
 
 # === TYPE DEFINITIONS ===
 type NodeFn = Callable[[dict, dict], Awaitable[dict]]
@@ -35,124 +39,61 @@ type ResultExtractor = Callable[[MatchResult], Any]
 type AnyExtractor = TrackExtractor | ResultExtractor
 
 
-# === RESOLUTION ENGINE ===
-
-
-class Extractor(Protocol):
-    """Protocol for attribute extractors."""
-
-    def __call__(self, result: MatchResult, track: Track) -> Any: ...
-
-
-class ConnectorConfig(TypedDict):
-    """Configuration for a connector in the enricher."""
-
-    track_extractors: dict[str, TrackExtractor]
-    result_extractors: dict[str, ResultExtractor]
-    dependencies: list[str]
-    factory: Callable[[dict], Any]  # Factory function for creating connector instances
-    metrics: dict[str, str]
-
-
-# === CONTEXT HANDLING ===
-
-
-class Context:
-    """Context extractor with path-based access."""
-
-    def __init__(self, data: dict) -> None:
-        self.data = data
-
-    def get(self, path: str, default: Any = None) -> Any:
-        """Get value from nested context using dot notation."""
-        parts = path.split(".")
-        current = self.data
-        for part in parts:
-            if not isinstance(current, dict) or part not in current:
-                return default
-            current = current[part]
-        return current
-
-    def extract_tracklist(self) -> TrackList:
-        """Extract tracklist from upstream node."""
-        # Get the sole upstream task ID (assuming single input)
-        if "upstream_task_id" in self.data:
-            upstream_id = self.data["upstream_task_id"]
-            if upstream_id in self.data and "tracklist" in self.data[upstream_id]:
-                return self.data[upstream_id]["tracklist"]
-
-        raise ValueError("Missing required tracklist from upstream node")
-
-    def collect_tracklists(self, task_ids: list[str]) -> list[TrackList]:
-        """Collect tracklists from multiple task results."""
-        tracklists = []
-        for task_id in task_ids:
-            if task_id not in self.data:
-                logger.warning(f"Task ID not found in context: {task_id}")
-                continue
-
-            task_result = self.data[task_id]
-            if not isinstance(task_result, dict) or not isinstance(
-                task_result.get("tracklist"),
-                TrackList,
-            ):
-                logger.warning(
-                    f"Missing or invalid tracklist in task result: {task_id}",
-                )
-                continue
-
-            tracklists.append(task_result["tracklist"])
-
-        if not tracklists:
-            # This should raise an exception rather than just logging
-            raise ValueError(f"No valid tracklists found in upstream tasks: {task_ids}")
-
-        return tracklists
-
-
 # === CONNECTOR REGISTRY ===
 
-
-# Lightweight factory functions for creating extractors
-def track_attr(connector: str, attr: str, default: Any = None) -> TrackExtractor:
-    """Create an extractor that pulls from track connector metadata."""
-    return lambda t: t.get_connector_attribute(connector, attr, default)
+CONNECTORS: dict[str, ConnectorConfig] = {}
 
 
-def result_attr(attr: str) -> ResultExtractor:
-    """Create an extractor that pulls from match result."""
-    # Create property accessors with improved safety
-    if attr == "user_play_count":
-        return lambda r: r.play_count.user_play_count if r.play_count else 0
-    elif attr == "global_play_count":
-        return lambda r: r.play_count.global_play_count if r.play_count else 0
-    else:
-        return lambda r: getattr(r, attr, None)
+def discover_connectors() -> dict[str, ConnectorConfig]:
+    """Dynamically discover and register connector configurations.
+
+    Scans the integrations package for modules that implement the
+    connector interface (get_connector_config). This creates a clean
+    extension point for new connectors without modifying factory code.
+
+    Returns:
+        Dictionary mapping connector names to their configurations
+    """
+    if CONNECTORS:  # Return cached registry if already populated
+        return CONNECTORS
+
+    # Identify the integrations package
+    base_package = "narada.integrations"
+
+    try:
+        # Import the base package
+        package = importlib.import_module(base_package)
+
+        # Get all modules in the package
+        for module_name in getattr(package, "__all__", []) or []:
+            full_module_name = f"{base_package}.{module_name}"
+
+            try:
+                # Import the module
+                module = importlib.import_module(full_module_name)
+
+                # Check if module implements connector interface
+                if hasattr(module, "get_connector_config"):
+                    connector_name = module_name.split(".")[
+                        -1
+                    ]  # Extract name from path
+                    CONNECTORS[connector_name] = module.get_connector_config()
+                    logger.debug(f"Registered connector: {connector_name}")
+            except ImportError as e:
+                logger.warning(f"Could not import connector module {module_name}: {e}")
+
+    except ImportError as e:
+        logger.error(f"Error discovering connectors: {e}")
+
+    logger.info(
+        f"Discovered {len(CONNECTORS)} connectors: {', '.join(CONNECTORS.keys())}",
+    )
+    return CONNECTORS
 
 
-# Clean registry that explicitly separates extraction sources
-CONNECTORS: dict[str, ConnectorConfig] = {
-    "lastfm": {
-        "track_extractors": {},  # Last.fm doesn't need track extractors
-        "result_extractors": {
-            "user_play_count": result_attr("user_play_count"),
-            "global_play_count": result_attr("global_play_count"),
-        },
-        "dependencies": ["musicbrainz"],
-        "factory": lambda _params: None,  # Placeholder for LastFM connector factory
-        "metrics": {"user_play_count": "play_count"},
-    },
-    "spotify": {
-        "track_extractors": {
-            "popularity": track_attr("spotify", "popularity", 0),
-            "explicit": track_attr("spotify", "explicit", False),
-        },
-        "result_extractors": {},  # Spotify doesn't need result extractors
-        "dependencies": [],
-        "factory": lambda _params: None,  # Placeholder for Spotify connector factory
-        "metrics": {"popularity": "popularity"},
-    },
-}
+discover_connectors()
+
+
 # === TRANSFORM REGISTRY ===
 # This declarative approach maps node types to their implementations
 TRANSFORM_REGISTRY = {
@@ -298,75 +239,252 @@ def make_node(
 
 
 # === DESTINATION FACTORY ===
-async def destination_factory(
-    destination_type: str,
-    context: dict,
-    config: dict,
-) -> dict:
-    """Create destination node endpoints that persist tracklists to various platforms.
+# This should replace the current destination_factory function in node_factories.py
 
-    This factory function handles the final stage of a workflow by persisting tracks
-    to the database and creating/updating playlists in internal or external services.
-    It maintains metadata consistency through the workflow pipeline, ensuring that
-    metrics and track IDs are preserved in the returned tracklist.
 
-    Args:
-        destination_type: Type of destination ("internal", "spotify", "update_spotify")
-        context: Workflow execution context containing upstream results
-        config: Node-specific configuration with name, description, and other options
+class DestinationHandler:
+    """Strategic destination handler for workflow endpoints.
 
-    Returns:
-        Dictionary with operation details including:
-            - tracklist: TrackList with persisted database IDs and preserved metadata
-            - playlist_id: Internal database ID of created/updated playlist
-            - track_count: Number of tracks in the playlist
-            - operation: Description of the operation performed
-            - Any platform-specific IDs (e.g. spotify_playlist_id)
-
-    Raises:
-        ValueError: If destination_type is unsupported or required config is missing
+    Implements the Strategy pattern for destination operations, allowing for modular
+    extension of destination types without modifying core factory code.
     """
-    ctx = Context(context)
 
-    # Get the INPUT tracklist with all its metadata
-    input_tracklist = ctx.extract_tracklist()
+    def __init__(self):
+        self._strategies = {}
+        self._register_default_strategies()
 
-    logger = get_logger(__name__)
-    # Log detailed metrics information at destination entry point
-    logger.debug(
-        "Destination received tracklist metrics",
-        metrics_keys=list(input_tracklist.metadata.get("metrics", {}).keys()),
-        spotify_popularity_count=len(
-            input_tracklist.metadata.get("metrics", {}).get("spotify_popularity", {}),
-        ),
-        spotify_popularity_keys=list(
-            input_tracklist.metadata.get("metrics", {})
-            .get("spotify_popularity", {})
-            .keys(),
-        )[:5],
-        spotify_popularity_values=list(
-            input_tracklist.metadata.get("metrics", {})
-            .get("spotify_popularity", {})
-            .values(),
-        )[:5],
-    )
+    def _register_default_strategies(self):
+        """Register built-in destination strategies."""
+        self.register_strategy("internal", self._handle_internal_destination)
+        self.register_strategy("spotify", self._handle_spotify_destination)
+        self.register_strategy(
+            "update_spotify",
+            self._handle_update_spotify_destination,
+        )
 
-    name = config.get("name", "Narada Playlist")
-    description = config.get("description", "Created by Narada")
+    def register_strategy(self, destination_type: str, handler: Callable):
+        """Register a new destination strategy.
 
-    # Common persistence function
-    from narada.core.repositories import PlaylistRepository, TrackRepository
-    from narada.data.database import get_session
+        Args:
+            destination_type: Unique identifier for the destination type
+            handler: Async function handling the destination operation
+        """
+        self._strategies[destination_type] = handler
 
-    async def persist_tracks() -> tuple[list[Track], dict]:
-        """Persist tracks and return stats."""
+    async def handle_destination(
+        self,
+        destination_type: str,
+        context: dict,
+        config: dict,
+    ) -> dict:
+        """Process a destination based on registered strategies.
+
+        Args:
+            destination_type: Type of destination to handle
+            context: Workflow execution context
+            config: Node configuration params
+
+        Returns:
+            Operation result dictionary with tracklist and metadata
+
+        Raises:
+            ValueError: If destination_type has no registered strategy
+        """
+        if destination_type not in self._strategies:
+            raise ValueError(f"Unsupported destination type: {destination_type}")
+
+        ctx = Context(context)
+
+        # Get the INPUT tracklist with all its metadata
+        input_tracklist = ctx.extract_tracklist()
+
+        logger = get_logger(__name__)
+        # Log detailed metrics information at destination entry point
+        logger.debug(
+            "Destination received tracklist metrics",
+            metrics_keys=list(input_tracklist.metadata.get("metrics", {}).keys()),
+            spotify_popularity_count=len(
+                input_tracklist.metadata.get("metrics", {}).get(
+                    "spotify_popularity",
+                    {},
+                ),
+            ),
+        )
+
+        # Invoke the appropriate strategy
+        return await self._strategies[destination_type](
+            input_tracklist,
+            config,
+            context,
+        )
+
+    async def _handle_internal_destination(
+        self,
+        tracklist: TrackList,
+        config: dict,
+        context: dict,  # noqa: ARG002
+    ) -> dict:
+        """Create a playlist in the internal database."""
+        name = config.get("name", "Narada Playlist")
+        description = config.get("description", "Created by Narada")
+
+        # Common persistence function
+        from narada.core.repositories import PlaylistRepository
+
+        db_tracks, stats = await self._persist_tracks(tracklist)
+
+        async with get_session(rollback=False) as session:
+            playlist_repo = PlaylistRepository(session)
+
+            playlist = Playlist(
+                name=name,
+                description=description,
+                tracks=db_tracks,
+            )
+
+            playlist_id = await playlist_repo.save_playlist(playlist)
+
+        # PRESERVE METADATA: Create new tracklist with db_tracks but KEEP the metadata
+        result_tracklist = TrackList(
+            tracks=db_tracks,
+            metadata=tracklist.metadata,
+        )
+
+        logger = get_logger(__name__)
+        logger.debug(
+            "Result tracklist metrics after preservation",
+            metrics_keys=result_tracklist.metadata.get("metrics", {}).keys(),
+        )
+
+        return {
+            "playlist_id": playlist_id,
+            "playlist_name": name,
+            "track_count": len(db_tracks),
+            "operation": "create_internal_playlist",
+            "tracklist": result_tracklist,
+            **stats,
+        }
+
+    async def _handle_spotify_destination(
+        self,
+        tracklist: TrackList,
+        config: dict,
+        context: dict,  # noqa: ARG002
+    ) -> dict:
+        """Create a new Spotify playlist."""
+        from narada.integrations.spotify import SpotifyConnector
+
+        name = config.get("name", "Narada Playlist")
+        description = config.get("description", "Created by Narada")
+
+        spotify = SpotifyConnector()
+        spotify_id = await spotify.create_playlist(
+            name,
+            tracklist.tracks,
+            description,
+        )
+
+        db_tracks, stats = await self._persist_tracks(tracklist)
+
+        async with get_session(rollback=False) as session:
+            playlist_repo = PlaylistRepository(session)
+
+            playlist = Playlist(
+                name=name,
+                description=description,
+                tracks=db_tracks,
+                connector_track_ids={"spotify": spotify_id},
+            )
+
+            playlist_id = await playlist_repo.save_playlist(playlist)
+
+        # PRESERVE METADATA: Create new tracklist with db_tracks but KEEP the metadata
+        result_tracklist = TrackList(
+            tracks=db_tracks,
+            metadata=tracklist.metadata,
+        )
+
+        return {
+            "playlist_id": playlist_id,
+            "spotify_playlist_id": spotify_id,
+            "playlist_name": name,
+            "track_count": len(db_tracks),
+            "operation": "create_spotify_playlist",
+            "tracklist": result_tracklist,
+            **stats,
+        }
+
+    async def _handle_update_spotify_destination(
+        self,
+        tracklist: TrackList,
+        config: dict,
+        context: dict,  # noqa: ARG002
+    ) -> dict:
+        """Update an existing Spotify playlist."""
+        from narada.integrations.spotify import SpotifyConnector
+
+        spotify_id = config.get("playlist_id")
+        append = config.get("append", False)
+
+        if not spotify_id:
+            raise ValueError("Missing required playlist_id for update operation")
+
+        db_tracks, stats = await self._persist_tracks(tracklist)
+
+        async with get_session(rollback=False) as session:
+            track_repo = TrackRepository(session)
+            playlist_repo = PlaylistRepository(session)
+            existing = await playlist_repo.get_playlist("spotify", spotify_id)
+
+            if not existing:
+                raise ValueError(f"Playlist with Spotify ID {spotify_id} not found")
+
+            updated = existing.with_tracks(
+                existing.tracks + db_tracks if append else db_tracks,
+            )
+
+            spotify = SpotifyConnector()
+            await spotify.update_playlist(spotify_id, updated, replace=not append)
+
+            await playlist_repo.update_playlist(
+                str(existing.id),
+                updated,
+                track_repo,
+            )
+
+        # PRESERVE METADATA: Create new tracklist with db_tracks but KEEP the metadata
+        result_tracklist = TrackList(
+            tracks=db_tracks,
+            metadata=tracklist.metadata,
+        )
+
+        return {
+            "playlist_id": str(existing.id),
+            "spotify_playlist_id": spotify_id,
+            "track_count": len(updated.tracks),
+            "original_count": len(existing.tracks),
+            "operation": "update_spotify_playlist",
+            "append_mode": append,
+            "tracklist": result_tracklist,
+            **stats,
+        }
+
+    async def _persist_tracks(self, tracklist: TrackList) -> tuple[list[Track], dict]:
+        """Persist tracks to database and return stats.
+
+        Args:
+            tracklist: TrackList to persist
+
+        Returns:
+            Tuple of (persisted tracks list, stats dictionary)
+        """
         stats = {"new_tracks": 0, "updated_tracks": 0}
 
         async with get_session(rollback=False) as session:
             track_repo = TrackRepository(session)
             db_tracks = []
 
-            for track in input_tracklist.tracks:
+            for track in tracklist.tracks:
                 try:
                     original_id = track.id
                     saved_track = await track_repo.save_track(track)
@@ -379,244 +497,96 @@ async def destination_factory(
 
                     db_tracks.append(saved_track)
                 except Exception as e:
+                    logger = get_logger(__name__)
                     logger.error(f"Error persisting track {track.title}: {e}")
                     db_tracks.append(track)
 
             return db_tracks, stats
 
-    # Handle different destination types
-    match destination_type:
-        case "internal":
-            db_tracks, stats = await persist_tracks()
 
-            async with get_session(rollback=False) as session:
-                playlist_repo = PlaylistRepository(session)
-                track_repo = TrackRepository(session)
-
-                playlist = Playlist(
-                    name=name,
-                    description=description,
-                    tracks=db_tracks,
-                )
-
-                playlist_id = await playlist_repo.save_playlist(playlist)
-
-            # PRESERVE METADATA: Create new tracklist with db_tracks but KEEP the metadata
-            result_tracklist = TrackList(
-                tracks=db_tracks,
-                metadata=input_tracklist.metadata,
-            )
-
-            logger.debug(
-                "Result tracklist metrics after preservation",
-                metrics_keys=result_tracklist.metadata.get("metrics", {}).keys(),
-                preserved_spotify_popularity_count=len(
-                    result_tracklist.metadata.get("metrics", {}).get(
-                        "spotify_popularity",
-                        {},
-                    ),
-                ),
-                preserved_spotify_popularity_keys=list(
-                    result_tracklist.metadata.get("metrics", {})
-                    .get("spotify_popularity", {})
-                    .keys(),
-                )[:5],
-            )
-
-            return {
-                "playlist_id": playlist_id,
-                "playlist_name": name,
-                "track_count": len(db_tracks),
-                "operation": "create_internal_playlist",
-                "tracklist": result_tracklist,  # Use the tracklist with preserved metadata
-                **stats,
-            }
-
-        case "spotify":
-            from narada.integrations.spotify import SpotifyConnector
-
-            spotify = SpotifyConnector()
-            spotify_id = await spotify.create_playlist(
-                name,
-                input_tracklist.tracks,
-                description,
-            )
-
-            db_tracks, stats = await persist_tracks()
-
-            async with get_session(rollback=False) as session:
-                playlist_repo = PlaylistRepository(session)
-                track_repo = TrackRepository(session)
-
-                playlist = Playlist(
-                    name=name,
-                    description=description,
-                    tracks=db_tracks,
-                    connector_track_ids={"spotify": spotify_id},
-                )
-
-                playlist_id = await playlist_repo.save_playlist(playlist)
-
-            # PRESERVE METADATA: Create new tracklist with db_tracks but KEEP the metadata
-            result_tracklist = TrackList(
-                tracks=db_tracks,
-                metadata=input_tracklist.metadata,
-            )
-
-            logger.debug(
-                "Result tracklist metrics after preservation",
-                metrics_keys=list(result_tracklist.metadata.get("metrics", {}).keys()),
-                preserved_spotify_popularity_count=len(
-                    result_tracklist.metadata.get("metrics", {}).get(
-                        "spotify_popularity",
-                        {},
-                    ),
-                ),
-                preserved_spotify_popularity_keys=list(
-                    result_tracklist.metadata.get("metrics", {})
-                    .get("spotify_popularity", {})
-                    .keys(),
-                )[:5],
-            )
-            return {
-                "playlist_id": playlist_id,
-                "spotify_playlist_id": spotify_id,
-                "playlist_name": name,
-                "track_count": len(db_tracks),
-                "operation": "create_spotify_playlist",
-                "tracklist": result_tracklist,  # Use the tracklist with preserved metadata
-                **stats,
-            }
-
-        case "update_spotify":
-            spotify_id = config.get("playlist_id")
-            append = config.get("append", False)
-
-            if not spotify_id:
-                raise ValueError("Missing required playlist_id for update operation")
-
-            from narada.integrations.spotify import SpotifyConnector
-
-            db_tracks, stats = await persist_tracks()
-
-            async with get_session(rollback=False) as session:
-                track_repo = TrackRepository(session)
-                playlist_repo = PlaylistRepository(session)
-                existing = await playlist_repo.get_playlist("spotify", spotify_id)
-
-                if not existing:
-                    raise ValueError(f"Playlist with Spotify ID {spotify_id} not found")
-
-                updated = existing.with_tracks(
-                    existing.tracks + db_tracks if append else db_tracks,
-                )
-
-                spotify = SpotifyConnector()
-                await spotify.update_playlist(spotify_id, updated, replace=not append)
-
-                await playlist_repo.update_playlist(
-                    str(existing.id),
-                    updated,
-                    track_repo,
-                )
-
-            # PRESERVE METADATA: Create new tracklist with db_tracks but KEEP the metadata
-            result_tracklist = TrackList(
-                tracks=db_tracks,
-                metadata=input_tracklist.metadata,
-            )
-
-            logger.debug(
-                "Result tracklist metrics after preservation",
-                metrics_keys=result_tracklist.metadata.get("metrics", {}).keys(),
-                preserved_spotify_popularity_count=len(
-                    result_tracklist.metadata.get("metrics", {}).get(
-                        "spotify_popularity",
-                        {},
-                    ),
-                ),
-                preserved_spotify_popularity_keys=list(
-                    result_tracklist.metadata.get("metrics", {})
-                    .get("spotify_popularity", {})
-                    .keys(),
-                )[:5],
-            )
-
-            return {
-                "playlist_id": str(existing.id),
-                "spotify_playlist_id": spotify_id,
-                "track_count": len(updated.tracks),
-                "original_count": len(existing.tracks),
-                "operation": "update_spotify_playlist",
-                "append_mode": append,
-                "tracklist": result_tracklist,  # Use the tracklist with preserved metadata
-                **stats,
-            }
-        case _:
-            raise ValueError(f"Unsupported destination type: {destination_type}")
+# Instantiate the handler - we use a singleton instance
+_destination_handler = DestinationHandler()
 
 
 # === ENRICHER FACTORY ===
 
 
 def create_enricher_node(config: dict) -> NodeFn:
-    """Create connector-specific enricher node.
+    # Load connectors once during factory creation
+    connectors = discover_connectors()
+    enricher_type = config.get("connector")
 
-    Args:
-        config: Static configuration
-            connector: Service name ("lastfm", "spotify")
-    """
-    connector_name = config.get("connector")
+    if enricher_type not in connectors:
+        raise ValueError(f"Unsupported connector: {enricher_type}")
 
-    if connector_name not in CONNECTORS:
-        raise ValueError(f"Unsupported connector: {connector_name}")
-
-    connector = CONNECTORS[connector_name]
+    # Store configuration for this specific enricher
+    enricher_config = connectors[enricher_type]
 
     async def node_impl(context: dict, node_config: dict) -> dict:
-        """Enricher node implementation."""
         ctx = Context(context)
         tracklist = ctx.extract_tracklist()
 
-        # Create resolution engine with main connector + dependencies
+        # Create resolution engine
         engine = create_engine()
-        engine.register_connector(connector_name, connector["factory"](node_config))
 
-        for dep in connector["dependencies"]:
-            if dep in CONNECTORS:
-                engine.register_connector(dep, CONNECTORS[dep]["factory"](node_config))
+        # Initialize this enricher
+        connector_instance = enricher_config["factory"](node_config)
+        engine.register_connector(enricher_type, connector_instance)
 
-        # Resolve tracks to connector
+        # Initialize dependencies
+        for dep_name in enricher_config["dependencies"]:
+            if dep_name in connectors:
+                dep_config = connectors[dep_name]
+                dep_instance = dep_config["factory"](node_config)
+                engine.register_connector(dep_name, dep_instance)
+
+        # Use enricher_type consistently
         async with get_session() as session:
             track_repo = TrackRepository(session)
             match_results = await batch_match_tracks(
                 tracklist.tracks,
-                connector_name,
+                enricher_type,  # Use the stored name consistently
                 engine,
                 track_repo,
             )
-
             # Extract and build metrics
             metrics = {}
 
-            # Process track-based attributes
-            for attr, extractor in connector["track_extractors"].items():
+            # Extract metrics from both tracks and match results
+            for attr, extractor in enricher_config["extractors"].items():
                 values = {}
+
+                # Try to extract from tracks first
                 for track in tracklist.tracks:
                     if track.id is not None:
-                        values[str(track.id)] = extractor(track)
-                if values:
-                    metrics[attr] = values
+                        try:
+                            # Attempt extraction using our adaptive extractor
+                            value = extractor(track)
+                            if value is not None:  # Skip None values
+                                values[str(track.id)] = value
+                        except Exception as e:
+                            logger.debug(f"Track extraction failed for {attr}: {e}")
 
-            # Process result-based attributes
-            for attr, extractor in connector["result_extractors"].items():
-                values = {}
+                # Try to extract from match results for tracks that have matches
                 for track in tracklist.tracks:
                     if track.id in match_results and match_results[track.id].success:
-                        values[str(track.id)] = extractor(match_results[track.id])
+                        result = match_results[track.id]
+                        try:
+                            # Attempt extraction from the match result
+                            value = extractor(result)
+                            if value is not None:  # Skip None values
+                                values[str(track.id)] = value
+                        except Exception as e:
+                            logger.debug(f"Result extraction failed for {attr}: {e}")
+
+                # Store non-empty results in metrics
                 if values:
                     metrics[attr] = values
 
+            # Map connector-specific metrics to canonical names
+            for connector_name, canonical_name in enricher_config["metrics"].items():
+                if connector_name in metrics and canonical_name != connector_name:
+                    metrics[canonical_name] = metrics[connector_name]
             # Add collected metrics to tracklist metadata
             enriched = tracklist
             if metrics:
@@ -666,7 +636,11 @@ def create_destination_node(destination_type: str) -> NodeFn:
     """Create a destination node of specified type."""
 
     async def node_impl(context: dict, config: dict) -> dict:
-        return await destination_factory(destination_type, context, config)
+        return await _destination_handler.handle_destination(
+            destination_type,
+            context,
+            config,
+        )
 
     return node_impl
 
