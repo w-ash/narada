@@ -110,6 +110,11 @@ def setup_loguru_logger(verbose: bool = False) -> None:
     # Remove default logger
     logger.remove()
 
+    # Create log directory structure
+    log_file_path = Path(_config["LOG_FILE"])
+    log_dir = log_file_path.parent
+    log_dir.mkdir(parents=True, exist_ok=True)
+
     # Add contextual info to all log records
     logger.configure(extra={"service": "narada", "module": "root"})
 

@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from narada.core.repositories import PlaylistRepository, TrackRepository
-from narada.data.database import get_session
+from narada.database.database import get_session
 from narada.integrations.spotify import SpotifyConnector
 
 
@@ -107,7 +107,7 @@ async def test_duplicate_track_handling(
     # 2. Save second playlist with overlapping tracks
     second_playlist = await spotify.get_spotify_playlist(PLAYLIST_IDS[1])
     print(
-        f"Second playlist: {second_playlist.name}, {len(second_playlist.tracks)} tracks"
+        f"Second playlist: {second_playlist.name}, {len(second_playlist.tracks)} tracks",
     )
 
     second_track_ids = {
@@ -137,7 +137,8 @@ async def test_duplicate_track_handling(
 
         # Save the modified second playlist
         second_playlist_id = await playlist_repo.save_playlist(
-            modified_second_playlist, track_repo
+            modified_second_playlist,
+            track_repo,
         )
         shared_track_ids = {track_to_share.connector_track_ids.get("spotify", "")}
         print(f"Created artificial overlap with track ID: {shared_track_ids}")
@@ -239,7 +240,7 @@ async def test_concurrent_playlist_operations(spotify: SpotifyConnector) -> None
         import asyncio
 
         domain_playlists = await asyncio.gather(
-            *[spotify.get_spotify_playlist(pid) for pid in PLAYLIST_IDS]
+            *[spotify.get_spotify_playlist(pid) for pid in PLAYLIST_IDS],
         )
 
         # Save playlists sequentially (since they share the same session)
@@ -250,11 +251,11 @@ async def test_concurrent_playlist_operations(spotify: SpotifyConnector) -> None
 
         # Fetch saved playlists concurrently
         saved_playlists = await asyncio.gather(
-            *[playlist_repo.get_playlist("internal", pid) for pid in playlist_ids]
+            *[playlist_repo.get_playlist("internal", pid) for pid in playlist_ids],
         )
 
         # Verify all playlists were saved correctly
-        for original, saved in zip(domain_playlists, saved_playlists):
+        for original, saved in zip(domain_playlists, saved_playlists, strict=False):
             assert saved is not None
             assert saved.name == original.name
             assert len(saved.tracks) == len(original.tracks)

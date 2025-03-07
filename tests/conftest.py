@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from narada.data.database import get_session, init_db
+from narada.database.database import get_session, init_db
 
 
 @pytest.fixture(scope="session")
@@ -20,7 +20,7 @@ async def initialize_db():
         await init_db()
     except Exception as e:
         pytest.fail(f"Database initialization failed: {e}")
-    yield
+    return
 
 
 @pytest.fixture

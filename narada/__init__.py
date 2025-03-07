@@ -6,18 +6,17 @@ __version__ = version("narada")
 __author__ = "Ash Wright"
 __license__ = "MIT"
 
-# CLI components (must come after workflow initialization to avoid circular imports)
-from narada.cli import app
-from narada.cli.app import main
-
 # Basic configuration and logging must come first
-from narada.config import get_logger, resilient_operation
+from narada.config import get_logger, resilient_operation, setup_loguru_logger
 
-# Re-export key workflow functions for convenience
-from narada.workflows import run_workflow, validate_registry
+# Initialize logging early to ensure log directory exists
+setup_loguru_logger()
+
+# Now initialize logger that will be used by other modules
+logger = get_logger(__name__)
 
 # Import workflow core early to ensure registry initialization
-from narada.workflows.node_registry import get_node, node
+from narada.workflows.node_registry import get_node, node  # noqa: E402
 
 __all__ = [
     "app",
@@ -29,6 +28,11 @@ __all__ = [
     "run_workflow",
     "validate_registry",
 ]
+
+# CLI components (must come after workflow initialization to avoid circular imports)
+from narada.cli import app  # noqa: E402
+from narada.cli.app import main  # noqa: E402
+from narada.workflows import run_workflow, validate_registry  # noqa: E402
 
 # Trigger workflows validation during package import
 # Using a try/except to prevent issues during import
@@ -45,3 +49,6 @@ except Exception as e:
     import logging
 
     logging.getLogger(__name__).debug(f"Early workflow validation deferred: {e}")
+
+# Re-export key workflow functions for convenience
+from narada.workflows import validate_registry  # noqa: E402

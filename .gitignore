@@ -1,47 +1,98 @@
-# Python Development
+#################
+# Python Related #
+#################
+# Byte-compiled files
 __pycache__/
 *.py[cod]
 *$py.class
-.venv/
-.pytest_cache/
-.coverage
-htmlcov/
+
+# Distribution / packaging
 dist/
 build/
 *.egg-info/
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+
+# Jupyter Notebook
 .ipynb_checkpoints
 
-# Package Management
+################
+# Package Mgmt #
+################
 poetry.lock
 
-# Database Files
+#############
+# Databases #
+#############
 *.db
 *.sqlite
 *.sqlite3
+/data/db/*.db
 
-# Allow alembic migrations but ignore version files
+#####################
+# Alembic Migrations #
+#####################
 alembic/versions/
 alembic/*.ini
 !alembic/README
 !alembic/script.py.mako
 
-# Environment and Configuration
+##########################
+# Environment & Config   #
+##########################
 .env
 .spotify_cache
 
-# Logs
+#########
+# Logs  #
+#########
 *.log
 logs/
+/data/logs/**/*.log
 
-# IDE and Editor Files
-.idea/
+#######################
+# IDEs and Editors    #
+#######################
+# VS Code
 .vscode/
+
+# JetBrains
+.idea/
+
+# Vim
 *.swp
 *.swo
-.obsidian/
+
+# Sublime Text
 *.sublime-*
+
+# Obsidian
+.obsidian/
+
+# Misc
 *~
 
-# Operating System
+#########################
+# Operating System Files #
+#########################
+# macOS
 .DS_Store
+
+# Windows
 Thumbs.db
+
+###########################
+# Project-specific Dirs   #
+###########################
+var/
+/var/**/*
+infra/
+scripts/
+tests/

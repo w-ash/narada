@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
-class Context:
+class NodeContext:
     """Context extractor with path-based access."""
 
     data: dict
@@ -56,16 +56,18 @@ class Context:
                 continue
 
             task_result = self.data[task_id]
-            if not isinstance(task_result, dict) or not isinstance(
-                task_result.get("tracklist"),
-                list,
-            ):
+            if not isinstance(task_result, dict):
+                logger.warning(f"Invalid task result for {task_id}: not a dictionary")
+                continue
+
+            tracklist = task_result.get("tracklist")
+            if not isinstance(tracklist, TrackList):
                 logger.warning(
                     f"Missing or invalid tracklist in task result: {task_id}",
                 )
                 continue
 
-            tracklists.append(task_result["tracklist"])
+            tracklists.append(tracklist)
 
         if not tracklists:
             # This should raise an exception rather than just logging

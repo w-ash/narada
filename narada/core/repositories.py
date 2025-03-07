@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 from narada.config import get_logger
 from narada.core.models import Artist, Playlist, Track
 from narada.core.protocols import MappingTable, ModelClass
-from narada.data.database import (
+from narada.database.dbmodels import (
     DBPlayCount,
     DBPlaylist,
     DBPlaylistMapping,
@@ -85,14 +85,16 @@ class BaseRepository[T]:
             multi: If True, returns list of results
         """
         try:
-            result = await (
-                self.session.scalars(stmt) if multi else self.session.scalar(stmt)
-            )
-            return list(result.unique()) if multi and result else result
+            # Execute the statement directly
+            result = await self.session.execute(stmt)
 
+            if multi:
+                return result.scalars().all()
+            else:
+                return result.scalars().first()
         except SQLAlchemyError as e:
-            logger.exception(f"Database error in {self.__class__.__name__}: {e!s}")
-            raise
+            logger.error(f"Database error in {self.__class__.__name__}: {e}")
+            return [] if multi else None
 
     async def _execute_transaction(self, operation: Callable[[], Any]) -> Any:
         """Execute database transaction operation.
@@ -107,13 +109,15 @@ class BaseRepository[T]:
             SQLAlchemyError: If database operations fail
         """
         try:
-            result = await operation()
-            await self.session.flush()
-            return result
-
+            async with (
+                self.session.begin_nested()
+            ):  # Use savepoint for nested transactions
+                result = await operation()
+                # No need for explicit flush as commit will handle it
+                return result
         except SQLAlchemyError as e:
             logger.exception(f"Database error in {self.__class__.__name__}: {e!s}")
-            raise
+            raise  # Let caller handle or propagate
 
     async def get_by_internal_id(
         self,
@@ -354,7 +358,7 @@ class TrackRepository(BaseRepository[DBTrack]):
             return {}
 
         try:
-            from narada.data.database import get_session
+            from narada.database.database import get_session
 
             # Use a fresh session to avoid transaction issues
             async with get_session() as session:
@@ -441,35 +445,27 @@ class TrackRepository(BaseRepository[DBTrack]):
         track_id: int,
         connector_name: str,
     ) -> DBTrackMapping | None:
-        """Get detailed mapping information between a track and connector.
-
-        This method retrieves complete mapping metadata needed for resolution
-        decisions, including confidence scores, match methods, and freshness.
-
-        Args:
-            track_id: Internal track ID
-            connector_name: Name of connector (e.g., "spotify", "lastfm")
-
-        Returns:
-            Full track mapping record or None if not found
-        """
+        """Get detailed mapping information between a track and connector."""
         if not track_id:
+            logger.warning("Cannot get mapping details: No track ID provided")
             return None
 
         try:
-            # Build targeted query with SQLAlchemy 2.0 style
-            stmt = select(DBTrackMapping).where(
-                DBTrackMapping.track_id == track_id,
-                DBTrackMapping.connector_name == connector_name,
-                DBTrackMapping.is_deleted == False,  # noqa: E712
-            )
+            # Create a new session for this operation to avoid concurrent session issues
+            from narada.database.database import get_session
 
-            # Execute query efficiently
-            result = await self.session.execute(stmt)
-            return result.scalars().first()
+            # Use a dedicated session instead of self.session
+            async with get_session() as session:
+                stmt = select(DBTrackMapping).where(
+                    DBTrackMapping.track_id == track_id,
+                    DBTrackMapping.connector_name == connector_name,
+                    DBTrackMapping.is_deleted == False,  # noqa: E712
+                )
 
+                result = await session.execute(stmt)
+                return result.scalar_one_or_none()
         except Exception as e:
-            logger.exception(f"Error retrieving mapping details: {e}")
+            logger.error(f"Error retrieving mapping details: {e}")
             return None
 
     async def save_connector_mappings(

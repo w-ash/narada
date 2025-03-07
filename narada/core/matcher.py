@@ -5,7 +5,6 @@ This module implements a flexible track matching system that can identify the sa
 track across different music services through a registry of resolution strategies.
 """
 
-import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, TypedDict, cast
@@ -51,11 +50,10 @@ class MatchResult:
         """Get match confidence score."""
         return self.mapping.confidence if self.mapping else 0
 
-
-@property
-def user_play_count(self) -> int:
-    """Get user play count or 0 if unavailable."""
-    return self.play_count.user_play_count if self.play_count else 0
+    @property
+    def user_play_count(self) -> int:
+        """Get user play count or 0 if unavailable."""
+        return self.play_count.user_play_count if self.play_count else 0
 
 
 # Connector registry with resolution preferences and configuration
@@ -106,6 +104,10 @@ class ResolutionEngine:
     def register_connector(self, name: str, connector: object) -> None:
         """Register a connector instance."""
         self.connectors[name] = connector
+
+    def get_connector(self, name: str) -> object | None:
+        """Get a registered connector by name."""
+        return self.connectors.get(name)
 
     async def resolve(
         self,
@@ -419,45 +421,78 @@ async def resolve_track(
             mapping_details = await repo.get_track_mapping_details(track.id, target)
 
             # Check if mapping is fresh
-            if mapping_details and (
-                datetime.now(UTC) - mapping_details.last_verified
-                < timedelta(hours=ttl_hours)
-            ):
-                mapping = ConnectorTrackMapping(
-                    connector_name=target,
-                    connector_track_id=connector_id,
-                    match_method=mapping_details.match_method,
-                    confidence=mapping_details.confidence,
-                    metadata=mapping_details.connector_metadata,
-                )
+            if mapping_details:
+                # Handle timezone-naive last_verified by making it timezone-aware
+                last_verified = mapping_details.last_verified
+                if last_verified and last_verified.tzinfo is None:
+                    # Treat naive datetime as UTC
+                    last_verified = last_verified.replace(tzinfo=UTC)
 
-                # For Last.fm, include play count
-                play_count = None
-                if target == "lastfm" and mapping_details.connector_metadata:
-                    play_count = LastFmPlayCount(
-                        user_play_count=mapping_details.connector_metadata.get(
-                            "user_play_count",
-                            0,
-                        ),
-                        global_play_count=mapping_details.connector_metadata.get(
-                            "global_play_count",
-                            0,
-                        ),
-                        track_url=connector_id,
+                # Now compare with timezone-aware datetimes
+                if datetime.now(UTC) - last_verified < timedelta(hours=ttl_hours):
+                    mapping = ConnectorTrackMapping(
+                        connector_name=target,
+                        connector_track_id=connector_id,
+                        match_method=mapping_details.match_method,
+                        confidence=mapping_details.confidence,
+                        metadata=mapping_details.connector_metadata,
                     )
 
-                return MatchResult(
-                    track=track.with_connector_track_id(target, connector_id),
-                    mapping=mapping,
-                    play_count=play_count,
-                    success=True,
-                )
+                    # For Last.fm, include play count
+                    play_count = None
+                    if target == "lastfm" and mapping_details.connector_metadata:
+                        play_count = LastFmPlayCount(
+                            user_play_count=mapping_details.connector_metadata.get(
+                                "user_play_count",
+                                0,
+                            ),
+                            global_play_count=mapping_details.connector_metadata.get(
+                                "global_play_count",
+                                0,
+                            ),
+                            track_url=connector_id,
+                        )
 
-    # Try each resolution path
+                    return MatchResult(
+                        track=track.with_connector_track_id(target, connector_id),
+                        mapping=mapping,
+                        play_count=play_count,
+                        success=True,
+                    )
+
+    # Try each resolution path with context
     for path in config.get("resolution_paths", []):
-        # Skip paths that require attributes track doesn't have
+        # Use structured logging
+        logger.debug("Attempting resolution path", path=path)
+
+        # Check attributes with more detailed log info
         if not _has_attributes_for_path(track, path):
+            missing = []
+            for step in path:
+                method = step.split(":", 1)[1] if ":" in step else step
+                if method == "mbid" and "musicbrainz" not in track.connector_track_ids:
+                    missing.append("mbid")
+                elif method == "isrc" and not track.isrc:
+                    missing.append("isrc")
+                elif method == "artist_title" and (
+                    not track.title or not track.artists
+                ):
+                    missing.append("artist_title")
+
+            logger.debug(
+                "Skipping resolution path",
+                path=path,
+                missing_attributes=missing,
+            )
             continue
+
+        # Log available engine components
+        logger.debug(
+            "Attempting resolution",
+            path=path,
+            available_connectors=list(engine.connectors.keys()),
+            available_resolvers=list(engine.resolvers.keys()),
+        )
 
         # Attempt resolution
         result = await engine.resolve(track, path, context)
@@ -528,53 +563,170 @@ def _has_attributes_for_path(track: Track, path: list[str]) -> bool:
 
 async def batch_match_tracks(
     tracks: list[Track],
-    target: str,
+    connector_type: ConnectorType,
     engine: ResolutionEngine,
-    repo: TrackRepository | None = None,
-    batch_size: int = 50,
-    concurrency: int = 10,
-    **kwargs,
+    track_repo: TrackRepository,
 ) -> dict[int, MatchResult]:
-    """Match multiple tracks to a target service with efficient batching."""
-    if not tracks:
-        return {}
-
+    """Match a batch of tracks to the specified connector."""
     results: dict[int, MatchResult] = {}
-    semaphore = asyncio.Semaphore(concurrency)
 
-    async def process_track(track: Track) -> tuple[int | None, MatchResult]:
-        """Process single track with concurrency control."""
-        async with semaphore:
-            try:
-                result = await resolve_track(track, target, engine, repo, kwargs)
-                return track.id, result
-            except Exception as e:
-                logger.exception(f"Error resolving track {track.id}: {e}")
-                return track.id, MatchResult(track=track, success=False)
-
-    # Process tracks in batches
-    for i in range(0, len(tracks), batch_size):
-        batch = tracks[i : i + batch_size]
-        batch_results = await asyncio.gather(*[process_track(t) for t in batch])
-
-        # Store results
-        results.update({
-            track_id: result
-            for track_id, result in batch_results
-            if track_id is not None
-        })
-
-        # Log progress
-        success_count = sum(1 for _, r in batch_results if r.success)
-        logger.debug(
-            f"Batch {i // batch_size + 1}: {success_count}/{len(batch)} matched",
-        )
-
-    # Report stats
-    success_count = sum(1 for r in results.values() if r.success)
-    logger.info(
-        f"Matching complete: {success_count}/{len(tracks)} tracks resolved to {target}",
+    # Use structured logging by passing keyword arguments instead of f-strings
+    logger.debug(
+        "Starting batch match",
+        connector=connector_type,
+        track_count=len(tracks),
     )
+
+    # Get connector configuration
+    connector_config = CONNECTOR_REGISTRY.get(connector_type)
+    if not connector_config:
+        # Use log level appropriately with structured data
+        logger.error("Missing connector configuration", connector=connector_type)
+        return results
+
+    # Log structured data rather than stringifying
+    logger.debug("Using connector configuration", config=connector_config)
+
+    # Use contextualize for all logs within the batch operation
+    with logger.contextualize(operation="batch_match", connector=connector_type):
+        # Match each track
+        for i, track in enumerate(tracks):
+            track_info = {
+                "index": i,
+                "total": len(tracks),
+                "title": track.title,
+                "artists": [a.name for a in track.artists],
+                "track_id": track.id,
+            }
+
+            if i < 5 or i % 50 == 0:  # Log first few and every 50th track
+                logger.debug("Processing track", **track_info)
+
+            # More efficient context handling with a sub-block
+            with logger.contextualize(track_id=track.id, track_title=track.title):
+                # Check if we already have a match in the database
+                db_match = None
+                if track.id is not None:
+                    try:
+                        db_match = await track_repo.get_track_mapping_details(
+                            track.id,
+                            connector_type,
+                        )
+                        if db_match:
+                            logger.debug(
+                                "Found existing database mapping",
+                                connector_id=db_match.connector_id,
+                            )
+                        else:
+                            logger.debug("No existing database mapping")
+                    except Exception:
+                        # Exception already captures stack trace
+                        logger.exception("Failed to retrieve mapping")
+
+                # ... rest of the function with structured logging
+        result = None
+        try:
+            if db_match:
+                # Use existing database match
+                connector_id = db_match.connector_id
+                logger.debug(f"Using existing connector ID: {connector_id}")
+
+                # Create base mapping object
+                mapping = ConnectorTrackMapping(
+                    connector_name=connector_type,
+                    connector_track_id=connector_id,
+                    match_method=db_match.match_method or "database",
+                    confidence=db_match.confidence or 100,
+                    metadata=db_match.connector_metadata or {},
+                )
+
+                # Set track with connector ID
+                updated_track = track.with_connector_track_id(
+                    connector_type,
+                    connector_id,
+                )
+
+                # Fetch additional information based on connector type
+                play_count = None
+                if connector_type == "lastfm":
+                    # For Last.fm, we need to fetch play count information
+                    logger.debug("Fetching Last.fm play count data")
+                    connector = engine.get_connector(connector_type)
+                    if connector and isinstance(connector, LastFmConnector):
+                        try:
+                            play_count = await connector.get_mbid_play_count(
+                                connector_id,
+                                None,
+                            )
+                            logger.debug(f"Retrieved play count: {play_count}")
+                        except Exception as e:
+                            logger.exception(f"Error fetching play count: {e}")
+
+                result = MatchResult(
+                    track=updated_track,
+                    mapping=mapping,
+                    play_count=play_count,
+                    success=True,
+                )
+            else:
+                # No database match, resolve using engine
+                logger.debug("No DB match, resolving track using engine")
+
+                # Log available connectors in the engine to check if they're properly registered
+                logger.debug(
+                    f"Available engine connectors: {list(engine.connectors.keys())}",
+                )
+
+                # Log track attributes that might be needed for resolution
+                logger.debug("Track attributes for resolution:")
+                logger.debug(f"  ISRC: {track.isrc}")
+                logger.debug(
+                    f"  MusicBrainz ID: {track.connector_track_ids.get('musicbrainz')}",
+                )
+                logger.debug(f"  Title: {track.title}")
+                logger.debug(f"  Artists: {[a.name for a in track.artists]}")
+
+                # Use the higher-level track resolution function
+                result = await resolve_track(
+                    track,
+                    connector_type,
+                    engine,
+                    track_repo,
+                    {"target": connector_type},
+                )
+
+                # Log resolution results
+                if result.success and result.mapping:
+                    logger.debug(
+                        f"Engine resolution success: ID {result.mapping.connector_track_id}, "
+                        f"confidence {result.mapping.confidence}",
+                    )
+                else:
+                    # Improved error message with more context
+                    logger.debug(
+                        f"Engine resolution failed for '{track.title}'. Possible causes: "
+                        f"Missing connectors, insufficient track metadata, or no matching resolution paths",
+                    )
+
+        except Exception as e:
+            logger.exception(f"Error during track matching: {e}")
+            result = MatchResult(
+                track=track,
+                success=False,
+            )
+
+        if track.id is not None and result is not None:
+            results[track.id] = result
+
+    # Log summary statistics
+    success_count = sum(1 for r in results.values() if r.success)
+    play_count_present = sum(
+        1 for r in results.values() if r.success and r.play_count is not None
+    )
+
+    logger.debug("=== MATCHER DEBUG: Completed batch match ===")
+    logger.debug(f"Results summary: {success_count}/{len(results)} successful matches")
+    logger.debug(f"Play count data available: {play_count_present}/{len(results)}")
 
     return results
 

@@ -23,18 +23,20 @@ Usage:
 """
 
 # Import database models
-from narada.data.database import (
+from narada.database.database import (
+    engine,
+    get_session,
+    session_factory,
+    soft_delete_record,
+)
+from narada.database.dbmodels import (
     DBPlayCount,
     DBPlaylist,
     DBPlaylistMapping,
     DBPlaylistTrack,
     DBTrack,
     DBTrackMapping,
-    engine,
-    get_session,
     init_db,
-    session_factory,
-    soft_delete_record,
 )
 
 # Define explicit public API
