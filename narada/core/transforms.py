@@ -11,6 +11,7 @@ Transformations follow functional programming principles:
 - Purity: No side effects or external dependencies
 """
 
+import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
 import random
@@ -18,7 +19,6 @@ from typing import Any, TypeVar, cast
 
 from toolz import compose_left, curry
 
-from narada.config import get_logger
 from narada.core.models import Playlist, Track, TrackList
 
 # Type variables for generic transformations
@@ -240,7 +240,6 @@ def sort_by_attribute(
     Returns:
         Transformation function or transformed tracklist if provided
     """
-    logger = get_logger(__name__)
 
     # Allow passing metric name directly for common use cases
     if isinstance(key_fn, str):
@@ -263,33 +262,36 @@ def sort_by_attribute(
         return default
 
     def transform(t: TrackList) -> TrackList:
-        """Apply the sorting transformation."""
+        """Apply the sorting transformation with resilient metric loading."""
         # Check for stored metrics in tracklist metadata
         metrics_dict = t.metadata.get("metrics", {}).get(metric_name, {})
 
-        # Create a key function that prioritizes stored metrics
+        # If we have no metrics but we have tracks with IDs, invoke metric resolution
+        if not metrics_dict and any(track.id for track in t.tracks):
+            from narada.core.protocols import metric_resolvers
+
+            if metric_name in metric_resolvers:
+                loop = asyncio.get_event_loop()
+                resolved = loop.run_until_complete(
+                    metric_resolvers[metric_name].resolve(
+                        [track.id for track in t.tracks if track.id],
+                        metric_name,
+                    ),
+                )
+                if resolved:
+                    metrics_dict = resolved
+
+        # Create enhanced key function that prioritizes metrics
         def enhanced_key_fn(track: Track) -> Any:
             if track.id and str(track.id) in metrics_dict:
-                # Use pre-computed metric from tracklist metadata
+                # Use resolved metric
                 return metrics_dict[str(track.id)]
-            # Fall back to the original key function
+            # Fall back to original key function
             return key_fn(track)
 
         # Sort tracks using the enhanced key function
         sorted_tracks = sorted(t.tracks, key=enhanced_key_fn, reverse=reverse)
         result = t.with_tracks(sorted_tracks)
-
-        # Log metrics information for debugging
-        if metrics_dict:
-            logger.debug(
-                f"Used {len(metrics_dict)} stored metrics for sorting by {metric_name}",
-                sample_keys=list(metrics_dict.keys())[:5],
-                sample_values=list(metrics_dict.values())[:5],
-            )
-        else:
-            logger.debug(
-                f"No stored metrics found for {metric_name}, using key function",
-            )
 
         # Store metrics in tracklist metadata (preserving existing metrics)
         track_metrics = {

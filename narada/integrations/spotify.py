@@ -9,9 +9,13 @@ import backoff
 from dotenv import load_dotenv
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+from sqlalchemy import select
 
 from narada.config import get_logger, resilient_operation
 from narada.core.models import Artist, Playlist, Track
+from narada.core.protocols import register_metric_resolver
+from narada.database.database import get_session
+from narada.database.dbmodels import DBTrackMapping
 
 # Get contextual logger with service binding
 logger = get_logger(__name__).bind(service="spotify")
@@ -287,3 +291,55 @@ def get_connector_config():
         "factory": lambda _params: SpotifyConnector(),
         "metrics": {"popularity": "popularity"},
     }
+
+
+class SpotifyMetricResolver:
+    """Resolves Spotify metrics from persistence layer."""
+
+    async def resolve(self, track_ids: list[int], metric_name: str) -> dict[str, Any]:
+        """Fetch stored Spotify metadata from the database.
+
+        Args:
+            track_ids: List of internal track IDs
+            metric_name: Metric to resolve (used to determine field name)
+
+        Returns:
+            Dictionary mapping track_id strings to metric values
+        """
+        if not track_ids:
+            return {}
+
+        # Map metric names to connector metadata fields
+        field_map = {
+            "spotify_popularity": "popularity",
+            "explicit_flag": "explicit",
+        }
+
+        # Get the connector field name
+        field = field_map.get(metric_name)
+        if not field:
+            return {}
+
+        # Fetch metadata efficiently with a single query
+        async with get_session() as session:
+            stmt = select(
+                DBTrackMapping.track_id,
+                DBTrackMapping.connector_metadata,
+            ).where(
+                DBTrackMapping.connector_name == "spotify",
+                DBTrackMapping.track_id.in_(track_ids),
+                DBTrackMapping.is_deleted == False,  # noqa: E712
+            )
+
+            results = await session.execute(stmt)
+
+            # Extract field from connector metadata
+            return {
+                str(track_id): metadata.get(field, 0)
+                for track_id, metadata in results
+                if metadata and field in metadata
+            }
+
+
+# Register at module initialization time
+register_metric_resolver("spotify_popularity", SpotifyMetricResolver())

@@ -132,16 +132,6 @@
       ]
     },
     {
-      "id": "sort_popularity",
-      "type": "sorter.by_spotify_popularity",
-      "config": {
-        "reverse": true
-      },
-      "upstream": [
-        "mixer"
-      ]
-    },
-    {
       "id": "source_release_radar",
       "type": "source.spotify_playlist",
       "config": {
@@ -159,7 +149,7 @@
       },
       "upstream": [
         "source_release_radar",
-        "sort_popularity"
+        "mixer"
       ]
     },
     {
@@ -262,6 +252,16 @@
       ]
     },
     {
+      "id": "sort_popularity_final",
+      "type": "sorter.by_spotify_popularity",
+      "config": {
+        "reverse": true
+      },
+      "upstream": [
+        "filter_not_artist_in_blech"
+      ]
+    },
+    {
       "id": "destination",
       "type": "destination.create_spotify_playlist",
       "config": {
@@ -269,7 +269,7 @@
         "description": "Latest tracks from curated sources"
       },
       "upstream": [
-        "filter_not_artist_in_blech"
+        "sort_popularity_final"
       ]
     }
   ]

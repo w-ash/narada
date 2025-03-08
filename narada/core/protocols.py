@@ -68,3 +68,22 @@ class MappingTable(Protocol):
 
     connector_name: Mapped[str]
     connector_id: Mapped[str]
+
+
+class MetricResolver(Protocol):
+    """Protocol for resolving metrics from persistence layer."""
+
+    async def resolve(
+        self,
+        track_ids: list[int],
+        metric_name: str,
+    ) -> dict[str, Any]: ...
+
+
+# Simple module-level registry (no need for a class)
+metric_resolvers: dict[str, MetricResolver] = {}
+
+
+def register_metric_resolver(metric_name: str, resolver: MetricResolver) -> None:
+    """Register a metric resolver implementation."""
+    metric_resolvers[metric_name] = resolver

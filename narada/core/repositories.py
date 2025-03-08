@@ -504,14 +504,14 @@ class TrackRepository(BaseRepository[DBTrack]):
                 existing = result.scalar_one_or_none()
 
                 if existing:
-                    # Update existing mapping
+                    # Update existing mapping but PRESERVE match_method
                     existing.connector_id = connector_id
                     existing.confidence = confidence
-                    existing.match_method = match_method
+                    # DO NOT CHANGE match_method - preserve original value
                     existing.connector_metadata = metadata
                     existing.last_verified = func.now()
                 else:
-                    # Create new mapping
+                    # Create new mapping with provided match_method
                     new_mapping = DBTrackMapping(
                         track_id=track_id,
                         connector_name=connector_name,
@@ -523,8 +523,8 @@ class TrackRepository(BaseRepository[DBTrack]):
                     )
                     self.session.add(new_mapping)
 
-            # Flush changes without committing (let outer transaction handle commit)
-            await self.session.flush()
+                # Flush changes without committing
+                await self.session.flush()
 
             logger.debug(f"Saved {len(mappings)} connector mappings")
 

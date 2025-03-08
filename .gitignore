@@ -1,7 +1,7 @@
-#################
-# Python Related #
-#################
-# Byte-compiled files
+###################
+# Python Related  #
+###################
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -11,56 +11,26 @@ dist/
 build/
 *.egg-info/
 
+# Virtual environments
+.venv/
+
 # Testing and coverage
 .pytest_cache/
 .coverage
 htmlcov/
 .ruff_cache/
+pytest.ini
 
-# Virtual environments
-.venv/
+# Package management
+poetry.lock
+.python-version
 
 # Jupyter Notebook
 .ipynb_checkpoints
 
-################
-# Package Mgmt #
-################
-poetry.lock
-
-#############
-# Databases #
-#############
-*.db
-*.sqlite
-*.sqlite3
-/data/db/*.db
-
-#####################
-# Alembic Migrations #
-#####################
-alembic/versions/
-alembic/*.ini
-!alembic/README
-!alembic/script.py.mako
-alembic.ini
-
-##########################
-# Environment & Config   #
-##########################
-.env
-.spotify_cache
-
-#########
-# Logs  #
-#########
-*.log
-logs/
-/data/logs/**/*.log
-
-#######################
-# IDEs and Editors    #
-#######################
+###################
+# IDEs & Editors  #
+###################
 # VS Code
 .vscode/
 
@@ -77,24 +47,53 @@ logs/
 # Obsidian
 .obsidian/
 
-# Misc
+# Misc editor files
 *~
 
-#########################
-# Operating System Files #
-#########################
+###################
+# OS Generated    #
+###################
 # macOS
 .DS_Store
 
 # Windows
 Thumbs.db
 
-###########################
-# Project-specific Dirs   #
-###########################
+###################
+# Databases       #
+###################
+*.db
+*.sqlite
+*.sqlite3
+/data/db/*.db
+
+###################
+# Configuration   #
+###################
+.env
+.spotify_cache
+
+# Alembic migrations
+alembic/versions/
+alembic/*.ini
+alembic/README
+alembic/script.py.mako
+alembic.ini
+alembic/
+
+###################
+# Logs            #
+###################
+*.log
+logs/
+/data/logs/**/*.log
+
+###################
+# Project-specific #
+###################
 var/
 /var/**/*
 infra/
 scripts/
-tests/*
-pytest.ini
+tests/
+data/
