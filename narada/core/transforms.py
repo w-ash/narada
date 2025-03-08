@@ -11,7 +11,6 @@ Transformations follow functional programming principles:
 - Purity: No side effects or external dependencies
 """
 
-import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime
 import random
@@ -262,24 +261,9 @@ def sort_by_attribute(
         return default
 
     def transform(t: TrackList) -> TrackList:
-        """Apply the sorting transformation with resilient metric loading."""
-        # Check for stored metrics in tracklist metadata
+        """Apply the sorting transformation with metrics-driven approach."""
+        # Simply use metrics that were resolved at the node boundary
         metrics_dict = t.metadata.get("metrics", {}).get(metric_name, {})
-
-        # If we have no metrics but we have tracks with IDs, invoke metric resolution
-        if not metrics_dict and any(track.id for track in t.tracks):
-            from narada.core.protocols import metric_resolvers
-
-            if metric_name in metric_resolvers:
-                loop = asyncio.get_event_loop()
-                resolved = loop.run_until_complete(
-                    metric_resolvers[metric_name].resolve(
-                        [track.id for track in t.tracks if track.id],
-                        metric_name,
-                    ),
-                )
-                if resolved:
-                    metrics_dict = resolved
 
         # Create enhanced key function that prioritizes metrics
         def enhanced_key_fn(track: Track) -> Any:

@@ -263,8 +263,57 @@ def create_filter_node(filter_type: str, operation_name: str | None = None) -> N
 
 
 def create_sorter_node(sorter_type: str, operation_name: str | None = None) -> NodeFn:
-    """Create a sorter node of specified type."""
-    return make_node("sorter", sorter_type, operation_name)
+    """Create a sorter node with integrated metadata resolution."""
+    # Map sorters to required metrics
+    metric_map = {
+        "by_spotify_popularity": "spotify_popularity",
+        "by_user_plays": "user_play_count",
+    }
+
+    # Get base transform
+    transform_fn = make_node("sorter", sorter_type, operation_name)
+    needed_metric = metric_map.get(sorter_type)
+
+    async def node_with_resolution(context: dict, config: dict) -> dict:
+        """Node wrapper that resolves metrics before transformation."""
+        ctx = NodeContext(context)
+
+        # Only attempt resolution if this transform needs metrics
+        if needed_metric:
+            tracklist = ctx.extract_tracklist()
+            metrics = tracklist.metadata.get("metrics", {})
+
+            # Check if metrics need resolution
+            if needed_metric not in metrics or not metrics[needed_metric]:
+                # We're already in async context, so we can await directly
+                from narada.core.protocols import metric_resolvers
+
+                if needed_metric in metric_resolvers:
+                    track_ids = [t.id for t in tracklist.tracks if t.id]
+                    if track_ids:
+                        resolved = await metric_resolvers[needed_metric].resolve(
+                            track_ids,
+                            needed_metric,
+                        )
+                        if resolved:
+                            # Update tracklist in context with resolved metrics
+                            updated = tracklist.with_metadata(
+                                "metrics",
+                                {
+                                    **metrics,
+                                    needed_metric: resolved,
+                                },
+                            )
+
+                            # Update in context for transform to use
+                            upstream_id = ctx.data.get("upstream_task_id")
+                            if upstream_id in context:
+                                context[upstream_id]["tracklist"] = updated
+
+        # Now run transform with metrics available
+        return await transform_fn(context, config)
+
+    return node_with_resolution
 
 
 def create_selector_node(

@@ -252,6 +252,8 @@ class TrackRepository(BaseRepository[DBTrack]):
             artists=[Artist(name=name) for name in db_track.artists["names"]],
             album=db_track.album,
             duration_ms=db_track.duration_ms,
+            release_date=db_track.release_date,
+            isrc=db_track.isrc,
             connector_track_ids={
                 m.connector_name: m.connector_id for m in db_track.mappings
             },
