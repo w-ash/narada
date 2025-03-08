@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from narada.config import get_logger
-from narada.core.models import Artist, Playlist, Track
+from narada.core.models import Artist, Playlist, Track, ensure_utc
 from narada.core.protocols import MappingTable, ModelClass
 from narada.database.dbmodels import (
     DBPlayCount,
@@ -627,7 +627,6 @@ class TrackRepository(BaseRepository[DBTrack]):
                 track_updated = True
                 logger.debug(f"Added missing release_date for track {existing.id}")
 
-            # Add additional core attributes updates here if needed
             # For example, if duration_ms is missing...
             if existing.duration_ms is None and track.duration_ms:
                 existing.duration_ms = track.duration_ms
@@ -879,6 +878,7 @@ class PlaylistRepository(BaseRepository[DBPlaylist]):
                 artists=[Artist(name=name) for name in pt.track.artists["names"]],
                 album=pt.track.album,
                 duration_ms=pt.track.duration_ms,
+                release_date=ensure_utc(pt.track.release_date),
                 connector_track_ids={
                     m.connector_name: m.connector_id for m in pt.track.mappings
                 },

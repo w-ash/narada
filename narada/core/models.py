@@ -4,7 +4,7 @@ These immutable models form the foundation of our business logic,
 enforcing invariants while enabling functional transformation patterns.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 import attr
@@ -274,3 +274,10 @@ class WorkflowResult:
                 for t in self.tracks
             ],
         }
+
+
+def ensure_utc(dt: datetime | None) -> datetime | None:
+    """Ensure datetime is timezone-aware with UTC."""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
