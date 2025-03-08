@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 
 from narada.config import get_logger
-from narada.core.matcher import ConnectorType, batch_match_tracks, create_engine
+from narada.core.matcher import ConnectorType, batch_match_tracks
 from narada.core.models import TrackList
 from narada.core.repositories import TrackRepository
 from narada.database.database import get_session
@@ -111,33 +111,32 @@ def make_node(
 
 
 def create_enricher_node(config: dict) -> NodeFn:
-    """Create an enricher node for metadata enrichment of tracks.
+    """Create an enricher node for metadata extraction and attachment.
 
-    The enricher node is responsible for enhancing a tracklist with metadata
-    from external services (e.g., LastFM, Spotify). It:
+    Architectural separation of concerns:
+    - Matcher handles identity resolution ("Is this track X the same as track Y?")
+    - Enricher handles metadata extraction ("What do we know about this track?")
 
-    1. Takes tracks from an input tracklist
-    2. Uses the matcher to resolve track identities across services
-    3. Retrieves metadata for successfully matched tracks
-    4. Attaches the metadata as metrics to the tracklist
-
-    This maintains a separation where the matcher handles identity resolution
-    while the enricher focuses on metadata retrieval and attachment.
+    The enricher uses a clean pipeline architecture:
+    1. Extract tracks from input tracklist
+    2. Resolve track identity across services via matcher
+    3. Extract valuable metadata attributes
+    4. Attach metrics to tracklist for downstream operations
 
     Args:
-        config: Configuration for the enricher, including:
-            - connector: Name of the connector to use (e.g., "lastfm", "spotify")
-            - attributes: List of attributes to extract from the connector
+        config: Configuration dictionary containing:
+            - connector: Service to extract data from (e.g., "lastfm", "spotify")
+            - attributes: Metadata fields to extract and attach
 
     Returns:
-        An async node function compatible with the workflow system
+        Workflow node function with standard (context, config) -> dict signature
     """
     enricher_type = config.get("connector")
 
     if enricher_type not in CONNECTORS:
         raise ValueError(f"Unsupported connector: {enricher_type}")
 
-    # Store configuration for this specific enricher
+    # Retrieve connector configuration once at creation time
     enricher_config = CONNECTORS[enricher_type]
 
     async def node_impl(context: dict, node_config: dict) -> dict:
@@ -147,113 +146,85 @@ def create_enricher_node(config: dict) -> NodeFn:
         logger = get_logger(__name__)
         with logger.contextualize(operation="enrichment", connector=enricher_type):
             logger.info(
-                f"Starting enrichment with {enricher_type}",
+                f"Starting {enricher_type} enrichment",
                 track_count=len(tracklist.tracks),
             )
 
-            # Initialize primary connector
+            # Initialize connector instance
             connector_instance = enricher_config["factory"](node_config)
 
-            # Initialize dependencies
-            dependencies = {}
-            for dep_name in enricher_config.get("dependencies", []):
-                if dep_name in CONNECTORS:
-                    dependencies[dep_name] = CONNECTORS[dep_name]["factory"](
-                        node_config,
-                    )
-
-            # Create engine with properly assigned connectors
-            engine = create_engine(
-                lastfm=connector_instance
-                if enricher_type == "lastfm"
-                else dependencies.get("lastfm"),
-                musicbrainz=connector_instance
-                if enricher_type == "musicbrainz"
-                else dependencies.get("musicbrainz"),
-            )
-
-            # Match tracks to target service
+            # Resolve track identities through matcher service
             async with get_session() as session:
                 track_repo = TrackRepository(session)
 
-                logger.debug("Matching tracks to service", connector=enricher_type)
                 match_results = await batch_match_tracks(
                     tracklist.tracks,
                     cast("ConnectorType", enricher_type),
-                    engine,
+                    connector_instance,
                     track_repo,
                 )
 
-                # Extract metrics from match results
+                # Extract configured metrics from match results
                 metrics = {}
 
                 for attr in config.get("attributes", []):
                     extractor = enricher_config["extractors"].get(attr)
                     if not extractor:
                         logger.warning(
-                            f"No extractor defined for {attr}",
+                            f"No extractor for {attr}",
                             connector=enricher_type,
                         )
                         continue
 
-                    with logger.contextualize(attribute=attr):
-                        logger.debug("Extracting attribute")
-                        values = {}
+                    values = {}
 
-                        for track_id, result in match_results.items():
-                            if not result.success:
-                                continue
+                    # Extract metrics from successful matches
+                    for track_id, result in match_results.items():
+                        if not result.success:
+                            continue
 
-                            try:
-                                # Special handling for play counts
-                                if attr == "user_play_count" and hasattr(
-                                    result,
-                                    "play_count",
-                                ):
-                                    value = (
-                                        result.play_count.user_play_count
-                                        if result.play_count
-                                        else None
-                                    )
-                                elif attr == "global_play_count" and hasattr(
-                                    result,
-                                    "play_count",
-                                ):
-                                    value = (
-                                        result.play_count.global_play_count
-                                        if result.play_count
-                                        else None
-                                    )
-                                else:
-                                    # Use the configured extractor for other attributes
-                                    value = extractor(result)
-
-                                if value is not None:
-                                    values[str(track_id)] = value
-                            except Exception as e:
-                                logger.exception(
-                                    "Failed to extract attribute",
-                                    track_id=track_id,
-                                    error=str(e),
+                        try:
+                            # Handle special case for play counts
+                            if (
+                                attr in ("user_play_count", "global_play_count")
+                                and result.play_count
+                            ):
+                                value = (
+                                    result.play_count.user_play_count
+                                    if attr == "user_play_count"
+                                    else result.play_count.global_play_count
                                 )
+                            else:
+                                # Use configured extractor for standard attributes
+                                value = extractor(result)
 
-                        if values:
-                            metrics[attr] = values
-                            logger.info("Extracted attribute", count=len(values))
-                        else:
-                            logger.warning("No values extracted")
+                            if value is not None:
+                                values[str(track_id)] = value
+                        except Exception as e:
+                            logger.exception(
+                                f"Extraction error: {e}",
+                                track_id=track_id,
+                            )
 
-                # Add metrics to tracklist
-                enriched = tracklist
+                    if values:
+                        metrics[attr] = values
+                        logger.info(f"Extracted {attr}", count=len(values))
+
+                # Attach metrics to tracklist
                 if metrics:
-                    current = enriched.metadata.get("metrics", {})
-                    enriched = enriched.with_metadata("metrics", {**current, **metrics})
+                    current_metrics = tracklist.metadata.get("metrics", {})
+                    enriched = tracklist.with_metadata(
+                        "metrics",
+                        {**current_metrics, **metrics},
+                    )
+                else:
+                    enriched = tracklist
 
-                logger.info("Enrichment complete", metrics_count=len(metrics))
                 return {
                     "tracklist": enriched,
                     "match_results": match_results,
                     "operation": f"{enricher_type}_enrichment",
+                    "metrics_count": len(metrics),
                 }
 
     return node_impl

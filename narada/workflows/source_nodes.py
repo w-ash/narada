@@ -9,7 +9,7 @@ responsible for data preparation and persistence.
 
 from narada.config import get_logger
 from narada.core.models import Playlist, TrackList
-from narada.core.repositories import PlaylistRepository, TrackRepository
+from narada.core.repositories import PlaylistRepository
 from narada.database.database import get_session
 from narada.integrations.spotify import SpotifyConnector
 
@@ -17,12 +17,11 @@ logger = get_logger(__name__)
 
 
 async def spotify_playlist_source(_context: dict, config: dict) -> dict:
-    """Spotify playlist source node with immediate track persistence.
+    """Spotify playlist source node.
 
-    This node fetches a playlist from Spotify and ensures all tracks have
-    database IDs before being processed by downstream nodes. This pattern
-    guarantees stable identifiers for cross-node operations like filtering
-    and deduplication.
+    Fetches a playlist from Spotify and creates a tracklist for downstream nodes.
+    The save_playlist method automatically ensures all tracks have database IDs,
+    simplifying the source node implementation.
 
     Args:
         context: Workflow context (unused in source nodes)
@@ -44,49 +43,42 @@ async def spotify_playlist_source(_context: dict, config: dict) -> dict:
     spotify = SpotifyConnector()
     spotify_playlist = await spotify.get_spotify_playlist(playlist_id)
 
-    # Track persistence metrics
-    stats = {"new_tracks": 0, "updated_tracks": 0}
-
-    # Persist tracks to guarantee database IDs
+    # Create internal playlist (tracks will be saved automatically by save_playlist)
     async with get_session(rollback=False) as session:
-        track_repo = TrackRepository(session)
-        db_tracks = []
-
-        # Process each track to ensure database presence
-        for track in spotify_playlist.tracks:
-            updated_track = await track_repo.save_track(track)
-            db_tracks.append(updated_track)
-
-            # Update persistence metrics
-            if updated_track.id is not None and track.id is None:
-                stats["new_tracks"] += 1
-            else:
-                stats["updated_tracks"] += 1
-
-        # Create internal playlist reference
         playlist_repo = PlaylistRepository(session)
+
         internal_playlist = Playlist(
             name=spotify_playlist.name,
-            tracks=db_tracks,
+            tracks=spotify_playlist.tracks,  # Original tracks without database IDs
             description=f"Source: Spotify playlist {playlist_id}",
             connector_track_ids={"spotify": playlist_id},
         )
 
-        # Create playlist association in database
+        # Create playlist association in database (automatically saves tracks)
         db_playlist_id = await playlist_repo.save_playlist(internal_playlist)
 
-    # Build tracklist with rich metadata
-    tracklist = TrackList(tracks=db_tracks)
+    # Build tracklist with enriched tracks that now have IDs
+    # We need to reload the playlist to get the tracks with IDs
+    async with get_session() as session:
+        playlist_repo = PlaylistRepository(session)
+        saved_playlist = await playlist_repo.get_playlist("internal", db_playlist_id)
+
+        if not saved_playlist:
+            raise ValueError(
+                f"Failed to retrieve saved playlist with ID {db_playlist_id}",
+            )
+
+        tracklist = TrackList(tracks=saved_playlist.tracks)
+
+    # Add metadata
     tracklist = tracklist.with_metadata("source_playlist_name", spotify_playlist.name)
     tracklist = tracklist.with_metadata("spotify_playlist_id", playlist_id)
     tracklist = tracklist.with_metadata("db_playlist_id", db_playlist_id)
 
-    # Return comprehensive result
     return {
         "tracklist": tracklist,
         "source_id": playlist_id,
         "source_name": spotify_playlist.name,
         "track_count": len(tracklist.tracks),
         "db_playlist_id": db_playlist_id,
-        **stats,
     }

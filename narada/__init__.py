@@ -1,8 +1,18 @@
 """Narada music integration platform."""
 
-from importlib.metadata import version
+# Version detection with environment-aware fallback pattern
+try:
+    from importlib.metadata import PackageNotFoundError, version
 
-__version__ = version("narada")
+    try:
+        __version__ = version("narada")
+    except PackageNotFoundError:
+        # Development environment fallback
+        __version__ = "0.1.2-dev"
+except ImportError:
+    # Extreme fallback for environments without importlib.metadata
+    __version__ = "0.1.2-dev"
+
 __author__ = "Ash Wright"
 __license__ = "MIT"
 

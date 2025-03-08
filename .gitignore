@@ -43,6 +43,7 @@ alembic/versions/
 alembic/*.ini
 !alembic/README
 !alembic/script.py.mako
+alembic.ini
 
 ##########################
 # Environment & Config   #
@@ -95,4 +96,5 @@ var/
 /var/**/*
 infra/
 scripts/
-tests/
+tests/*
+pytest.ini

@@ -278,11 +278,12 @@ class TrackRepository(BaseRepository[DBTrack]):
             release_date=track.release_date,
             isrc=track.isrc,
             spotify_id=track.connector_track_ids.get("spotify"),
+            musicbrainz_id=track.connector_track_ids.get("musicbrainz"),
             mappings=[
                 DBTrackMapping(
                     connector_name=name,
                     connector_id=track_id,
-                    match_method="direct",
+                    match_method="source",
                     confidence=100,
                     connector_metadata=track.connector_metadata.get(name, {}),
                 )
@@ -738,14 +739,38 @@ class PlaylistRepository(BaseRepository[DBPlaylist]):
         db_playlist = await self._execute_select(stmt)
         return self._convert_db_playlist(db_playlist) if db_playlist else None
 
-    async def save_playlist(
-        self,
-        playlist: Playlist,
-    ) -> str:
-        """Save playlist with efficient batch operations."""
+    async def save_playlist(self, playlist: Playlist) -> str:
+        """Save playlist and all its tracks to the database.
+
+        This method ensures all tracks have database IDs before creating the playlist
+        relationships. Tracks without IDs are automatically saved to the database first,
+        preserving the original playlist order.
+
+        Args:
+            playlist: The Playlist domain model to save
+
+        Returns:
+            String ID of the saved playlist
+
+        Raises:
+            SQLAlchemyError: If database operations fail
+        """
 
         async def save_playlist_operation() -> str:
-            # Create DB playlist
+            # First ensure all tracks have IDs by saving any that don't
+            track_repo = TrackRepository(self.session)
+            updated_tracks = []
+
+            for track in playlist.tracks:
+                if not track.id:
+                    # Save track to get an ID assigned
+                    saved_track = await track_repo.save_track(track)
+                    updated_tracks.append(saved_track)
+                else:
+                    # Keep existing track as is
+                    updated_tracks.append(track)
+
+            # Create DB playlist with updated tracks list (all tracks now have IDs)
             db_playlist = DBPlaylist(
                 name=playlist.name,
                 description=playlist.description,
@@ -768,19 +793,14 @@ class PlaylistRepository(BaseRepository[DBPlaylist]):
             current_time = datetime.datetime.now(datetime.UTC)
             playlist_tracks = []
 
-            for i, track in enumerate(playlist.tracks):
-                if not track.id:
-                    # Skip tracks without IDs
-                    logger.warning(f"Skipping track without ID: {track.title}")
-                    continue
-
+            for i, track in enumerate(updated_tracks):
                 playlist_tracks.append(
                     DBPlaylistTrack(
                         playlist_id=db_playlist.id,
                         track_id=track.id,
                         sort_key=self._generate_sort_key(i),
-                        created_at=current_time,  # Use Python timestamp
-                        updated_at=current_time,  # Use Python timestamp
+                        created_at=current_time,
+                        updated_at=current_time,
                     ),
                 )
 

@@ -82,6 +82,7 @@ class DBTrack(NaradaDBBase):
     spotify_id: Mapped[str | None] = mapped_column(String(64), index=True)
     isrc: Mapped[str | None] = mapped_column(String(32), index=True)
     lastfm_url: Mapped[str | None] = mapped_column(String(255))
+    musicbrainz_id: Mapped[str | None] = mapped_column(String(36), index=True)
 
     play_counts = relationship(
         "DBPlayCount",
