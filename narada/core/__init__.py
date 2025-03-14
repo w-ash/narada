@@ -10,9 +10,6 @@ from narada.core.matcher import MatchResult, batch_match_tracks
 # Import core domain models
 from narada.core.models import Artist, ConnectorTrackMapping, Playlist, Track, TrackList
 
-# Import repository classes
-from narada.core.repositories import BaseRepository, PlaylistRepository, TrackRepository
-
 # Import transform functions
 from narada.core.transforms import (  # Type definitions; Core pipeline functions; Filtering functions; Sorting functions; Selection functions; Combination functions; Playlist operations
     Transform,
@@ -32,6 +29,9 @@ from narada.core.transforms import (  # Type definitions; Core pipeline function
     sort_by_attribute,
     take_last,
 )
+
+# Import repository classes
+from narada.repositories import BaseRepository, PlaylistRepository, TrackRepository
 
 # Define explicit public API
 __all__ = [

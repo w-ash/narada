@@ -209,66 +209,166 @@ class LastFmConnector:
         self,
         tracks: list[Track],
         username: str | None = None,
+        batch_size: int = 50,
+        concurrency_limit: int = 5,
     ) -> dict[int, LastFmPlayCount]:
         """Batch retrieve play counts for multiple tracks.
 
-        Optimizes API calls through parallel requests.
+        Optimizes API calls through parallel requests with batching and
+        prioritizes MBID resolution for better accuracy and performance.
 
         Args:
             tracks: List of domain Track models
             username: Optional username (defaults to configured user)
+            batch_size: Maximum batch size (default: 50)
+            concurrency_limit: Maximum concurrent API calls (default: 5)
 
         Returns:
             dictionary mapping track ID to play count info
         """
         user = username or self.username
         results = {}
+        logger = get_logger(__name__)
 
-        # Define coroutines based on available identifiers
-        coroutines = []
+        if not user:
+            logger.warning("No username provided for Last.fm play count")
+            return {}
+
+        if not self.client:
+            logger.warning("Last.fm client not initialized - missing API credentials")
+            return {}
+
+        # Separate tracks with MBIDs from those needing artist/title lookup
+        mbid_tracks = []  # Tracks with MusicBrainz IDs
+        search_tracks = []  # Tracks needing artist/title search
+
         for track in tracks:
-            track_id = track.id
-            if track_id is None:
+            if track.id is None:
                 continue
 
-            # Try MBID resolution first if available
-            mbid = track.connector_track_ids.get("musicbrainz")
-            if mbid:
-                coro = self.get_mbid_play_count(mbid, user)
-                coroutines.append((track_id, coro))
-                continue
+            if track.connector_track_ids.get("musicbrainz"):
+                mbid_tracks.append(track)
+            elif track.artists and track.title:
+                search_tracks.append(track)
 
-            # Fall back to artist/title search
-            if track.artists and track.title:
-                artist_name = track.artists[0].name
-                coro = self.get_track_play_count(artist_name, track.title, user)
-                coroutines.append((track_id, coro))
+        logger.info(
+            f"Last.fm batch lookup: {len(mbid_tracks)} tracks with MBIDs, {len(search_tracks)} with artist/title",
+        )
 
-        # Execute all requests in parallel with rate limiting
-        # Use semaphore to limit concurrency to 3 requests at a time
-        semaphore = asyncio.Semaphore(3)
+        # Process each group separately for better batching
+        # First process tracks with MBIDs (faster and more accurate)
+        if mbid_tracks:
+            mbid_results = await self._batch_process_tracks(
+                mbid_tracks,
+                user,
+                use_mbid=True,
+                batch_size=batch_size,
+                concurrency_limit=concurrency_limit,
+            )
+            results.update(mbid_results)
 
-        async def bounded_fetch(track_id, coro):
+        # Then process tracks needing artist/title search
+        if search_tracks:
+            search_results = await self._batch_process_tracks(
+                search_tracks,
+                user,
+                use_mbid=False,
+                batch_size=batch_size,
+                concurrency_limit=concurrency_limit,
+            )
+            results.update(search_results)
+
+        logger.info(
+            f"Last.fm batch complete: retrieved {len(results)}/{len(tracks)} play counts",
+        )
+        return results
+
+    async def _batch_process_tracks(
+        self,
+        tracks: list[Track],
+        username: str,
+        use_mbid: bool = True,
+        batch_size: int = 50,
+        concurrency_limit: int = 5,
+    ) -> dict[int, LastFmPlayCount]:
+        """Process a batch of tracks with either MBID or artist/title lookup.
+
+        Args:
+            tracks: List of tracks to process
+            username: Last.fm username
+            use_mbid: Whether to use MusicBrainz IDs (True) or artist/title (False)
+            batch_size: Maximum batch size
+            concurrency_limit: Maximum concurrent API calls
+
+        Returns:
+            Dictionary mapping track IDs to play counts
+        """
+        results = {}
+        logger = get_logger(__name__)
+
+        # Create semaphore for concurrency control
+        semaphore = asyncio.Semaphore(concurrency_limit)
+
+        async def process_track(track: Track) -> tuple[int, LastFmPlayCount]:
+            """Process a single track with rate limiting."""
             async with semaphore:
-                # Add 0.25s delay between requests to be nice to Last.fm API
-                await asyncio.sleep(0.25)
-                result = await coro
-                return track_id, result
+                try:
+                    # Ensure track.id is not None (essential fix)
+                    if track.id is None:
+                        logger.warning(f"Skipping track with None id: {track.title}")
+                        return -1, LastFmPlayCount()  # Use sentinel value for id
 
-        fetch_tasks = [bounded_fetch(t_id, coro) for t_id, coro in coroutines]
-        completed = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+                    # Add small delay between requests to be nice to Last.fm API
+                    await asyncio.sleep(0.2)
 
-        # Process results
-        for item in completed:
-            if isinstance(item, Exception):
-                logger.error(f"Error in batch play count fetch: {item}")
-                continue
-            if not isinstance(item, tuple):
-                logger.error(f"Unexpected result type: {type(item)}")
-                continue
+                    if use_mbid:
+                        # Use MBID for lookup (guaranteed to exist due to filtering)
+                        mbid = track.connector_track_ids.get("musicbrainz")
+                        if mbid is not None:
+                            result = await self.get_mbid_play_count(mbid, username)
+                            logger.debug(f"MBID lookup for track {track.id}: {mbid}")
+                        else:
+                            logger.debug(f"Missing MBID for track {track.id}")
+                            result = LastFmPlayCount()
+                    else:
+                        # Use artist/title for lookup
+                        artist_name = track.artists[0].name if track.artists else ""
+                        result = await self.get_track_play_count(
+                            artist_name,
+                            track.title,
+                            username,
+                        )
+                        logger.debug(
+                            f"Artist/title lookup for track {track.id}: {artist_name} - {track.title}",
+                        )
 
-            track_id, play_count = item
-            results[track_id] = play_count
+                    return track.id, result
+                except Exception as e:
+                    if track.id is None:
+                        logger.exception(f"Error processing track with None id: {e}")
+                        return -1, LastFmPlayCount()  # Use sentinel value for id
+                    else:
+                        logger.exception(f"Error processing track {track.id}: {e}")
+                        return track.id, LastFmPlayCount()
+
+        # Process tracks in batches
+        for i in range(0, len(tracks), batch_size):
+            batch = tracks[i : i + batch_size]
+
+            # Process batch concurrently
+            batch_tasks = [process_track(track) for track in batch]
+            batch_results = await asyncio.gather(*batch_tasks)
+
+            # Collect results, filtering out empty results
+            results.update({
+                track_id: play_count
+                for track_id, play_count in batch_results
+                if track_id != -1 and play_count and play_count.track_url
+            })
+            logger.info(
+                f"Processed batch {i // batch_size + 1}/{(len(tracks) + batch_size - 1) // batch_size}: "
+                f"{len(results)}/{len(tracks)} successful",
+            )
 
         return results
 

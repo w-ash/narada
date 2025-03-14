@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import os
 from typing import Any
 
+import attrs
 import backoff
 from dotenv import load_dotenv
 import spotipy
@@ -14,8 +15,8 @@ from sqlalchemy import select
 from narada.config import get_logger, resilient_operation
 from narada.core.models import Artist, Playlist, Track
 from narada.core.protocols import register_metric_resolver
-from narada.database.database import get_session
-from narada.database.dbmodels import DBTrackMapping
+from narada.database.db_connection import get_session
+from narada.database.db_models import DBTrackMapping
 
 # Get contextual logger with service binding
 logger = get_logger(__name__).bind(service="spotify")
@@ -27,6 +28,7 @@ os.environ["SPOTIPY_CLIENT_SECRET"] = os.getenv("SPOTIFY_CLIENT_SECRET", "")
 os.environ["SPOTIPY_REDIRECT_URI"] = os.getenv("SPOTIFY_REDIRECT_URI", "")
 
 
+@attrs.define
 class SpotifyConnector:
     """Thin wrapper around spotipy with domain model conversion.
 
@@ -38,7 +40,9 @@ class SpotifyConnector:
     All methods handle rate limiting via backoff decorator.
     """
 
-    def __init__(self) -> None:
+    client: spotipy.Spotify = attrs.field(init=False)
+
+    def __attrs_post_init__(self) -> None:
         """Initialize Spotify client with OAuth configuration."""
         logger.debug("Initializing Spotify connector")
         self.client = spotipy.Spotify(
@@ -53,6 +57,54 @@ class SpotifyConnector:
                 cache_handler=spotipy.CacheFileHandler(cache_path=".spotify_cache"),
             ),
         )
+
+    @resilient_operation("search_spotify_by_isrc")
+    @backoff.on_exception(backoff.expo, spotipy.SpotifyException, max_tries=3)
+    async def search_by_isrc(self, isrc: str) -> dict[str, Any] | None:
+        """Search for a track using ISRC identifier.
+
+        Args:
+            isrc: The ISRC code to search for
+
+        Returns:
+            Track data if found, None otherwise
+        """
+        logger.debug(f"Searching Spotify for ISRC: {isrc}")
+        results = await asyncio.to_thread(
+            self.client.search,
+            f"isrc:{isrc}",
+            type="track",
+            limit=1,
+            market="US",
+        )
+
+        tracks = results.get("tracks", {}).get("items", []) if results else []
+        return tracks[0] if tracks else None
+
+    @resilient_operation("search_spotify_track")
+    @backoff.on_exception(backoff.expo, spotipy.SpotifyException, max_tries=3)
+    async def search_track(self, artist: str, title: str) -> dict[str, Any] | None:
+        """Search for a track by artist and title.
+
+        Args:
+            artist: Artist name
+            title: Track title
+
+        Returns:
+            Track data if found, None otherwise
+        """
+        query = f"artist:{artist} track:{title}"
+        logger.debug(f"Searching Spotify with query: {query}")
+        results = await asyncio.to_thread(
+            self.client.search,
+            query,
+            type="track",
+            limit=1,
+            market="US",
+        )
+
+        tracks = results.get("tracks", {}).get("items", []) if results else []
+        return tracks[0] if tracks else None
 
     @resilient_operation("get_spotify_playlist")
     @backoff.on_exception(backoff.expo, spotipy.SpotifyException, max_tries=3)
@@ -86,8 +138,6 @@ class SpotifyConnector:
         raw_playlist["tracks"]["items"] = all_items
 
         return convert_spotify_playlist_to_domain(raw_playlist)
-
-    # Add these methods to SpotifyConnector
 
     @resilient_operation("create_spotify_playlist")
     @backoff.on_exception(backoff.expo, spotipy.SpotifyException, max_tries=3)
@@ -271,7 +321,7 @@ def convert_spotify_playlist_to_domain(spotify_playlist: dict[str, Any]) -> Play
         tracks=domain_tracks,
     )
 
-    return playlist.with_connector_track_id("spotify", spotify_playlist["id"])
+    return playlist.with_connector_playlist_id("spotify", spotify_playlist["id"])
 
 
 def get_connector_config():
@@ -293,6 +343,7 @@ def get_connector_config():
     }
 
 
+@attrs.define
 class SpotifyMetricResolver:
     """Resolves Spotify metrics from persistence layer."""
 

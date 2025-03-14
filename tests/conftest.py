@@ -2,7 +2,8 @@ import asyncio
 
 import pytest
 
-from narada.database.database import get_session, init_db
+from narada.database.db_connection import get_session
+from narada.database.init_db import init_db
 
 
 @pytest.fixture(scope="session")
@@ -33,7 +34,7 @@ async def db_session(initialize_db):
 @pytest.fixture
 async def track_repo_fixture(db_session):
     """Provide a track repository."""
-    from narada.core.repositories import TrackRepository
+    from narada.repositories import TrackRepository
 
     return TrackRepository(db_session)
 
@@ -41,6 +42,6 @@ async def track_repo_fixture(db_session):
 @pytest.fixture
 async def playlist_repo_fixture(db_session):
     """Provide a playlist repository."""
-    from narada.core.repositories import PlaylistRepository
+    from narada.repositories import PlaylistRepository
 
     return PlaylistRepository(db_session)

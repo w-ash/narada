@@ -63,11 +63,11 @@ class MappingTable(Protocol):
     """Protocol for mapping tables.
 
     Defines the contract for cross-connector entity resolution tables
-    that map between different identification systems.
+    that map tracks between different identification systems.
     """
 
     connector_name: Mapped[str]
-    connector_id: Mapped[str]
+    connector_track_id: Mapped[str]
 
 
 class MetricResolver(Protocol):

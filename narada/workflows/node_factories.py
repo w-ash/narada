@@ -6,13 +6,10 @@ that minimizes code surface area while maintaining maximum flexibility.
 """
 
 from collections.abc import Awaitable, Callable
-from typing import cast
 
 from narada.config import get_logger
-from narada.core.matcher import ConnectorType, batch_match_tracks
+from narada.core.matcher import batch_match_tracks
 from narada.core.models import TrackList
-from narada.core.repositories import TrackRepository
-from narada.database.database import get_session
 from narada.integrations import CONNECTORS
 from narada.workflows.destination_nodes import DESTINATION_HANDLERS
 from narada.workflows.node_context import NodeContext
@@ -153,79 +150,83 @@ def create_enricher_node(config: dict) -> NodeFn:
             # Initialize connector instance
             connector_instance = enricher_config["factory"](node_config)
 
+            # Get batch configuration from node config or fall back to global config
+            from narada.config import get_config
+
+            batch_size = node_config.get(
+                "batch_size",
+                get_config("LASTFM_ENRICHER_BATCH_SIZE", 50),
+            )
+            concurrency_limit = node_config.get(
+                "concurrency",
+                get_config("LASTFM_ENRICHER_CONCURRENCY", 5),
+            )
+
             # Resolve track identities through matcher service
-            async with get_session() as session:
-                track_repo = TrackRepository(session)
+            match_results = await batch_match_tracks(
+                tracklist,
+                enricher_type,
+                connector_instance,
+                batch_size=batch_size,
+                concurrency_limit=concurrency_limit,
+            )
 
-                match_results = await batch_match_tracks(
-                    tracklist.tracks,
-                    cast("ConnectorType", enricher_type),
-                    connector_instance,
-                    track_repo,
-                )
+            # Extract configured metrics from match results
+            metrics = {}
 
-                # Extract configured metrics from match results
-                metrics = {}
+            for attr in config.get("attributes", []):
+                extractor = enricher_config["extractors"].get(attr)
+                if not extractor:
+                    logger.warning(
+                        f"No extractor for {attr}",
+                        connector=enricher_type,
+                    )
+                    continue
 
-                for attr in config.get("attributes", []):
-                    extractor = enricher_config["extractors"].get(attr)
-                    if not extractor:
-                        logger.warning(
-                            f"No extractor for {attr}",
-                            connector=enricher_type,
-                        )
+                values = {}
+
+                # Extract metrics from successful matches
+                for track_id, result in match_results.items():
+                    if not result.success or track_id is None:
                         continue
 
-                    values = {}
+                    try:
+                        # Extract value using the appropriate method based on the attribute
+                        if attr in result.metadata:
+                            # Direct access from metadata if available there
+                            value = result.metadata.get(attr)
+                        else:
+                            # Use configured extractor for standard attributes
+                            value = extractor(result)
 
-                    # Extract metrics from successful matches
-                    for track_id, result in match_results.items():
-                        if not result.success:
-                            continue
+                        if value is not None:
+                            values[str(track_id)] = value
+                    except Exception as e:
+                        logger.exception(
+                            f"Extraction error: {e}",
+                            track_id=track_id,
+                        )
 
-                        try:
-                            # Handle special case for play counts
-                            if (
-                                attr in ("user_play_count", "global_play_count")
-                                and result.play_count
-                            ):
-                                value = (
-                                    result.play_count.user_play_count
-                                    if attr == "user_play_count"
-                                    else result.play_count.global_play_count
-                                )
-                            else:
-                                # Use configured extractor for standard attributes
-                                value = extractor(result)
+                if values:
+                    metrics[attr] = values
+                    logger.info(f"Extracted {attr}", count=len(values))
 
-                            if value is not None:
-                                values[str(track_id)] = value
-                        except Exception as e:
-                            logger.exception(
-                                f"Extraction error: {e}",
-                                track_id=track_id,
-                            )
+            # Attach metrics to tracklist
+            if metrics:
+                current_metrics = tracklist.metadata.get("metrics", {})
+                enriched = tracklist.with_metadata(
+                    "metrics",
+                    {**current_metrics, **metrics},
+                )
+            else:
+                enriched = tracklist
 
-                    if values:
-                        metrics[attr] = values
-                        logger.info(f"Extracted {attr}", count=len(values))
-
-                # Attach metrics to tracklist
-                if metrics:
-                    current_metrics = tracklist.metadata.get("metrics", {})
-                    enriched = tracklist.with_metadata(
-                        "metrics",
-                        {**current_metrics, **metrics},
-                    )
-                else:
-                    enriched = tracklist
-
-                return {
-                    "tracklist": enriched,
-                    "match_results": match_results,
-                    "operation": f"{enricher_type}_enrichment",
-                    "metrics_count": len(metrics),
-                }
+            return {
+                "tracklist": enriched,
+                "match_results": match_results,
+                "operation": f"{enricher_type}_enrichment",
+                "metrics_count": len(metrics),
+            }
 
     return node_impl
 

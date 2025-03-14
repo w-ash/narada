@@ -93,6 +93,12 @@ _config: dict[str, Any] = {
     "FILE_LOG_LEVEL": os.getenv("FILE_LOG_LEVEL", "DEBUG"),
     "LOG_FILE": Path(os.getenv("LOG_FILE", "narada.log")),
     "DATA_DIR": Path(os.getenv("DATA_DIR", "data")),
+    
+    # Batch processing settings
+    "LASTFM_ENRICHER_BATCH_SIZE": int(os.getenv("LASTFM_ENRICHER_BATCH_SIZE", "50")),
+    "LASTFM_ENRICHER_CONCURRENCY": int(os.getenv("LASTFM_ENRICHER_CONCURRENCY", "5")),
+    "TRACK_BATCH_RETRY_COUNT": int(os.getenv("TRACK_BATCH_RETRY_COUNT", "3")),
+    "TRACK_BATCH_RETRY_DELAY": int(os.getenv("TRACK_BATCH_RETRY_DELAY", "5")),
 }
 
 

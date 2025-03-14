@@ -14,6 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     select,
 )
+from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
@@ -23,13 +24,13 @@ from sqlalchemy.orm import (
 )
 
 from narada.config import get_logger
-from narada.database.database import get_engine
+from narada.database.db_connection import get_engine
 
 # Create module logger
 logger = get_logger(__name__)
 
 
-class NaradaDBBase(DeclarativeBase):
+class NaradaDBBase(AsyncAttrs, DeclarativeBase):
     """Base class for all database models with timestamps and soft delete."""
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -128,13 +129,15 @@ class DBTrackMapping(NaradaDBBase):
 
     __tablename__ = "track_mappings"
     __table_args__ = (
-        UniqueConstraint("connector_name", "connector_id"),
+        UniqueConstraint("connector_name", "connector_track_id"),  # Updated column name
         Index("ix_track_mappings_lookup", "track_id", "connector_name"),
     )
 
     track_id: Mapped[int] = mapped_column(ForeignKey("tracks.id"))
     connector_name: Mapped[str] = mapped_column(String(32))
-    connector_id: Mapped[str] = mapped_column(String(64))
+    connector_track_id: Mapped[str] = mapped_column(
+        String(64),
+    )  # Renamed from connector_id
     match_method: Mapped[str] = mapped_column(String(32))
     confidence: Mapped[int]
     last_verified: Mapped[datetime] = mapped_column(
@@ -177,7 +180,7 @@ class DBPlaylistMapping(NaradaDBBase):
 
     playlist_id: Mapped[int] = mapped_column(ForeignKey("playlists.id"))
     connector_name: Mapped[str] = mapped_column(String(32))
-    connector_id: Mapped[str] = mapped_column(String(64))
+    connector_playlist_id: Mapped[str] = mapped_column(String(64))
     last_synced: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),

@@ -27,7 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from narada.config import get_logger, setup_loguru_logger
-from narada.database.database import (
+from narada.database.db_connection import (
     DBPlayCount,
     DBPlaylist,
     DBPlaylistMapping,

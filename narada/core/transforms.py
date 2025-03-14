@@ -508,7 +508,7 @@ def rename(
             tracks=p.tracks,
             description=p.description,
             id=p.id,
-            connector_track_ids=p.connector_track_ids.copy(),
+            connector_playlist_ids=p.connector_playlist_ids.copy(),
         )
 
     return transform(playlist) if playlist is not None else transform
@@ -536,7 +536,7 @@ def set_description(
             tracks=p.tracks,
             description=description,
             id=p.id,
-            connector_track_ids=p.connector_track_ids.copy(),
+            connector_playlist_ids=p.connector_playlist_ids.copy(),
         )
 
     return transform(playlist) if playlist is not None else transform

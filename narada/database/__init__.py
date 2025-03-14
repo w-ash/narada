@@ -23,13 +23,13 @@ Usage:
 """
 
 # Import database models
-from narada.database.database import (
+from narada.database.db_connection import (
     engine,
     get_session,
     session_factory,
     soft_delete_record,
 )
-from narada.database.dbmodels import (
+from narada.database.db_models import (
     DBPlayCount,
     DBPlaylist,
     DBPlaylistMapping,

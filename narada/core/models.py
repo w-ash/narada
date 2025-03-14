@@ -82,6 +82,29 @@ class Track:
             connector_metadata=self.connector_metadata.copy(),
         )
 
+    def with_id(self, db_id: int) -> "Track":
+        """Set the internal database ID for this track.
+
+        This is the source of truth for track identity in our system.
+        """
+        if not isinstance(db_id, int) or db_id <= 0:
+            raise ValueError(
+                f"Invalid database ID: {db_id}. Must be a positive integer.",
+            )
+
+        return self.__class__(
+            title=self.title,
+            artists=self.artists,
+            album=self.album,
+            duration_ms=self.duration_ms,
+            release_date=self.release_date,
+            isrc=self.isrc,
+            id=db_id,
+            play_count=self.play_count,
+            connector_track_ids=self.connector_track_ids.copy(),
+            connector_metadata=self.connector_metadata.copy(),
+        )
+
     def with_connector_metadata(
         self,
         connector: str,
@@ -115,25 +138,26 @@ class Track:
         return connector_data.get(attribute, default)
 
 
-@define(frozen=True)
+@define(frozen=True, slots=True)
 class Playlist:
     """Playlists are persistent entities with DB/API identity and metadata.
 
-    Playlists are a represention of a user-facing list of tracks to be played,
+    Playlists are a representation of a user-facing list of tracks to be played,
     stored sources or destinations for track collections. Unlike TrackLists, Playlists
     are persisted entities that can be shared, stored, and retrieved.
 
-
     Playlists maintain track ordering while supporting additional metadata and
-    cross-connector track identifiers for resolution across
+    cross-connector playlist identifiers for resolution across
     different music services.
     """
 
     name: str = field(validator=validators.instance_of(str))
     tracks: list[Track] = field(factory=list)
     description: str | None = field(default=None)
+    # The internal database ID - source of truth for our system
     id: int | None = field(default=None)
-    connector_track_ids: dict[str, str] = field(factory=dict)
+    # External service IDs (spotify, apple_music, etc) - NOT for internal DB ID
+    connector_playlist_ids: dict[str, str] = field(factory=dict)
 
     def with_tracks(self, tracks: list[Track]) -> "Playlist":
         """Create a new playlist with the given tracks."""
@@ -142,20 +166,53 @@ class Playlist:
             tracks=tracks,
             description=self.description,
             id=self.id,
-            connector_track_ids=self.connector_track_ids.copy(),
+            connector_playlist_ids=self.connector_playlist_ids.copy(),
         )
 
-    def with_connector_track_id(self, connector: str, sid: str) -> "Playlist":
-        """Create a new playlist with additional connector identifier."""
-        new_ids = self.connector_track_ids.copy()
-        new_ids[connector] = sid
+    def with_connector_playlist_id(
+        self,
+        connector: str,
+        external_id: str,
+    ) -> "Playlist":
+        """Create a new playlist with additional connector identifier.
+
+        Args:
+            connector: The name of the external service ("spotify", "apple_music", etc)
+                       Do not use "db" or "internal" here - use the id field for that.
+            external_id: The ID of this playlist in the external service
+        """
+        if connector in ("db", "internal"):
+            raise ValueError(
+                f"Cannot use '{connector}' as connector name - use the id field instead",
+            )
+
+        new_ids = self.connector_playlist_ids.copy()
+        new_ids[connector] = external_id
 
         return self.__class__(
             name=self.name,
             tracks=self.tracks,
             description=self.description,
             id=self.id,
-            connector_track_ids=new_ids,
+            connector_playlist_ids=new_ids,
+        )
+
+    def with_id(self, db_id: int) -> "Playlist":
+        """Set the internal database ID for this playlist.
+
+        This is the source of truth for playlist identity in our system.
+        """
+        if not isinstance(db_id, int) or db_id <= 0:
+            raise ValueError(
+                f"Invalid database ID: {db_id}. Must be a positive integer.",
+            )
+
+        return self.__class__(
+            name=self.name,
+            tracks=self.tracks,
+            description=self.description,
+            id=db_id,
+            connector_playlist_ids=self.connector_playlist_ids.copy(),
         )
 
 
@@ -204,12 +261,10 @@ class ConnectorTrackMapping:
     connector_track_id: str = field(validator=validators.instance_of(str))
     match_method: str = attr.field(
         validator=attr.validators.in_([
-            "direct",
-            "isrc",
-            "mbid",
-            "artist_title",
-            "fuzzy",
-            "cached",
+            "direct",  # Direct match where internal object was created from the connector
+            "isrc",  # Matched by ISRC
+            "mbid",  # Matched by MusicBrainz ID
+            "artist_title",  # Matched by artist and title
         ]),
     )
     confidence: int = field(

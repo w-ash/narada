@@ -32,6 +32,41 @@ class MusicBrainzConnector:
         logger.debug("Initializing MusicBrainz connector")
         self._last_request_time = 0
         self._request_lock = asyncio.Lock()
+        
+    async def get_recording_by_isrc(self, isrc: str) -> str | None:
+        """
+        Get a MusicBrainz recording ID by ISRC.
+        
+        Args:
+            isrc: The ISRC code
+            
+        Returns:
+            MusicBrainz recording ID or None if not found
+        """
+        if not isrc:
+            return None
+            
+        try:
+            # Use existing implementation to get one recording
+            result = await self._rate_limited_request(
+                musicbrainzngs.get_recordings_by_isrc,
+                isrc,
+                includes=["artists"],
+            )
+            
+            if result is None:
+                return None
+                
+            recordings = result.get("isrc", {}).get("recording-list", [])
+            if not recordings:
+                return None
+                
+            # Return the first recording's MBID
+            return recordings[0].get("id")
+            
+        except Exception as e:
+            logger.exception(f"Error getting recording by ISRC: {e}")
+            return None
 
     async def _rate_limited_request(self, func, *args, **kwargs):
         """Execute a rate-limited MusicBrainz request ensuring 1 req/sec compliance."""

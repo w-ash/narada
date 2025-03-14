@@ -139,12 +139,12 @@
       }
     },
     {
-      "id": "combine_with_release_radar",
+      "id": "combine_playlists",
       "type": "combiner.concatenate_playlists",
       "config": {
         "order": [
           "source_release_radar",
-          "sort_popularity"
+          "mixer"
         ]
       },
       "upstream": [
@@ -157,7 +157,7 @@
       "type": "filter.deduplicate",
       "config": {},
       "upstream": [
-        "combine_with_release_radar"
+        "combine_playlists"
       ]
     },
     {

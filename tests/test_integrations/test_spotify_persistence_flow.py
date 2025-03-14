@@ -10,25 +10,25 @@ Uses SQLAlchemy 2.0 async patterns to prevent greenlet errors.
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from narada.core.repositories import PlaylistRepository, TrackRepository
-from narada.database.database import get_session
+from narada.database.db_connection import get_session
 from narada.integrations.spotify import SpotifyConnector
+from narada.repositories import PlaylistRepository, TrackRepository
 
 
 @pytest.fixture
-async def spotify() -> SpotifyConnector:
+def spotify() -> SpotifyConnector:
     """Provide authenticated Spotify client for testing."""
     return SpotifyConnector()
 
 
 @pytest.fixture
-async def track_repo(db_session: AsyncSession) -> TrackRepository:
+def track_repo(db_session: AsyncSession) -> TrackRepository:
     """Provide track repository with injected test session."""
     return TrackRepository(db_session)
 
 
 @pytest.fixture
-async def playlist_repo(db_session: AsyncSession) -> PlaylistRepository:
+def playlist_repo(db_session: AsyncSession) -> PlaylistRepository:
     """Provide playlist repository with injected test session."""
     return PlaylistRepository(db_session)
 
@@ -48,10 +48,10 @@ async def test_spotify_playlist_persistence(
     3. Create playlist with track relationships
     4. Verify persistence and relationships
     """
-    TEST_PLAYLIST_ID = "54z4aq8BmCPox937mVrt9v"  # 🪢 43rd - Twin paradox
+    test_playlist_id = "54z4aq8BmCPox937mVrt9v"  # 🪢 43rd - Twin paradox
 
     # Fetch and verify playlist
-    domain_playlist = await spotify.get_spotify_playlist(TEST_PLAYLIST_ID)
+    domain_playlist = await spotify.get_spotify_playlist(test_playlist_id)
     assert domain_playlist.name is not None
     assert len(domain_playlist.tracks) > 0
 
@@ -89,13 +89,13 @@ async def test_duplicate_track_handling(
     3. Verify shared tracks weren't duplicated
     4. Verify both playlists reference same track records
     """
-    PLAYLIST_IDS = [
+    playlist_ids = [
         "54z4aq8BmCPox937mVrt9v",  # 🪢 43rd - Twin paradox
         "14GT9ahKyAR9SObC7GdwtO",  # 🤔 Interesting `25
     ]
 
     # 1. Save first playlist and collect track IDs
-    first_playlist = await spotify.get_spotify_playlist(PLAYLIST_IDS[0])
+    first_playlist = await spotify.get_spotify_playlist(playlist_ids[0])
     print(f"First playlist: {first_playlist.name}, {len(first_playlist.tracks)} tracks")
 
     first_track_ids = {
@@ -105,7 +105,7 @@ async def test_duplicate_track_handling(
     first_playlist_id = await playlist_repo.save_playlist(first_playlist, track_repo)
 
     # 2. Save second playlist with overlapping tracks
-    second_playlist = await spotify.get_spotify_playlist(PLAYLIST_IDS[1])
+    second_playlist = await spotify.get_spotify_playlist(playlist_ids[1])
     print(
         f"Second playlist: {second_playlist.name}, {len(second_playlist.tracks)} tracks",
     )
@@ -126,7 +126,7 @@ async def test_duplicate_track_handling(
         track_to_share = first_playlist.tracks[0]
 
         # Get the modified second playlist
-        modified_second_tracks = [track_to_share] + second_playlist.tracks
+        modified_second_tracks = [track_to_share, *second_playlist.tracks]
         modified_second_playlist = second_playlist.with_tracks(modified_second_tracks)
 
         # Update second_track_ids to include the shared track
@@ -196,14 +196,14 @@ async def test_playlist_update(spotify: SpotifyConnector) -> None:
     2. Modify playlist to contain fewer tracks
     3. Verify database state reflects changes
     """
-    TEST_PLAYLIST_ID = "1GIx0RMn8WRRzzw2GUDXql"  # 🛼 New galaxy
+    test_playlist_id = "1GIx0RMn8WRRzzw2GUDXql"  # 🛼 New galaxy
 
     async with get_session(rollback=True) as session:
         track_repo = TrackRepository(session)
         playlist_repo = PlaylistRepository(session)
 
         # Initial save
-        domain_playlist = await spotify.get_spotify_playlist(TEST_PLAYLIST_ID)
+        domain_playlist = await spotify.get_spotify_playlist(test_playlist_id)
         playlist_id = await playlist_repo.save_playlist(domain_playlist, track_repo)
 
         # Modify playlist (take first 5 tracks)
@@ -211,7 +211,7 @@ async def test_playlist_update(spotify: SpotifyConnector) -> None:
         await playlist_repo.update_playlist(playlist_id, modified_playlist, track_repo)
 
         # Verify update using the standard get_playlist method
-        updated = await playlist_repo.get_playlist("spotify", TEST_PLAYLIST_ID)
+        updated = await playlist_repo.get_playlist("spotify", test_playlist_id)
         assert updated is not None
         assert len(updated.tracks) == 5
         assert [t.title for t in updated.tracks] == [
@@ -227,7 +227,7 @@ async def test_concurrent_playlist_operations(spotify: SpotifyConnector) -> None
     This test specifically checks that we don't encounter greenlet errors
     when performing multiple async database operations in parallel.
     """
-    PLAYLIST_IDS = [
+    playlist_ids = [
         "54z4aq8BmCPox937mVrt9v",  # 🪢 43rd - Twin paradox
         "14GT9ahKyAR9SObC7GdwtO",  # 🤔 Interesting `25
     ]
@@ -240,7 +240,7 @@ async def test_concurrent_playlist_operations(spotify: SpotifyConnector) -> None
         import asyncio
 
         domain_playlists = await asyncio.gather(
-            *[spotify.get_spotify_playlist(pid) for pid in PLAYLIST_IDS],
+            *[spotify.get_spotify_playlist(pid) for pid in playlist_ids],
         )
 
         # Save playlists sequentially (since they share the same session)

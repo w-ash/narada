@@ -118,9 +118,20 @@ def init_cli(
         # Log startup info - run for all commands
         asyncio.run(log_startup_info())
 
-        # Only show banner for root command (no subcommand)
-        if ctx.invoked_subcommand is None:
+        # Only show banner for root command (no subcommand) or if command is not found
+        if ctx.invoked_subcommand is None or ctx.invoked_subcommand not in [
+            cmd.name for cmd in app.registered_commands
+        ]:
             _display_welcome_banner()
+
+            # If a command was attempted but not found, show friendly error message
+            if ctx.args and ctx.args[0] not in [
+                cmd.name for cmd in app.registered_commands
+            ]:
+                console.print(
+                    f"\n[yellow]Error: No such command '[bold]{ctx.args[0]}[/bold]'.[/yellow]",
+                )
+                console.print("[yellow]See the available commands above.[/yellow]\n")
     except Exception as err:
         logger.exception("Error during startup")
         raise typer.Exit(1) from err

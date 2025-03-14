@@ -239,7 +239,7 @@ class SafeQuery[T: Any]:
 
 
 # Import database models after base class is defined to avoid circular imports
-from narada.database.dbmodels import (  # noqa
+from narada.database.db_models import (  # noqa
     DBPlayCount,
     DBPlaylist,
     DBPlaylistMapping,
