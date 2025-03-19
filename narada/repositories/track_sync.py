@@ -119,6 +119,84 @@ class TrackLikeRepository(BaseRepository[DBTrackLike, TrackLike]):
             self.model_class.service == service,
         )
 
+    def select_all_liked_by_service(
+        self, service: str, is_liked: bool = True
+    ) -> Select:
+        """Select all tracks liked on a specific service."""
+        return self.select().where(
+            self.model_class.service == service,
+            self.model_class.is_liked == is_liked,
+        )
+
+    def select_unsynced_likes(
+        self,
+        source_service: str,
+        target_service: str,
+        is_liked: bool = True,
+        since_timestamp: datetime | None = None,
+    ) -> Select:
+        """Select likes that need to be synced from source to target service.
+
+        This selects tracks that are liked in source_service but either not marked
+        or marked as not liked in target_service.
+
+        Args:
+            source_service: The source service to get likes from
+            target_service: The target service to check likes in
+            is_liked: Whether to get liked (True) or unliked (False) tracks
+            since_timestamp: If provided, only include likes updated since this time
+
+        Returns:
+            SQLAlchemy select statement for the query
+        """
+        # This works by doing a self-join on the likes table to find tracks that
+        # are liked in source_service but not in target_service, or have different
+        # like status between the services
+        from sqlalchemy import and_, exists, not_, or_, select
+
+        # Base condition for tracks in source service
+        source_conditions = [
+            self.model_class.service == source_service,
+            self.model_class.is_liked == is_liked,
+        ]
+
+        # Add timestamp filter for incremental sync if provided
+        if since_timestamp:
+            source_conditions.append(self.model_class.updated_at >= since_timestamp)
+
+        # Tracks liked in source service with timestamp filter if applicable
+        source_likes = (
+            select(self.model_class.track_id)
+            .where(and_(*source_conditions))
+            .scalar_subquery()
+        )
+
+        # Tracks not liked or not existing in target service
+        target_condition = or_(
+            not_(
+                exists().where(
+                    and_(
+                        self.model_class.service == target_service,
+                        self.model_class.track_id.in_(source_likes),
+                    )
+                )
+            ),
+            and_(
+                self.model_class.service == target_service,
+                self.model_class.track_id.in_(source_likes),
+                self.model_class.is_liked != is_liked,
+            ),
+        )
+
+        # Select source likes and check against target
+        return self.select().where(
+            and_(
+                self.model_class.service == source_service,
+                self.model_class.is_liked == is_liked,
+                target_condition,
+            )
+        )
+
     # -------------------------------------------------------------------------
     # PUBLIC API METHODS
     # -------------------------------------------------------------------------
@@ -131,6 +209,56 @@ class TrackLikeRepository(BaseRepository[DBTrackLike, TrackLike]):
     ) -> list[TrackLike]:
         """Get likes for a track across services."""
         stmt = self.select_for_track(track_id, services)
+        db_likes = await self._execute_query(stmt)
+
+        # Convert to domain models
+        domain_likes = []
+        for db_like in db_likes:
+            like = await self.mapper.to_domain(db_like)
+            domain_likes.append(like)
+
+        return domain_likes
+
+    @db_operation("get_all_liked_tracks")
+    async def get_all_liked_tracks(
+        self,
+        service: str,
+        is_liked: bool = True,
+    ) -> list[TrackLike]:
+        """Get all tracks liked on a specific service."""
+        stmt = self.select_all_liked_by_service(service, is_liked)
+        db_likes = await self._execute_query(stmt)
+
+        # Convert to domain models
+        domain_likes = []
+        for db_like in db_likes:
+            like = await self.mapper.to_domain(db_like)
+            domain_likes.append(like)
+
+        return domain_likes
+
+    @db_operation("get_unsynced_likes")
+    async def get_unsynced_likes(
+        self,
+        source_service: str,
+        target_service: str,
+        is_liked: bool = True,
+        since_timestamp: datetime | None = None,
+    ) -> list[TrackLike]:
+        """Get tracks liked in source_service but not in target_service.
+
+        Args:
+            source_service: The source service to get likes from
+            target_service: The target service to check likes in
+            is_liked: Whether to get liked (True) or unliked (False) tracks
+            since_timestamp: If provided, only include likes updated since this time
+
+        Returns:
+            List of TrackLike domain models needing synchronization
+        """
+        stmt = self.select_unsynced_likes(
+            source_service, target_service, is_liked, since_timestamp
+        )
         db_likes = await self._execute_query(stmt)
 
         # Convert to domain models
@@ -296,19 +424,30 @@ class TrackSyncRepository:
     async def get_track_likes(self, *args, **kwargs):
         """Get likes for a track across services."""
         return await self.likes.get_track_likes(*args, **kwargs)
-        
+
+    async def get_all_liked_tracks(self, *args, **kwargs):
+        """Get all tracks liked on a specific service."""
+        return await self.likes.get_all_liked_tracks(*args, **kwargs)
+
+    async def get_unsynced_likes(self, *args, **kwargs):
+        """Get tracks liked in source service but not in target service.
+
+        Pass since_timestamp parameter to enable incremental sync.
+        """
+        return await self.likes.get_unsynced_likes(*args, **kwargs)
+
     async def save_track_like(self, *args, **kwargs):
         """Save a track like for a service."""
         return await self.likes.save_track_like(*args, **kwargs)
-        
+
     async def delete_track_like(self, *args, **kwargs):
         """Remove a track like status for a service."""
         return await self.likes.delete_track_like(*args, **kwargs)
-    
+
     async def get_sync_checkpoint(self, *args, **kwargs):
         """Get synchronization checkpoint for incremental operations."""
         return await self.checkpoints.get_sync_checkpoint(*args, **kwargs)
-        
+
     async def save_sync_checkpoint(self, *args, **kwargs):
         """Save or update a sync checkpoint."""
         return await self.checkpoints.save_sync_checkpoint(*args, **kwargs)
