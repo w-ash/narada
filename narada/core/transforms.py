@@ -11,9 +11,9 @@ Transformations follow functional programming principles:
 - Purity: No side effects or external dependencies
 """
 
+import random  # noqa: I001
 from collections.abc import Callable
 from datetime import UTC, datetime
-import random
 from typing import Any, TypeVar, cast
 
 from toolz import compose_left, curry
@@ -66,7 +66,9 @@ def filter_by_predicate(
         filtered = [track for track in t.tracks if predicate(track)]
         return t.with_tracks(filtered)
 
-    return transform(tracklist) if tracklist is not None else transform
+    if tracklist is not None:
+        return transform(tracklist)
+    return transform
 
 
 @curry
@@ -228,56 +230,55 @@ def filter_by_metric_range(
 ) -> Transform | TrackList:
     """
     Filter tracks based on a metric value range.
-    
+
     Args:
         metric_name: Name of the metric to filter by (e.g., 'lastfm_user_playcount')
         min_value: Minimum value (inclusive), or None for no minimum
         max_value: Maximum value (inclusive), or None for no maximum
         include_missing: Whether to include tracks without the metric
         tracklist: Optional tracklist to transform immediately
-        
+
     Returns:
         Transformation function or transformed tracklist if provided
     """
-    
+
     def is_in_range(track: Track) -> bool:
         """Check if track's metric is within the specified range."""
         if not track.id:
             return include_missing
-            
+
         # Get the metrics dictionary from the tracklist metadata
-        metrics = tracklist.metadata.get("metrics", {})
+        metrics = {} if tracklist is None else tracklist.metadata.get("metrics", {})
         metric_values = metrics.get(metric_name, {})
-        
+
         # Check if track has the metric
         track_id_str = str(track.id)
         if track_id_str not in metric_values:
             return include_missing
-            
+
         value = metric_values[track_id_str]
-        
+
         # Check range bounds
         if min_value is not None and value < min_value:
             return False
-            
-        if max_value is not None and value > max_value:
-            return False
-            
-        return True
-    
+
+        return not (max_value is not None and value > max_value)
+
     def transform(t: TrackList) -> TrackList:
         """Apply the metric filter transformation."""
         # Set the tracklist for metric lookup in is_in_range
         nonlocal tracklist
         tracklist = t
-        
+
         # Apply filter
-        result = filter_by_predicate(is_in_range)(t)
-        
+        filter_func = cast("Transform", filter_by_predicate(is_in_range))
+        result = filter_func(t)
+
         # Add metadata about the filter operation
         filtered_count = len(result.tracks)
-        return cast(TrackList, result).with_metadata(
-            "filter_metrics", {
+        return cast("TrackList", result).with_metadata(
+            "filter_metrics",
+            {
                 "metric_name": metric_name,
                 "min_value": min_value,
                 "max_value": max_value,
@@ -285,9 +286,9 @@ def filter_by_metric_range(
                 "original_count": len(t.tracks),
                 "filtered_count": filtered_count,
                 "removed_count": len(t.tracks) - filtered_count,
-            }
+            },
         )
-        
+
     return transform(tracklist) if tracklist is not None else transform
 
 
@@ -336,15 +337,16 @@ def sort_by_attribute(
     def transform(t: TrackList) -> TrackList:
         """Apply the sorting transformation with metrics-driven approach."""
         from narada.config import get_logger
+
         logger = get_logger(__name__)
-        
+
         # Simply use metrics that were resolved at the node boundary
         metrics_dict = t.metadata.get("metrics", {}).get(metric_name, {})
-        
+
         # Validate that metrics keys are integers (our expected format)
         if metrics_dict:
             # Check if metrics dictionary has string keys (which is an error)
-            string_keys = [k for k in metrics_dict.keys() if isinstance(k, str)]
+            string_keys = [k for k in metrics_dict if isinstance(k, str)]
             if string_keys:
                 # Instead of silently working around this, throw an error so we can fix it
                 # at the source - track IDs should be integers
@@ -353,7 +355,7 @@ def sort_by_attribute(
                     f"Metrics dictionary contains string keys instead of integer track IDs: {sample_keys}. "
                     f"This indicates an upstream issue in metric resolution or storage."
                 )
-                
+
         # Check if we have any non-null values
         non_null_values = {k: v for k, v in metrics_dict.items() if v is not None}
 
@@ -363,28 +365,28 @@ def sort_by_attribute(
             metric_name=metric_name,
             metrics_count=len(metrics_dict),
             non_null_count=len(non_null_values),
-            sample_metrics=list(non_null_values.items())[:3] if non_null_values else []
+            sample_metrics=list(non_null_values.items())[:3] if non_null_values else [],
         )
 
         # Create enhanced key function that prioritizes metrics
         def enhanced_key_fn(track: Track) -> Any:
             if not track.id:
                 return key_fn(track)
-                
+
             # Check if track ID exists in metrics - track IDs should be integers
             if track.id in metrics_dict:
                 # Use resolved metric if it exists and isn't None
                 metric_value = metrics_dict[track.id]
                 if metric_value is not None:
                     return metric_value
-                    
+
             # For missing or None values, use a default that will sort appropriately
             if reverse:
                 # When sorting in descending order (reverse=True), put None values at the end
-                return float('-inf')  # Lowest possible value
+                return float("-inf")  # Lowest possible value
             else:
                 # When sorting in ascending order, put None values at the end
-                return float('inf')   # Highest possible value
+                return float("inf")  # Highest possible value
 
         # Sort tracks using the enhanced key function
         sorted_tracks = sorted(t.tracks, key=enhanced_key_fn, reverse=reverse)

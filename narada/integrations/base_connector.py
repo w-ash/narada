@@ -20,6 +20,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar, Protocol, TypedDict, TypeVar, runtime_checkable
 
 from attrs import define, field
+import backoff
 
 from narada.config import get_logger
 from narada.core.protocols import get_metric_freshness, register_metric_resolver
@@ -55,7 +56,7 @@ class ConnectorConfig(TypedDict, total=False):
 class MetricResolverProtocol(Protocol):
     """Protocol defining the interface for metric resolvers."""
 
-    async def resolve(self, track_ids: list[int], metric_name: str) -> dict[str, Any]:
+    async def resolve(self, track_ids: list[int], metric_name: str) -> dict[int, Any]:
         """Fetch stored service metrics from the database.
 
         Args:
@@ -63,7 +64,7 @@ class MetricResolverProtocol(Protocol):
             metric_name: Metric to resolve (used to determine field name)
 
         Returns:
-            Dictionary mapping track_id strings to metric values
+            Dictionary mapping track_id integers to metric values
         """
         ...
 
@@ -211,17 +212,46 @@ class BatchProcessor[T, R]:
     request_delay: float
     logger_instance: Any = field(factory=lambda: get_logger(__name__))
 
+    def _on_backoff(self, details):
+        """Log backoff event."""
+        wait = details["wait"]
+        tries = details["tries"]
+        target = details["target"].__name__
+        args = details["args"]
+        kwargs = details["kwargs"]
+
+        self.logger_instance.warning(
+            f"Backing off {target} (attempt {tries})",
+            retry_delay=f"{wait:.2f}s",
+            args=args,
+            kwargs=kwargs,
+        )
+
+    def _on_giveup(self, details):
+        """Log when we give up retrying."""
+        target = details["target"].__name__
+        tries = details["tries"]
+        elapsed = details["elapsed"]
+        exception = details.get("exception")
+
+        self.logger_instance.error(
+            f"All {tries} attempts failed for {target}",
+            elapsed_time=f"{elapsed:.2f}s",
+            error=str(exception) if exception else "Unknown error",
+            error_type=type(exception).__name__ if exception else "Unknown",
+        )
+
     async def process(
         self,
         items: list[T],
         process_func: Callable[[T], Awaitable[R]],
     ) -> list[R]:
         """Process items in batches with controlled concurrency and exponential backoff.
-        
+
         Args:
             items: List of items to process
             process_func: Async function that processes a single item
-            
+
         Returns:
             List of results in the same order as input items
         """
@@ -230,67 +260,40 @@ class BatchProcessor[T, R]:
 
         results: list[R] = []
         semaphore = asyncio.Semaphore(self.concurrency_limit)
-        
+
+        @backoff.on_exception(
+            backoff.expo,
+            Exception,  # Catch all exceptions - can be customized for specific error types
+            max_tries=self.retry_count + 1,  # +1 because first attempt counts
+            max_time=None,  # No time limit, just use max_tries
+            factor=self.retry_base_delay,
+            max_value=self.retry_max_delay,
+            jitter=backoff.full_jitter,
+            on_backoff=self._on_backoff,
+            on_giveup=self._on_giveup,
+        )
         async def process_with_backoff(item: T) -> R:
-            """Process an item with exponential backoff on failures."""
-            retries = 0
-            last_exception = None
-            
-            while retries <= self.retry_count:
-                try:
-                    async with semaphore:
-                        # Add delay between requests to avoid rate limits
-                        if self.request_delay > 0:
-                            await asyncio.sleep(self.request_delay)
-                        return await process_func(item)
-                except Exception as e:
-                    last_exception = e
-                    retries += 1
-                    
-                    # Skip backoff on final attempt
-                    if retries > self.retry_count:
-                        break
-                    
-                    # Calculate exponential backoff delay with jitter
-                    import random
-                    delay = min(
-                        self.retry_max_delay,
-                        self.retry_base_delay * (2 ** (retries - 1))
-                    )
-                    # Add jitter (±25%)
-                    jitter = random.uniform(0.75, 1.25)
-                    delay = delay * jitter
-                    
-                    self.logger_instance.warning(
-                        f"Batch processing error (attempt {retries}/{self.retry_count})",
-                        error=str(last_exception),
-                        retry_delay=f"{delay:.2f}s",
-                    )
-                    
-                    await asyncio.sleep(delay)
-            
-            # If we got here, all retries failed
-            self.logger_instance.error(
-                f"All {self.retry_count} batch processing attempts failed",
-                error=str(last_exception),
-            )
-            raise last_exception or RuntimeError("Batch processing failed")
+            """Process an item with automatic backoff on failures."""
+            async with semaphore:
+                # Add delay between requests to avoid rate limits
+                if self.request_delay > 0:
+                    await asyncio.sleep(self.request_delay)
+                return await process_func(item)
 
         # Process in batches for memory efficiency and rate limit management
         for i in range(0, len(items), self.batch_size):
             batch = items[i : i + self.batch_size]
             self.logger_instance.debug(
-                f"Processing batch {i//self.batch_size + 1}/{(len(items) + self.batch_size - 1)//self.batch_size}",
+                f"Processing batch {i // self.batch_size + 1}/{(len(items) + self.batch_size - 1) // self.batch_size}",
                 batch_size=len(batch),
                 total_items=len(items),
             )
-            
+
             # Use gather with return_exceptions=True to handle errors without failing the whole batch
             batch_results = await asyncio.gather(
-                *[process_with_backoff(item) for item in batch],
-                return_exceptions=True
+                *[process_with_backoff(item) for item in batch], return_exceptions=True
             )
-            
+
             # Process results, keeping errors separate
             valid_results = []
             for result in batch_results:
@@ -302,12 +305,12 @@ class BatchProcessor[T, R]:
                     )
                 else:
                     valid_results.append(result)
-                    
+
             results.extend(valid_results)
-            
+
             # Log batch completion
             self.logger_instance.debug(
-                f"Batch {i//self.batch_size + 1} complete",
+                f"Batch {i // self.batch_size + 1} complete",
                 valid_results=len(valid_results),
                 failures=len(batch_results) - len(valid_results),
             )

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from narada.config import get_logger
 from narada.core.models import Track
-from narada.database.db_connection import get_async_session
+from narada.database.db_connection import get_session
 from narada.integrations.lastfm import LastFMConnector
 from narada.integrations.spotify import SpotifyConnector
 from narada.repositories.track import UnifiedTrackRepository
@@ -104,12 +104,16 @@ async def import_spotify_likes(
                     db_track = await track_repo.save_track(track)
                     logger.debug(f"Created new track: {track.title}")
 
-                # Save likes to both services in one operation
-                await like_op.save_like_to_services(
-                    track_id=db_track.id,
-                    timestamp=batch_timestamp,
-                    services=["spotify", "narada"],
-                )
+                # Ensure track_id is not None
+                if db_track and db_track.id is not None:
+                    # Save likes to both services in one operation
+                    await like_op.save_like_to_services(
+                        track_id=db_track.id,
+                        timestamp=batch_timestamp,
+                        services=["spotify", "narada"],
+                    )
+                else:
+                    logger.warning(f"Could not save likes for track: {track.title} - No valid track ID")
 
                 stats.imported += 1
 
@@ -285,7 +289,7 @@ async def run_with_session(
     Returns:
         The result from the service function
     """
-    async with get_async_session() as session:
+    async with get_session() as session:
         return await service_func(session=session, **kwargs)
 
 

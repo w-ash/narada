@@ -6,11 +6,10 @@ from pathlib import Path
 from typing import Annotated
 
 from rich.console import Console
-from rich.panel import Panel
-from rich.text import Text
 import typer
 
-from narada.cli.commands import register_commands
+from narada.cli.command_registry import register_all_commands
+from narada.cli.ui import display_welcome_banner, run_interactive_shell
 from narada.config import get_logger, log_startup_info, setup_loguru_logger
 
 VERSION = version("narada")
@@ -41,58 +40,53 @@ util_app = typer.Typer(
     rich_help_panel="Utilities",
 )
 
-# Register commands immediately after app creation
-register_commands(app)
+# Register all commands to main app
+register_all_commands(app)
 
-# Subcommand groups
+# Subcommand groups - add after registering main commands
 app.add_typer(setup_app, name="setup")
 app.add_typer(ops_app, name="ops")
 app.add_typer(util_app, name="util")
 
 
-def _display_welcome_banner() -> None:
-    """Display an elegant welcome banner using Rich."""
-    console.print("\n")
-    console.print(
-        Text("🎵 NARADA", style="bold rgb(255,140,0)"),
-        Text(f" v{VERSION}", style="dim"),
-        Text(" - Music Integration Platform", style="rgb(255,165,0)"),
-        "\n",
-        justify="center",
-    )
+def get_commands_for_display() -> list[dict[str, str]]:
+    """Extract commands from the Typer app for display purposes."""
+    # The core issue is we need to register commands before the CLI is fully initialized
+    # Here we register our commands directly to show in welcome banner
+    commands = [
+        {
+            "name": "status",
+            "help": "Check connection status of music services",
+            "category": "Utilities",
+        },
+        {
+            "name": "setup",
+            "help": "Configure your music service connections",
+            "category": "Setup",
+        },
+        {
+            "name": "init-db",
+            "help": "Initialize the database schema",
+            "category": "Setup",
+        },
+        {
+            "name": "workflow",
+            "help": "Run a workflow from available definitions",
+            "category": "Operations",
+        },
+        {
+            "name": "import-spotify-likes",
+            "help": "Import liked tracks from Spotify",
+            "category": "Operations",
+        },
+        {
+            "name": "export-likes-to-lastfm",
+            "help": "Export liked tracks to Last.fm",
+            "category": "Operations",
+        },
+    ]
 
-    # Get commands dynamically from Typer app
-    command_groups = {
-        "Setup": [],
-        "Operations": [],
-        "Utilities": [],
-    }
-
-    for command in app.registered_commands:
-        if command.help and not command.hidden:
-            panel = command.rich_help_panel or "Utilities"
-            command_groups[panel].append(
-                f"• [cyan]narada {command.name}[/cyan] - {command.help}",
-            )
-
-    # Build panel content with grouped commands
-    panel_content = ["[bold green]Welcome to Narada![/bold green]\n"]
-    for group, commands in command_groups.items():
-        if commands:
-            panel_content.extend([f"\n[yellow]{group}:[/yellow]", *commands])
-
-    panel_content.append(
-        "\n[dim]Run any command with --help for more information[/dim]",
-    )
-
-    console.print(
-        Panel(
-            "\n".join(panel_content),
-            title="[bold]Getting Started[/bold]",
-            border_style="green",
-            expand=False,
-        ),
-    )
+    return commands
 
 
 @app.callback(invoke_without_command=True)
@@ -102,11 +96,16 @@ def init_cli(
         bool,
         typer.Option("--verbose", "-v", help="Enable verbose output"),
     ] = False,
+    interactive: Annotated[
+        bool,
+        typer.Option("--interactive", "-i", help="Run in interactive REPL mode"),
+    ] = False,
 ) -> None:
     """Initialize Narada CLI."""
     # Store verbosity in context for subcommands
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
+    ctx.obj["interactive"] = interactive
 
     # Setup logging first
     setup_loguru_logger(verbose)
@@ -118,11 +117,15 @@ def init_cli(
         # Log startup info - run for all commands
         asyncio.run(log_startup_info())
 
+        if interactive:
+            # Don't show banner yet, the REPL will handle it
+            return
+
         # Only show banner for root command (no subcommand) or if command is not found
         if ctx.invoked_subcommand is None or ctx.invoked_subcommand not in [
             cmd.name for cmd in app.registered_commands
         ]:
-            _display_welcome_banner()
+            display_welcome_banner(VERSION, get_commands_for_display())
 
             # If a command was attempted but not found, show friendly error message
             if ctx.args and ctx.args[0] not in [
@@ -140,7 +143,29 @@ def init_cli(
 def main() -> int:
     """Application entry point."""
     try:
-        return app(standalone_mode=False) or 0
+        # Check for interactive mode flag
+        import sys
+
+        interactive_mode = "-i" in sys.argv or "--interactive" in sys.argv
+
+        if interactive_mode:
+            # Remove the interactive flag before passing to typer
+            if "-i" in sys.argv:
+                sys.argv.remove("-i")
+            if "--interactive" in sys.argv:
+                sys.argv.remove("--interactive")
+
+            # Setup basics
+            setup_loguru_logger(verbose=False)
+            Path("data").mkdir(exist_ok=True)
+            asyncio.run(log_startup_info())
+
+            # Run interactive shell with our known commands
+            command_list = get_commands_for_display()
+            return run_interactive_shell(app, VERSION, command_list)
+        else:
+            # Run in normal command mode
+            return app(standalone_mode=False) or 0
     except typer.Exit as e:
         return e.exit_code
     except Exception:

@@ -295,6 +295,71 @@ class LastFMConnector:
             if track_id != -1 and info and info.lastfm_url
         }
 
+    @resilient_operation("love_track_on_lastfm")
+    @backoff.on_exception(
+        backoff.expo,
+        (pylast.NetworkError, pylast.MalformedResponseError, pylast.WSError),
+        max_tries=3,
+        jitter=backoff.full_jitter,
+    )
+    async def love_track(
+        self,
+        artist_name: str,
+        track_title: str,
+        username: str | None = None,
+    ) -> bool:
+        """Love a track on Last.fm.
+
+        Args:
+            artist_name: Name of the artist
+            track_title: Title of the track
+            username: Last.fm username (defaults to configured username)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.client:
+            logger.error("Last.fm client not initialized")
+            return False
+
+        # Use provided username or fall back to configured one
+        user = username or self.lastfm_username
+
+        if not user:
+            logger.error("No Last.fm username provided or configured")
+            return False
+
+        try:
+            # Get Last.fm user
+            lastfm_user = await asyncio.to_thread(self.client.get_user, user)
+            if not lastfm_user:
+                logger.error(f"Could not get Last.fm user: {user}")
+                return False
+
+            # Get track
+            lastfm_track = await asyncio.to_thread(
+                self.client.get_track,
+                artist_name,
+                track_title,
+            )
+
+            # Love the track
+            await asyncio.to_thread(lastfm_track.love)
+            logger.info(f"Loved track on Last.fm: {artist_name} - {track_title}")
+            return True
+
+        except pylast.WSError as e:
+            if "not found" in str(e).lower():
+                logger.warning(
+                    f"Track not found on Last.fm: {artist_name} - {track_title}"
+                )
+            else:
+                logger.error(f"Last.fm API error: {e}")
+            return False
+        except Exception as e:
+            logger.exception(f"Error loving track on Last.fm: {e}")
+            return False
+
 
 @define(frozen=True, slots=True)
 class LastFmMetricResolver(BaseMetricResolver):

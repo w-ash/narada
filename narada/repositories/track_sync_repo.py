@@ -5,7 +5,7 @@ providing methods for managing likes and sync checkpoints.
 """
 
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, override
 
 from attrs import define
 from sqlalchemy import Select
@@ -14,32 +14,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from narada.config import get_logger
 from narada.core.models import SyncCheckpoint, TrackLike
 from narada.database.db_models import DBSyncCheckpoint, DBTrackLike
-from narada.repositories.base import BaseRepository, ModelMapper
+from narada.repositories.base import BaseModelMapper, BaseRepository
 from narada.repositories.repo_decorator import db_operation
 
 logger = get_logger(__name__)
 
 
 @define(frozen=True, slots=True)
-class TrackLikeMapper(ModelMapper[DBTrackLike, TrackLike]):
+class TrackLikeMapper(BaseModelMapper[DBTrackLike, TrackLike]):
     """Maps between DBTrackLike and TrackLike domain models."""
 
     @staticmethod
-    async def to_domain(db_like: DBTrackLike) -> TrackLike:
+    @override
+    async def to_domain(db_model: DBTrackLike) -> TrackLike:
         """Convert database like to domain model."""
-        if not db_like:
+        if not db_model:
             return None
 
         return TrackLike(
-            track_id=db_like.track_id,
-            service=db_like.service,
-            is_liked=db_like.is_liked,
-            liked_at=db_like.liked_at,
-            last_synced=db_like.last_synced,
-            id=db_like.id,
+            track_id=db_model.track_id,
+            service=db_model.service,
+            is_liked=db_model.is_liked,
+            liked_at=db_model.liked_at,
+            last_synced=db_model.last_synced,
+            id=db_model.id,
         )
 
     @staticmethod
+    @override
     def to_db(domain_model: TrackLike) -> DBTrackLike:
         """Convert domain like to database model."""
         return DBTrackLike(
@@ -53,25 +55,27 @@ class TrackLikeMapper(ModelMapper[DBTrackLike, TrackLike]):
 
 
 @define(frozen=True, slots=True)
-class SyncCheckpointMapper(ModelMapper[DBSyncCheckpoint, SyncCheckpoint]):
+class SyncCheckpointMapper(BaseModelMapper[DBSyncCheckpoint, SyncCheckpoint]):
     """Maps between DBSyncCheckpoint and SyncCheckpoint domain models."""
 
     @staticmethod
-    async def to_domain(db_checkpoint: DBSyncCheckpoint) -> SyncCheckpoint:
+    @override
+    async def to_domain(db_model: DBSyncCheckpoint) -> SyncCheckpoint:
         """Convert database checkpoint to domain model."""
-        if not db_checkpoint:
+        if not db_model:
             return None
 
         return SyncCheckpoint(
-            user_id=db_checkpoint.user_id,
-            service=db_checkpoint.service,
-            entity_type=db_checkpoint.entity_type,
-            last_timestamp=db_checkpoint.last_timestamp,
-            cursor=db_checkpoint.cursor,
-            id=db_checkpoint.id,
+            user_id=db_model.user_id,
+            service=db_model.service,
+            entity_type=db_model.entity_type,
+            last_timestamp=db_model.last_timestamp,
+            cursor=db_model.cursor,
+            id=db_model.id,
         )
 
     @staticmethod
+    @override
     def to_db(domain_model: SyncCheckpoint) -> DBSyncCheckpoint:
         """Convert domain checkpoint to database model."""
         return DBSyncCheckpoint(

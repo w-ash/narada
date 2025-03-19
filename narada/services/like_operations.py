@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 TrackID = int
 
 
-@define(frozen=True)
+@define
 class SyncStats:
     """Statistics from a synchronization operation."""
 

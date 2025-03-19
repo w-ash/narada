@@ -36,20 +36,23 @@ CONFIDENCE_CONFIG = {
     "base_isrc": 95,
     "base_mbid": 95,
     "base_artist_title": 90,
-    # Attribute importance weights
-    "title_weight": 15,
-    "artist_weight": 10,
-    "duration_weight": 5,
+    # Maximum penalties by category
+    "title_max_penalty": 40,
+    "artist_max_penalty": 40,
+    "duration_max_penalty": 60,
     # Similarity thresholds
     "high_similarity": 0.9,  # Very similar text
-    "medium_similarity": 0.7,  # Moderately similar
     "low_similarity": 0.4,  # Somewhat similar
-    # Duration tolerances (in milliseconds)
-    "duration_high_match": 2000,  # Within 2 second
-    "duration_medium_match": 5000,  # Within 5 seconds
+    # Duration configuration
+    "duration_missing_penalty": 10,  # Penalty when either track lacks duration
+    "duration_tolerance_ms": 1000,  # No penalty if within 1 second
+    "duration_per_second_penalty": 1,  # Points to deduct per second difference
     # Confidence bounds
     "min_confidence": 0,
     "max_confidence": 100,
+    # Title similarity constants
+    "variation_similarity_score": 0.6,  # Score when a variation marker is found
+    "identical_similarity_score": 1.0,  # Score for identical titles
 }
 
 
@@ -105,6 +108,47 @@ class MatcherService(Protocol):
         ...
 
 
+def calculate_title_similarity(title1, title2):
+    """Calculate title similarity accounting for variations like 'Live', 'Remix', etc."""
+    # Normalize titles
+    title1, title2 = title1.lower(), title2.lower()
+
+    # 1. Check if titles are identical
+    if title1 == title2:
+        return CONFIDENCE_CONFIG["identical_similarity_score"]
+
+    # 2. Check for containment with extra tokens
+    # This catches cases like "Paranoid Android" vs "Paranoid Android - Live"
+    variation_markers = [
+        "live",
+        "remix",
+        "acoustic",
+        "demo",
+        "remaster",
+        "radio edit",
+        "extended",
+        "instrumental",
+        "album version",
+        "single version",
+    ]
+
+    # Check if one is contained in the other with variation markers
+    if title1 in title2:
+        # Title1 is contained in title2, check for variation markers
+        remaining = title2.replace(title1, "").strip("- ()[]").strip()
+        if any(marker in remaining.lower() for marker in variation_markers):
+            # Found variation marker, significantly reduce similarity
+            return CONFIDENCE_CONFIG["variation_similarity_score"]
+    elif title2 in title1:
+        # Same check in reverse
+        remaining = title1.replace(title2, "").strip("- ()[]").strip()
+        if any(marker in remaining.lower() for marker in variation_markers):
+            return CONFIDENCE_CONFIG["variation_similarity_score"]
+
+    # 3. Use token_set_ratio for better handling of word order and extra words
+    return fuzz.token_set_ratio(title1, title2) / 100.0
+
+
 def calculate_confidence(
     internal_track: Track,
     service_track_data: dict,
@@ -141,67 +185,76 @@ def calculate_confidence(
     title_similarity = 0.0
     title_score = 0.0
     if internal_track.title and service_title:
-        # Use Jaro-Winkler for title similarity (better for titles with small variations)
-        title_similarity = (
-            fuzz.ratio(
-                internal_track.title.lower(),
-                service_title.lower(),
-            )
-            / 100.0
+        # Use custom title similarity function
+        title_similarity = calculate_title_similarity(
+            internal_track.title, service_title
         )
 
-        # Apply weighted score based on similarity
         if title_similarity >= CONFIDENCE_CONFIG["high_similarity"]:
-            title_score = CONFIDENCE_CONFIG["title_weight"]
-        elif title_similarity >= CONFIDENCE_CONFIG["medium_similarity"]:
-            title_score = CONFIDENCE_CONFIG["title_weight"] * 0.5
-        elif title_similarity <= CONFIDENCE_CONFIG["low_similarity"]:
-            title_score = -CONFIDENCE_CONFIG["title_weight"] * 0.5
+            title_score = 0  # No deduction for high similarity
+        else:
+            # Linear penalty based on similarity
+            # If similarity is 0, apply full penalty
+            # If similarity is high_similarity (0.9), apply no penalty
+            # Scale linearly in between
+            penalty_factor = max(
+                0,
+                (CONFIDENCE_CONFIG["high_similarity"] - title_similarity)
+                / CONFIDENCE_CONFIG["high_similarity"],
+            )
+            title_score = -CONFIDENCE_CONFIG["title_max_penalty"] * penalty_factor
 
-    # 2. Artist similarity
+    # 2. Artist similarity - only deductions
     artist_similarity = 0.0
     artist_score = 0.0
     if internal_track.artists and service_artist:
-        # Use primary artist name
         internal_artist = internal_track.artists[0].name.lower()
         service_artist = service_artist.lower()
 
-        # Use token sort ratio for artist (handles word order differences)
         artist_similarity = (
-            fuzz.token_sort_ratio(
-                internal_artist,
-                service_artist,
-            )
-            / 100.0
+            fuzz.token_sort_ratio(internal_artist, service_artist) / 100.0
         )
 
-        # Apply weighted score based on similarity
         if artist_similarity >= CONFIDENCE_CONFIG["high_similarity"]:
-            artist_score = CONFIDENCE_CONFIG["artist_weight"]
-        elif artist_similarity >= CONFIDENCE_CONFIG["medium_similarity"]:
-            artist_score = CONFIDENCE_CONFIG["artist_weight"] * 0.5
-        elif artist_similarity <= CONFIDENCE_CONFIG["low_similarity"]:
-            artist_score = -CONFIDENCE_CONFIG["artist_weight"] * 0.5
-
+            artist_score = 0  # No deduction for high similarity
+        else:
+            # Quadratic or cubic penalty to penalize small differences more severely
+            penalty_factor = max(
+                0,
+                (CONFIDENCE_CONFIG["high_similarity"] - artist_similarity)
+                / CONFIDENCE_CONFIG["high_similarity"],
+            )
+            # Square or cube the factor to make the penalty curve steeper
+            penalty_factor = penalty_factor**2  # Square for quadratic curve
+            artist_score = -CONFIDENCE_CONFIG["artist_max_penalty"] * penalty_factor
     # 3. Duration comparison
     duration_diff_ms = 0
     duration_score = 0.0
-    if internal_track.duration_ms and service_duration:
+
+    # Check if both tracks have duration data
+    if not internal_track.duration_ms or not service_duration:
+        # If either track is missing duration, apply flat penalty
+        duration_score = -CONFIDENCE_CONFIG["duration_missing_penalty"]
+    else:
+        # Both tracks have duration, calculate difference
         duration_diff_ms = abs(internal_track.duration_ms - service_duration)
 
-        # Apply duration score based on difference
-        if duration_diff_ms <= CONFIDENCE_CONFIG["duration_high_match"]:
-            duration_score = CONFIDENCE_CONFIG["duration_weight"]
-        elif duration_diff_ms <= CONFIDENCE_CONFIG["duration_medium_match"]:
-            duration_score = 0  # No adjustment
+        # No deduction if within tolerance
+        if duration_diff_ms <= CONFIDENCE_CONFIG["duration_tolerance_ms"]:
+            duration_score = 0
         else:
-            # Proportional penalty based on how far off the duration is
-            # Maximum penalty at 10 seconds difference
-            max_penalty = 10000  # 10 seconds in ms
-            penalty_factor = min(1.0, duration_diff_ms / max_penalty)
-            duration_score = -CONFIDENCE_CONFIG["duration_weight"] * penalty_factor
+            # Convert ms difference to seconds
+            seconds_diff = (
+                duration_diff_ms - CONFIDENCE_CONFIG["duration_tolerance_ms"]
+            ) / 1000
+            # Round up to next second using integer division trick
+            seconds_penalty = int(seconds_diff) + (seconds_diff > int(seconds_diff))
+            duration_score = -min(
+                CONFIDENCE_CONFIG["duration_per_second_penalty"] * seconds_penalty,
+                CONFIDENCE_CONFIG["duration_max_penalty"],
+            )
 
-    # Calculate final confidence with all adjustments
+    # Calculate final confidence with all deductions
     final_score = int(base_score + title_score + artist_score + duration_score)
 
     # Ensure score is within bounds
@@ -628,9 +681,7 @@ async def _persist_matches(
     """
     Save successful matches to the database with confidence evidence.
 
-    Updates both:
-    1. The track's connector metadata (traditional approach)
-    2. The track_mappings.confidence_evidence field (new approach)
+    Uses the explicit mapping API to ensure match_method is properly recorded.
     """
     async with get_session() as session:
         track_repo = UnifiedTrackRepository(session)
@@ -644,37 +695,18 @@ async def _persist_matches(
             if not track:
                 continue
 
-            # Extract confidence evidence if available
-            confidence_evidence = result.metadata.get("confidence_evidence")
-
-            # Create a clean copy of metadata without evidence (to avoid duplication)
-            clean_metadata = {
-                k: v for k, v in result.metadata.items() if k != "confidence_evidence"
-            }
-
-            # Update track with match data
-            track = track.with_connector_track_id(connector, result.connector_id)
-            track = track.with_connector_metadata(
-                connector,
-                {
-                    "confidence": result.confidence,
-                    "match_method": result.match_method,
-                    "matched_at": datetime.now(UTC).isoformat(),
-                    **clean_metadata,
-                },
+            # Create clean metadata copy
+            metadata = result.metadata.copy()
+            
+            # Use the explicit mapping API to create the mapping with the correct match method
+            await track_repo.map_track_to_connector(
+                track=track,
+                connector=connector,
+                connector_id=result.connector_id,
+                match_method=result.match_method,  # This is the key improvement - using matcher-determined method
+                confidence=result.confidence,      # And matcher-determined confidence
+                metadata=metadata,                 # Including any evidence or other metadata
             )
-
-            # Save track updates first
-            saved_track = await track_repo.save_track(track)
-
-            # Now update the mapping's confidence_evidence using the repository
-            if confidence_evidence and saved_track.id:
-                await track_repo.save_mapping_confidence_evidence(
-                    track_id=saved_track.id,
-                    connector=connector,
-                    connector_id=result.connector_id,
-                    evidence=confidence_evidence,
-                )
 
         await session.commit()
 

@@ -54,6 +54,9 @@ Narada is a personal music metadata hub that integrates Spotify, Last.fm, and Mu
 | Repository Pattern | SQLAlchemy async sessions | Centralizes data access with consistent error handling |
 | Entity Resolution | Multi-tier matching | Balances accuracy with performance through progressive resolution |
 | Command Pattern | Typer CLI | Separates UI from business logic for maximum reusability |
+| Service Layer | Domain-specific services | Places business logic between repositories and interfaces |
+| Composition | Like operations abstraction | Enables DRY implementation of related functionality |
+| Checkpoint-based Sync | SyncCheckpoint entities | Provides resumability for long-running operations |
 
 ### Technology Selection Criteria
 
@@ -89,47 +92,76 @@ This approach balances accuracy with performance while respecting API rate limit
 narada/                        # Project root
 ├── pyproject.toml             # Project metadata and dependencies
 ├── README.md                  # Project documentation
+├── CLAUDE.md                  # Commands and style guide
 │
 ├── narada/                    # Main package
+│   ├── __init__.py            # Package initialization
 │   ├── config.py              # Configuration management
 │   │
+│   ├── cli/                   # Command line interface
+│   │   ├── __init__.py        # CLI package initialization
+│   │   ├── app.py             # CLI entry point
+│   │   ├── commands.py        # Command implementations
+│   │   └── ui.py              # UI helper functions
+│   │
 │   ├── core/                  # Domain core
+│   │   ├── __init__.py        # Core package initialization
 │   │   ├── models.py          # Entity definitions (Track, Playlist)
 │   │   ├── matcher.py         # Entity resolution engine
 │   │   ├── protocols.py       # Shared core protocols
-│   │   ├── repositories.py    # Persistence abstractions
 │   │   └── transforms.py      # Pure functional primitives
 │   │
-│   ├── data/                  # Data persistence
-│   │   ├── database.py        # Database connection management
+│   ├── database/              # Data persistence
+│   │   ├── __init__.py        # Database package initialization
+│   │   ├── db_connection.py   # Database connection management
+│   │   ├── db_models.py       # SQLAlchemy model definitions
 │   │   └── migrations/        # Schema version control
 │   │
 │   ├── integrations/          # Service adapters
+│   │   ├── __init__.py        # Integrations package init
+│   │   ├── base_connector.py  # Base connector classes
 │   │   ├── spotify.py         # Spotify API integration
 │   │   ├── lastfm.py          # Last.fm API integration
 │   │   └── musicbrainz.py     # MusicBrainz integration
 │   │
-├── workflows/                 # Consolidated workflow system
-│   ├── workflow_nodes.py      # All node implementations
-│   ├── node_registry.py       # Node type registration
-│   ├── node_factory.py        # Factories for node creation
-│   ├── prefect.py             # Prefect adapter (thin layer)
-│   ├── definitions/           # JSON workflow definitions
-│   │   ├── sort_by_plays.json # Use case 1A definition
-│   │   └── discovery_mix.json # Use case 1B definition
+│   ├── repositories/          # Data access layer
+│   │   ├── __init__.py        # Repository package init
+│   │   ├── base.py            # Base repository class
+│   │   ├── repo_decorator.py  # Repository decorators
+│   │   ├── track.py           # Unified track repository
+│   │   ├── track_core.py      # Core track operations
+│   │   ├── track_sync.py      # Track sync operations 
+│   │   └── playlist.py        # Playlist repository
 │   │
-│   └── cli/                   # Command line interface
-│       ├── app.py             # CLI entry point
-│       └── commands.py        # Command implementations
+│   ├── services/              # Business logic services
+│   │   ├── __init__.py        # Services package init
+│   │   └── like_operations.py # Like sync operations
+│   │
+│   └── workflows/             # Workflow system
+│       ├── __init__.py        # Workflow package init
+│       ├── node_catalog.py    # Node registry
+│       ├── node_context.py    # Node execution context
+│       ├── node_factories.py  # Node creation factories
+│       ├── node_registry.py   # Node type registration
+│       ├── prefect.py         # Prefect adapter (thin layer)
+│       ├── source_nodes.py    # Source node implementations
+│       ├── destination_nodes.py # Destination node implementations
+│       ├── transform_registry.py # Transform registration
+│       ├── definitions/       # JSON workflow definitions
+│       │   ├── discovery_mix.json # Use case 1B definition
+│       │   ├── sort_by_lastfm_global_playcount.json # Sort by LastFM global playcount
+│       │   └── sort_by_lastfm_user_playcount.json # Sort by user playcount
 │
 ├── tests/                     # Test suite
 │   ├── core/                  # Domain model tests
+│   ├── repositories/          # Repository tests
 │   ├── workflows/             # Workflow engine tests
 │   └── integration/           # End-to-end tests
 │
 └── docs/                      # Documentation
     ├── narada_bible.md        # Architectural vision
-    └── workflow_guide.md      # Workflow authoring guide
+    ├── workflow_guide.md      # Workflow authoring guide
+    └── backlog.md             # Development backlog
 ```
 
 #### Workflow System Interactions
@@ -222,9 +254,19 @@ This approach allows us to leverage our existing functional transformation primi
 ┌────────────────────┐     ┌───────────────────────┐     ┌───────────────────┐
 │  Domain Models     │     │  Workflow Engine      │     │  Service Adapters │
 │  ────────────────  │     │  ────────────────     │     │  ───────────────  │
-│  • Track           │     │  • Node Registry │     │  • Spotify        │
+│  • Track           │     │  • Node Registry      │     │  • Spotify        │
 │  • Playlist        │◄────┤  • Task Execution     │────►│  • Last.fm        │
-│  • PlaylistOp      │     │  • DAG Processing     │     │  • MusicBrainz    │
+│  • TrackLike       │     │  • DAG Processing     │     │  • MusicBrainz    │
+└────────────────────┘     └───────────────────────┘     └───────────────────┘
+                                     ▲  
+                                     │  
+                                     ▼  
+┌────────────────────┐     ┌───────────────────────┐     ┌───────────────────┐
+│  Repositories      │     │  Services             │     │  CLI Layer        │
+│  ────────────────  │     │  ────────────────     │     │  ───────────────  │
+│  • TrackRepository │◄────┤  • Like Operations    │────►│  • Commands       │
+│  • PlaylistRepo    │     │  • Sync Services      │     │  • UI Components  │
+│  • TrackSyncRepo   │     │  • Workflow Services  │     │  • Input Handling │
 └────────────────────┘     └───────────────────────┘     └───────────────────┘
 ```
 
@@ -776,13 +818,34 @@ This approach yields a system that performs complex cross-connector operations w
 
 
 ### Use Case 2: Cross-Connector Likes Synchronization
-**Description**: Sync Spotify likes to Last.fm loves  
+**Description**: Sync likes between services with Narada as source of truth  
 **Architecture Flow**:
-- Fetch liked tracks from Spotify
-- Resolve entities through mapping layer
-- Update Last.fm loved tracks
-- Maintain sync state in mappings
-- Track failures for retry
+- **Import Phase**:
+  - Fetch liked tracks from external services (Spotify)
+  - Save to local database with proper entity resolution
+  - Mark tracks as liked in Narada (source of truth)
+  - Track sync state with checkpoints for resumability
+
+- **Export Phase**:
+  - Identify tracks liked in Narada but not in target service (LastFM)
+  - Use matcher system for accurate service entity resolution
+  - Update external service (mark as loved in LastFM)
+  - Record sync state for incremental operation
+
+- **Components**:
+  - LikeOperation service for common like operations
+  - CheckpointManager for tracking sync state
+  - Connector-specific implementations for service interaction
+  - Batch processing for performance optimization
+
+- **Usage**:
+  ```sh
+  # Import liked tracks from Spotify to Narada
+  narada import-spotify-likes [--limit NUMBER] [--batch-size NUMBER] [--user-id STRING]
+  
+  # Export liked tracks from Narada to Last.fm
+  narada export-likes-to-lastfm [--limit NUMBER] [--batch-size NUMBER] [--user-id STRING]
+  ```
 
 ### Use Case 3: Playlist Backup & Restoration
 **Description**: Export playlists to local storage for restoration  

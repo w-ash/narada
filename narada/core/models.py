@@ -324,9 +324,9 @@ class WorkflowResult:
     """Immutable result of a workflow execution with associated metrics."""
 
     tracks: list[Track] = field(factory=list)
-    metrics: dict[str, dict[str, Any]] = field(
+    metrics: dict[str, dict[int, Any]] = field(
         factory=dict,
-    )  # metric_name -> {track_id(str) -> value}
+    )  # metric_name -> {track_id(int) -> value}
     workflow_name: str = field(default="")
     execution_time: float = field(default=0.0)
 
@@ -339,13 +339,14 @@ class WorkflowResult:
         """Get specific metric value for a track."""
         if track_id is None:
             return None
-        # Convert track_id to string for lookup
-        return self.metrics.get(metric_name, {}).get(str(track_id), default)
+        # Look up metric using integer track_id (consistent with rest of system)
+        return self.metrics.get(metric_name, {}).get(track_id, default)
 
     def with_metric(self, metric_name: str, values: dict[int, Any]) -> "WorkflowResult":
         """Add or update a metric, returning a new instance."""
         metrics = self.metrics.copy()
-        metrics[metric_name] = {str(k): v for k, v in values.items()}
+        # Store metrics with integer keys, consistent with the rest of the system
+        metrics[metric_name] = values
         return self.__class__(
             tracks=self.tracks,
             metrics=metrics,

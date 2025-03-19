@@ -20,27 +20,30 @@ from narada.database.db_models import (
     DBTrackMapping,
     DBTrackMetric,
 )
-from narada.repositories.base import BaseRepository, ModelMapper
+from narada.repositories.base import BaseModelMapper, BaseRepository
 from narada.repositories.repo_decorator import db_operation
 
 logger = get_logger(__name__)
 
 
 @define(frozen=True, slots=True)
-class TrackMapper(ModelMapper[DBTrack, Track]):
+class TrackMapper(BaseModelMapper[DBTrack, Track]):
     """Bidirectional mapper between DB and domain models."""
 
     @staticmethod
-    async def to_domain(db_track: DBTrack) -> Track:
+    @override
+    async def to_domain(db_model: DBTrack) -> Track:
         """Convert database track to domain model."""
-        if not db_track:
+        if not db_model:
             return None
 
-        # Load mappings and likes
-        mappings = await TrackMapper._load_relationship(db_track, "mappings")
+        # Load mappings and likes using shared utility function
+        from narada.repositories.base import safe_fetch_relationship
+
+        mappings = await safe_fetch_relationship(db_model, "mappings")
         active_mappings = [m for m in mappings if not m.is_deleted]
 
-        likes = await TrackMapper._load_relationship(db_track, "likes")
+        likes = await safe_fetch_relationship(db_model, "likes")
         active_likes = [like for like in likes if not like.is_deleted]
 
         # Build connector IDs and metadata
@@ -48,14 +51,14 @@ class TrackMapper(ModelMapper[DBTrack, Track]):
         connector_metadata = {}
 
         # Add internal ID first
-        if db_track.id:
-            connector_track_ids["db"] = str(db_track.id)
+        if db_model.id:
+            connector_track_ids["db"] = str(db_model.id)
 
         # Add direct IDs from the track model
-        if db_track.spotify_id:
-            connector_track_ids["spotify"] = db_track.spotify_id
-        if db_track.mbid:
-            connector_track_ids["musicbrainz"] = db_track.mbid
+        if db_model.spotify_id:
+            connector_track_ids["spotify"] = db_model.spotify_id
+        if db_model.mbid:
+            connector_track_ids["musicbrainz"] = db_model.mbid
 
         # Process connector track mappings
         for mapping in active_mappings:
@@ -76,38 +79,16 @@ class TrackMapper(ModelMapper[DBTrack, Track]):
                 connector_metadata[service]["liked_at"] = like.liked_at.isoformat()
 
         return Track(
-            id=db_track.id,
-            title=db_track.title,
-            artists=[Artist(name=name) for name in db_track.artists["names"]],
-            album=db_track.album,
-            duration_ms=db_track.duration_ms,
-            release_date=ensure_utc(db_track.release_date),
-            isrc=db_track.isrc,
+            id=db_model.id,
+            title=db_model.title,
+            artists=[Artist(name=name) for name in db_model.artists["names"]],
+            album=db_model.album,
+            duration_ms=db_model.duration_ms,
+            release_date=ensure_utc(db_model.release_date),
+            isrc=db_model.isrc,
             connector_track_ids=connector_track_ids,
             connector_metadata=connector_metadata,
         )
-
-    @staticmethod
-    async def _load_relationship(db_model: Any, rel_name: str) -> list[Any]:
-        """Helper to safely load relationships with fallback to async loading."""
-        try:
-            items = getattr(db_model, rel_name, [])
-
-            if (
-                not items
-                and hasattr(db_model, rel_name)
-                and hasattr(db_model, "awaitable_attrs")
-            ):
-                items = await getattr(db_model.awaitable_attrs, rel_name)
-
-            return items
-        except (AttributeError, TypeError):
-            if hasattr(db_model, "awaitable_attrs") and hasattr(
-                db_model.awaitable_attrs,
-                rel_name,
-            ):
-                return await getattr(db_model.awaitable_attrs, rel_name)
-            return []
 
     @staticmethod
     async def _get_connector_track(mapping: DBTrackMapping) -> DBConnectorTrack | None:
@@ -122,13 +103,13 @@ class TrackMapper(ModelMapper[DBTrack, Track]):
 
     @staticmethod
     @override
-    def to_db(domain_model: Track) -> tuple[DBTrack, list[DBConnectorTrack]]:
-        """Convert domain track to SQLAlchemy ORM database models.
+    def to_db(domain_model: Track) -> DBTrack:
+        """Convert domain track to SQLAlchemy ORM database model.
 
-        Returns the DBTrack and associated DBConnectorTrack models.
+        Returns only the DBTrack model to comply with ModelMapper protocol.
         """
         # Create the main track entity
-        db_track = DBTrack(
+        return DBTrack(
             title=domain_model.title,
             artists={"names": [a.name for a in domain_model.artists]},
             album=domain_model.album,
@@ -138,6 +119,17 @@ class TrackMapper(ModelMapper[DBTrack, Track]):
             spotify_id=domain_model.connector_track_ids.get("spotify"),
             mbid=domain_model.connector_track_ids.get("musicbrainz"),
         )
+
+    @staticmethod
+    def to_db_with_connectors(
+        domain_model: Track,
+    ) -> tuple[DBTrack, list[DBConnectorTrack]]:
+        """Convert domain track to SQLAlchemy ORM database models with connector tracks.
+
+        Returns both DBTrack and associated DBConnectorTrack models.
+        """
+        # Create the main track entity
+        db_track = TrackMapper.to_db(domain_model)
 
         # Create connector tracks for external services
         connector_tracks = [
@@ -296,6 +288,67 @@ class TrackRepository(BaseRepository[DBTrack, Track]):
         result = await self.session.scalars(stmt)
         return result.first()
 
+    async def _create_connector_track_from_domain(
+        self,
+        track: Track,
+        connector: str,
+        connector_id: str,
+    ) -> DBConnectorTrack:
+        """Create a new connector track from domain model.
+
+        This creates a representation of the track as it exists on the external service,
+        not a copy of our internal track. The connector_track should store data as it
+        appears on the external service, not our normalized version.
+        """
+        # Get connector-specific metadata - this should only contain service-specific data
+        connector_metadata = track.connector_metadata.get(connector, {})
+
+        # For artists, handle both string list and object list formats
+        artist_names = []
+        if "artists" in connector_metadata:
+            if isinstance(connector_metadata["artists"], list):
+                if all(isinstance(a, str) for a in connector_metadata["artists"]):
+                    # List of strings
+                    artist_names = connector_metadata["artists"]
+                elif all(isinstance(a, dict) for a in connector_metadata["artists"]):
+                    # List of objects (common in Spotify)
+                    artist_names = [
+                        a.get("name", "") for a in connector_metadata["artists"]
+                    ]
+
+        # If no artists in metadata, fall back to our track's artists
+        if not artist_names and track.artists:
+            artist_names = [a.name for a in track.artists]
+
+        # Create the connector track with service data (or fallback to our data)
+        conn_track = DBConnectorTrack(
+            connector_name=connector,
+            connector_track_id=connector_id,
+            title=connector_metadata.get("title", track.title),
+            artists={"names": artist_names},
+            album=connector_metadata.get("album", track.album),
+            duration_ms=connector_metadata.get("duration_ms", track.duration_ms),
+            release_date=connector_metadata.get("release_date", track.release_date),
+            isrc=connector_metadata.get("isrc", track.isrc),
+            # Store the raw metadata but ensure we don't include match info
+            raw_metadata={
+                k: v
+                for k, v in connector_metadata.items()
+                if k
+                not in [
+                    "confidence",
+                    "match_method",
+                    "confidence_evidence",
+                    "matched_at",
+                ]
+            },
+            last_updated=datetime.now(UTC),
+        )
+
+        self.session.add(conn_track)
+        await self.session.flush()
+        return conn_track
+
     async def _save_connector_track(
         self,
         track: Track,
@@ -314,33 +367,46 @@ class TrackRepository(BaseRepository[DBTrack, Track]):
         conn_track = await self._find_connector_track(connector, connector_id)
 
         if conn_track:
-            # Update metadata if needed
+            # Update metadata if needed, but exclude matching information
             if track.connector_metadata.get(connector):
-                conn_track.raw_metadata = track.connector_metadata[connector]
-                conn_track.last_updated = datetime.now(UTC)
-                self.session.add(conn_track)
+                # Filter out match-related fields that should stay in track_mappings
+                filtered_metadata = {
+                    k: v
+                    for k, v in track.connector_metadata[connector].items()
+                    if k
+                    not in [
+                        "confidence",
+                        "match_method",
+                        "confidence_evidence",
+                        "matched_at",
+                    ]
+                }
+
+                if filtered_metadata:
+                    conn_track.raw_metadata = filtered_metadata
+                    conn_track.last_updated = datetime.now(UTC)
+                    self.session.add(conn_track)
             return conn_track
 
-        # Create new connector track
-        conn_track = DBConnectorTrack(
-            connector_name=connector,
-            connector_track_id=connector_id,
-            title=track.title,
-            artists={"names": [a.name for a in track.artists]},
-            album=track.album,
-            duration_ms=track.duration_ms,
-            release_date=track.release_date,
-            isrc=track.isrc,
-            raw_metadata=track.connector_metadata.get(connector, {}),
-            last_updated=datetime.now(UTC),
+        # Create new connector track using the helper method
+        return await self._create_connector_track_from_domain(
+            track, connector, connector_id
         )
 
-        self.session.add(conn_track)
-        await self.session.flush()
-        return conn_track
+    async def _update_track_mappings(
+        self, db_track: DBTrack, track: Track, match_method: str, confidence: int
+    ) -> None:
+        """
+        Create new track mappings with explicit match method and confidence.
 
-    async def _update_track_mappings(self, db_track: DBTrack, track: Track) -> None:
-        """Update track mappings with new connector data."""
+        This method only creates new mappings - existing mappings are never modified.
+
+        Args:
+            db_track: Database track object
+            track: Domain model track with connector IDs
+            match_method: How the mapping was determined ("direct", "mbid", "isrc", "artist_title")
+            confidence: Confidence score (0-100) representing mapping reliability
+        """
         for connector in track.connector_track_ids:
             if connector in ("db", "internal"):
                 continue
@@ -350,25 +416,13 @@ class TrackRepository(BaseRepository[DBTrack, Track]):
             if not conn_track:
                 continue
 
-            # Find existing mapping
-            stmt = select(DBTrackMapping).where(
-                DBTrackMapping.track_id == db_track.id,
-                DBTrackMapping.connector_track_id == conn_track.id,
-                DBTrackMapping.is_deleted == False,  # noqa: E712
+            # Use our helper method to create mapping if it doesn't exist
+            await self._get_or_create_mapping(
+                track_id=db_track.id,
+                connector_track_id=conn_track.id,
+                match_method=match_method,
+                confidence=confidence,
             )
-
-            result = await self.session.scalars(stmt)
-            mapping = result.first()
-
-            if not mapping:
-                # Create new mapping
-                mapping = DBTrackMapping(
-                    track_id=db_track.id,
-                    connector_track_id=conn_track.id,
-                    match_method="direct",
-                    confidence=100,
-                )
-                self.session.add(mapping)
 
         await self.session.flush()
 
@@ -397,7 +451,13 @@ class TrackRepository(BaseRepository[DBTrack, Track]):
 
     @db_operation("save_track")
     async def save_track(self, track: Track) -> Track:
-        """Save track and mappings efficiently."""
+        """Save track and mappings efficiently.
+
+        Note: This method handles track data only - it doesn't create mappings
+        beyond the primary connector. For mapping tracks to other connectors,
+        use the create_track_from_connector_data() or map_track_to_connector()
+        methods which handle the different mapping scenarios properly.
+        """
         if not track.title or not track.artists:
             raise ValueError("Track must have title and artists")
 
@@ -411,6 +471,187 @@ class TrackRepository(BaseRepository[DBTrack, Track]):
         else:
             # Create new track
             return await self._create_new_track(track)
+
+    @db_operation("create_track_from_connector_data")
+    async def create_track_from_connector_data(
+        self, track: Track, connector: str
+    ) -> Track:
+        """Create a track directly from connector data.
+
+        This method is for the scenario where we import a track directly from
+        an external service (e.g., creating a track from a Spotify playlist).
+        In this case, the mapping is "direct" with 100% confidence because
+        we're not matching - we're directly sourcing from this connector.
+
+        Args:
+            track: The track with connector data
+            connector: The connector name that is the source of this track
+
+        Returns:
+            Saved track with ID and all mappings
+        """
+        if not track.title or not track.artists:
+            raise ValueError("Track must have title and artists")
+
+        if connector not in track.connector_track_ids:
+            raise ValueError(f"Track doesn't have an ID for connector {connector}")
+
+        # Save the track first (without mappings)
+        saved_track = await self.save_track(track)
+
+        # Ensure we have a database ID
+        if saved_track.id is None:
+            raise ValueError("Failed to generate ID for track")
+
+        # Now explicitly create the connector track and mapping with "direct" method
+        db_track = await self._find_track_by_id_type("internal", str(saved_track.id))
+        if not db_track:
+            raise ValueError(f"Track with ID {saved_track.id} not found after saving")
+
+        # Create connector track and mapping with "direct" method and 100% confidence
+        connector_id = saved_track.connector_track_ids.get(connector)
+        if connector_id:
+            # Get or create connector track
+            conn_track = await self._save_connector_track(saved_track, connector)
+            if conn_track:
+                # Create mapping using our helper method - always direct with 100% confidence
+                await self._get_or_create_mapping(
+                    track_id=db_track.id,
+                    connector_track_id=conn_track.id,
+                    match_method="direct",  # Always "direct" for source data
+                    confidence=100,  # Always 100% for source data
+                )
+
+        return saved_track
+
+    async def _create_track_mapping(
+        self,
+        track_id: int,
+        connector_track_id: int,
+        match_method: str,
+        confidence: int,
+        confidence_evidence: dict | None = None,
+    ) -> DBTrackMapping:
+        """Create a track mapping with the specified attributes."""
+        mapping = DBTrackMapping(
+            track_id=track_id,
+            connector_track_id=connector_track_id,
+            match_method=match_method,
+            confidence=confidence,
+            confidence_evidence=confidence_evidence,
+        )
+        self.session.add(mapping)
+        await self.session.flush()
+        return mapping
+
+    async def _get_or_create_mapping(
+        self,
+        track_id: int,
+        connector_track_id: int,
+        match_method: str,
+        confidence: int,
+        confidence_evidence: dict | None = None,
+    ) -> DBTrackMapping:
+        """Find an existing mapping or create a new one if it doesn't exist."""
+        # Look for existing mapping
+        mapping_stmt = select(DBTrackMapping).where(
+            DBTrackMapping.track_id == track_id,
+            DBTrackMapping.connector_track_id == connector_track_id,
+            DBTrackMapping.is_deleted == False,  # noqa: E712
+        )
+
+        existing_mapping = await self.session.scalar(mapping_stmt)
+        if existing_mapping:
+            return existing_mapping
+
+        # Create new mapping
+        return await self._create_track_mapping(
+            track_id=track_id,
+            connector_track_id=connector_track_id,
+            match_method=match_method,
+            confidence=confidence,
+            confidence_evidence=confidence_evidence,
+        )
+
+    @db_operation("map_track_to_connector")
+    async def map_track_to_connector(
+        self,
+        track: Track,
+        connector: str,
+        connector_id: str,
+        match_method: str,
+        confidence: int,
+        metadata: dict | None = None,
+    ) -> Track:
+        """Map an existing track to a connector with explicit match method and confidence.
+
+        This method is for the scenario where we match an existing track to an
+        external service (e.g., finding the Spotify equivalent of a LastFM track).
+        In this case, the mapping method and confidence come from the matcher.
+
+        Args:
+            track: The existing track to map
+            connector: The connector name (e.g., "spotify", "lastfm")
+            connector_id: The ID in the external service
+            match_method: How the match was made (e.g., "mbid", "artist_title")
+            confidence: Confidence score (0-100)
+            metadata: Additional metadata for the connector
+
+        Returns:
+            Updated track with new mapping
+        """
+        if track.id is None:
+            raise ValueError("Cannot map track with no ID")
+
+        # Find the track in the database
+        db_track = await self._find_track_by_id_type("internal", str(track.id))
+        if not db_track:
+            raise ValueError(f"Track with ID {track.id} not found")
+
+        # Update track object with the new connector ID
+        updated_track = track.with_connector_track_id(connector, connector_id)
+
+        # Store actual service data in the connector_metadata
+        # Matching info will be stored separately in the track_mapping table
+        if metadata:
+            # Only include service data that describes the track on the external service
+            # Explicitly exclude matching-related fields that belong in track_mappings
+            exclude_fields = [
+                "confidence",
+                "match_method",
+                "confidence_evidence",
+                "matched_at",
+            ]
+            service_metadata = {
+                k: v for k, v in metadata.items() if k not in exclude_fields
+            }
+
+            if service_metadata:
+                updated_track = updated_track.with_connector_metadata(
+                    connector, service_metadata
+                )
+
+        # Create or get the connector track
+        connector_track = await self._find_connector_track(connector, connector_id)
+        if not connector_track:
+            # Create new connector track using our helper method
+            connector_track = await self._create_connector_track_from_domain(
+                track=updated_track, connector=connector, connector_id=connector_id
+            )
+
+        # Create or get the mapping with explicit match method and confidence
+        # This is where all matching information belongs - in the track_mapping table
+        await self._get_or_create_mapping(
+            track_id=db_track.id,
+            connector_track_id=connector_track.id,
+            match_method=match_method,
+            confidence=confidence,
+            confidence_evidence=metadata.get("confidence_evidence")
+            if metadata
+            else None,
+        )
+
+        return updated_track
 
     async def _update_existing_track(self, track: Track) -> Track:
         """Update an existing track by ID."""
@@ -428,7 +669,6 @@ class TrackRepository(BaseRepository[DBTrack, Track]):
                 break
 
         self.session.add(db_track)
-        await self._update_track_mappings(db_track, track)
 
         # Return track with internal ID
         return track.with_id(db_track.id).with_connector_track_id(
@@ -453,8 +693,7 @@ class TrackRepository(BaseRepository[DBTrack, Track]):
         if stmt is not None:
             db_track = await self._execute_query_one(stmt)
             if db_track:
-                # Update existing track
-                await self._update_track_mappings(db_track, track)
+                # Found the track, return with ID
                 return track.with_id(db_track.id).with_connector_track_id(
                     "db",
                     str(db_track.id),
@@ -464,9 +703,9 @@ class TrackRepository(BaseRepository[DBTrack, Track]):
         return await self._create_new_track(track)
 
     async def _create_new_track(self, track: Track) -> Track:
-        """Create a new track with all connector records."""
-        # Convert to DB models
-        db_track, connector_tracks = cast("TrackMapper", self.mapper).to_db(track)
+        """Create a new track without connector mappings."""
+        # Convert domain model to DB model
+        db_track = self.mapper.to_db(track)
 
         # Save track
         self.session.add(db_track)
@@ -476,22 +715,6 @@ class TrackRepository(BaseRepository[DBTrack, Track]):
         # Verify ID was generated
         if not db_track.id:
             raise ValueError("Failed to create track: No ID was generated")
-
-        # Save connector tracks
-        for conn_track in connector_tracks:
-            self.session.add(conn_track)
-
-        await self.session.flush()
-
-        # Create mappings
-        for conn_track in connector_tracks:
-            mapping = DBTrackMapping(
-                track_id=db_track.id,
-                connector_track_id=conn_track.id,
-                match_method="direct",
-                confidence=100,
-            )
-            self.session.add(mapping)
 
         await self.session.flush()
 
@@ -706,84 +929,85 @@ class TrackRepository(BaseRepository[DBTrack, Track]):
 
         result_track = await self.save_track(track)
         return result_track, True
-        
+
     @db_operation("save_mapping_confidence_evidence")
     async def save_mapping_confidence_evidence(
-        self, 
-        track_id: int, 
-        connector: str, 
-        connector_id: str, 
-        evidence: dict
+        self, track_id: int, connector: str, connector_id: str, evidence: dict
     ) -> bool:
         """Save confidence evidence to the track_mapping record.
-        
+
         Args:
             track_id: Internal track ID
             connector: The connector name (spotify, lastfm, etc.)
             connector_id: The external track ID in the connector
             evidence: Dictionary of confidence scoring evidence
-            
+
         Returns:
             True if mapping was found and updated, False otherwise
         """
-        from sqlalchemy import select, update, join
-        
+        from sqlalchemy import select, update
+
         # Find the connector track ID first
         stmt = select(DBConnectorTrack.id).where(
             DBConnectorTrack.connector_name == connector,
             DBConnectorTrack.connector_track_id == connector_id,
             DBConnectorTrack.is_deleted == False,  # noqa: E712
         )
-        
+
         connector_track_id = await self.session.scalar(stmt)
         if not connector_track_id:
             return False
-            
+
         # Now update the mapping
-        stmt = update(DBTrackMapping).where(
-            DBTrackMapping.track_id == track_id,
-            DBTrackMapping.connector_track_id == connector_track_id,
-            DBTrackMapping.is_deleted == False,  # noqa: E712
-        ).values(
-            confidence_evidence=evidence,
-            updated_at=datetime.now(UTC),
+        stmt = (
+            update(DBTrackMapping)
+            .where(
+                DBTrackMapping.track_id == track_id,
+                DBTrackMapping.connector_track_id == connector_track_id,
+                DBTrackMapping.is_deleted == False,  # noqa: E712
+            )
+            .values(
+                confidence_evidence=evidence,
+                updated_at=datetime.now(UTC),
+            )
         )
-        
+
         result = await self.session.execute(stmt)
         return result.rowcount > 0
-        
+
     @db_operation("get_mapping_confidence_evidence")
     async def get_mapping_confidence_evidence(
-        self, 
-        track_id: int, 
-        connector: str, 
-        connector_id: str
+        self, track_id: int, connector: str, connector_id: str
     ) -> dict | None:
         """Get confidence evidence from a track_mapping record.
-        
+
         Args:
             track_id: Internal track ID
             connector: The connector name (spotify, lastfm, etc.)
             connector_id: The external track ID in the connector
-            
+
         Returns:
             Dictionary of confidence evidence or None if not found
         """
-        from sqlalchemy import select, join
-        
+        from sqlalchemy import join, select
+
         # Join connector_tracks to find the connector_track_id
-        stmt = select(DBTrackMapping.confidence_evidence).select_from(
-            join(
-                DBTrackMapping, 
-                DBConnectorTrack,
-                DBTrackMapping.connector_track_id == DBConnectorTrack.id
+        stmt = (
+            select(DBTrackMapping.confidence_evidence)
+            .select_from(
+                join(
+                    DBTrackMapping,
+                    DBConnectorTrack,
+                    DBTrackMapping.connector_track_id == DBConnectorTrack.id,
+                )
             )
-        ).where(
-            DBTrackMapping.track_id == track_id,
-            DBConnectorTrack.connector_name == connector,
-            DBConnectorTrack.connector_track_id == connector_id,
-            DBTrackMapping.is_deleted == False,  # noqa: E712
-            DBConnectorTrack.is_deleted == False,  # noqa: E712
+            .where(
+                DBTrackMapping.track_id == track_id,
+                DBConnectorTrack.connector_name == connector,
+                DBConnectorTrack.connector_track_id == connector_id,
+                DBTrackMapping.is_deleted == False,  # noqa: E712
+                DBConnectorTrack.is_deleted == False,  # noqa: E712
+            )
         )
-        
+
         return await self.session.scalar(stmt)

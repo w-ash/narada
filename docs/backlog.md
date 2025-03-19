@@ -1,11 +1,70 @@
 
 # Project Narada Backlog
 
-Current version: 0.1.3
+Current version: 0.2.0
 
-Note: We've completed use case 1B and are mid-way done with use case 1A 
+Note: We've completed use case 1B, use case 1A, and use case 2 (likes synchronization)
 
 ## Planned
+
+### v0.2.0 Cross-Service Like Synchronization
+
+Goal: Implement cross-service like synchronization between Spotify and Last.fm with Narada as the source of truth.
+
+- [x] Spotify Likes Import
+    
+    - Effort: M
+    - What: Add functionality to import liked tracks from Spotify to Narada database
+    - Why: Preserves user's liked tracks locally and enables cross-service synchronization
+    - Dependencies: None
+    - Status: Complete
+    - Notes:
+        - Added `user-library-read` OAuth scope to Spotify connector
+        - Implemented `get_liked_tracks()` method with pagination
+        - Created track repository with like status tracking
+        - Added checkpoint system for resumable operations
+        - Implemented CLI command with progress reporting
+    
+- [x] Last.fm Loves Export
+    
+    - Effort: M
+    - What: Implement exporting of liked tracks from Narada to Last.fm as "loved" tracks
+    - Why: Enables synchronization of likes from Spotify to Last.fm
+    - Dependencies: Spotify Likes Import
+    - Status: Complete
+    - Notes:
+        - Added `love_track()` method to Last.fm connector
+        - Implemented entity resolution for cross-service matching
+        - Created service layer with batch processing
+        - Added CLI command with progress reporting
+        - Documented usage in guides
+    
+- [x] Like Sync Architecture
+    
+    - Effort: S
+    - What: Design and implement clean architecture for like synchronization
+    - Why: Enables future extension to other services while maintaining clean code
+    - Dependencies: None
+    - Status: Complete
+    - Notes:
+        - Designed reusable components in service layer
+        - Implemented CheckpointManager for tracking sync state 
+        - Created LikeOperation service for DRY implementation
+        - Followed repository pattern for data access
+        - Added comprehensive test coverage
+
+- [x] Likes Sync Testing
+    
+    - Effort: S
+    - What: Add comprehensive tests for the like synchronization system
+    - Why: Ensures system works correctly and prevents regressions
+    - Dependencies: Like Sync Architecture
+    - Status: Complete
+    - Notes:
+        - Added tests for Spotify connector's like methods
+        - Added tests for Last.fm connector's love methods
+        - Added tests for service layer components
+        - Added tests for repository operations
 
 ### v0.1.3 Result Visualization & Metrics Display
 
@@ -46,7 +105,101 @@ Goal: Enhance the CLI workflow execution output with structured track results an
     - Status: Complete
 
 
-### v0.3 API-First Interface with Workflow Visualization
+### v0.3.0 Core Functionality Improvements
+Goal: Add essential functionality improvements to the core Narada system based on user feedback, before moving to a UI-based approach.
+
+Key Objectives:
+- Enhance matcher capabilities with manual overrides
+- Improve workflow node functionality
+- Add better status feedback for long-running operations
+
+- [ ] Manual Entity Resolution Override
+    - Effort: M
+    - What: Add ability for users to manually create and edit track matches
+    - Why: Automatic matching can't handle all edge cases; manual override needed
+    - Dependencies: None
+    - Status: Not Started
+    - Notes:
+        - Allow setting track ID, connector, and connector ID
+        - Set confidence to 100% for manual matches
+        - Support overriding existing matches
+        - Add CLI command for manual match creation
+        - Save metadata about who created the match and when
+
+- [ ] Matcher Status Feedback
+    - Effort: S
+    - What: Implement better progress reporting for matcher operations
+    - Why: Matching is a long-running process with no visibility
+    - Dependencies: None
+    - Status: Not Started
+    - Notes:
+        - Add progress indicators for batch operations
+        - Show success/failure counts in real-time
+        - Implement optional verbose mode for detailed progress
+        - Report service-specific rate limiting information
+        - Include estimated completion time
+
+- [ ] Enhanced Destination Nodes
+    - Effort: M
+    - What: Add update and parameterization capability to destination nodes
+    - Why: Enable dynamic playlist naming and descriptions
+    - Dependencies: None 
+    - Status: Not Started
+    - Notes:
+        - Support template parameters in playlist names
+        - Allow using source playlist names in new playlist names/descriptions
+        - Add date/time formatting options
+        - Implement track count and metadata insertion
+        - Add validation to prevent invalid characters
+        - Create nodes that update Spotify and internal playlists with append/replace options
+
+### v0.4.0 Additional Core Features
+Goal: Continue enhancing the core functionality of Narada with features that improve usability and capabilities while maintaining the CLI-first approach.
+
+Key Objectives:
+- Implement additional workflow transformers
+- Add more connector integrations
+- Enhance data synchronization capabilities
+
+- [ ] Advanced Transformers
+    - Effort: M
+    - What: Implement additional transformer nodes for workflow system
+    - Why: More transformation options enable more powerful workflows
+    - Dependencies: None
+    - Status: Not Started
+    - Notes:
+        - Implement merging operations with different strategies
+        - Add time-based transformers (seasonal, time of day)
+        - Support user preference learning
+        - Include randomization with weighting
+
+- [ ] Two-Way Like Synchronization
+    - Effort: M
+    - What: Implement bidirectional like synchronization between services
+    - Why: Currently only supports one-way sync (Spotify → Narada → Last.fm)
+    - Dependencies: None
+    - Status: Not Started
+    - Notes:
+        - Add conflict detection and resolution
+        - Implement service prioritization
+        - Support timestamp-based resolution
+        - Add manual override options
+        - Include detailed sync reporting
+
+- [x] Incremental Likes Export
+    - Effort: S
+    - What: Enhance the export functionality to only process recently added likes
+    - Why: More efficient for regular synchronization of large libraries
+    - Dependencies: None
+    - Status: Complete
+    - Notes:
+        - Extended repository with timestamp-based queries for efficient filtering
+        - Added since_timestamp parameter to repository and service methods
+        - Implemented conditional logic in like_sync.py for incremental export
+        - Added checkpoint timestamps for tracking last sync
+        - Improved logging for visibility into incremental sync operations
+
+### v0.5.0 API-First Interface with Workflow Visualization
 Goal: Transform Narada from a CLI-only tool into a service-oriented platform with elegant workflow visualization capabilities. This version establishes a clean API layer while introducing visualization that maintains the system's core functional architecture.
 
 Key Objectives:
@@ -150,7 +303,7 @@ Key Objectives:
         - Include accessibility testing
         - Ensure cross-browser compatibility
 
-### v0.4 Interactive Workflow Editor
+### v0.6.0 Interactive Workflow Editor
 Goal: Extend the visualization system to support full editing capabilities, enabling users to create and modify workflows through an intuitive graphical interface while maintaining the lean architectural principles of the system.
 
 Key Objectives:
@@ -163,7 +316,7 @@ Key Objectives:
     - Effort: M
     - What: Implement drag-and-drop node creation from node palette
     - Why: Need intuitive workflow creation experience
-    - Dependencies: v0.3
+    - Dependencies: v0.5.0
     - Status: Not Started
     - Notes:
         - Create node palette component
@@ -176,7 +329,7 @@ Key Objectives:
     - Effort: L
     - What: Create dynamic configuration panel for node parameters
     - Why: Users need to configure node behavior without JSON editing
-    - Dependencies: v0.3
+    - Dependencies: v0.5.0
     - Status: Not Started
     - Notes:
         - Generate form from node schema
@@ -224,7 +377,7 @@ Key Objectives:
         - Provide guidance
         - Support auto-correction
 
-### v0.5 LLM-Assisted Workflow Creation
+### v0.7.0 LLM-Assisted Workflow Creation
 Goal: Integrate LLM capabilities to enable natural language workflow creation, enhancing user experience while maintaining the system's clean architecture and separation of concerns.
 
 Key Objectives:
@@ -237,7 +390,7 @@ Key Objectives:
     - Effort: M
     - What: Create API endpoint for LLM-assisted workflow generation
     - Why: Foundation for natural language workflow creation
-    - Dependencies: v0.4
+    - Dependencies: v0.6.0
     - Status: Not Started
     - Notes:
         - Implement secure LLM API wrapper
@@ -298,7 +451,7 @@ Key Objectives:
         - Support model improvement
         - Include A/B testing
 
-### v1.0 Enterprise-Ready Workflow Platform
+### v1.0.0 Production-Ready Workflow Platform
 Goal: Transform Narada into a production-ready workflow platform with robust user management, enhanced security, and comprehensive monitoring, while maintaining the system's architectural elegance and minimal footprint.
 
 Key Objectives:
@@ -311,7 +464,7 @@ Key Objectives:
     - Effort: M
     - What: Implement secure authentication with JWT and role-based access
     - Why: Need proper user management for multi-user support
-    - Dependencies: v0.5
+    - Dependencies: v0.7.0
     - Status: Not Started
     - Notes:
         - Add JWT authentication
@@ -337,7 +490,7 @@ Key Objectives:
     - Effort: M
     - What: Create comprehensive monitoring and observability
     - Why: Need visibility into system performance and usage
-    - Dependencies: v0.5
+    - Dependencies: v0.7.0
     - Status: Not Started
     - Notes:
         - Implement structured logging

@@ -5,6 +5,8 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Protocol, TypeVar, cast
 
+from attrs import define
+
 from sqlalchemy import Select, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute, selectinload
@@ -16,6 +18,28 @@ from narada.config import get_logger
 # Import needed for relationship chains in eager loading
 from narada.database.db_models import DBPlaylistTrack, DBTrack, NaradaDBBase
 from narada.repositories.repo_decorator import db_operation
+
+# Common utility functions for repository operations
+async def safe_fetch_relationship(db_model: Any, rel_name: str) -> list[Any]:
+    """Helper to safely load relationships with fallback to async loading."""
+    try:
+        items = getattr(db_model, rel_name, [])
+
+        if (
+            not items
+            and hasattr(db_model, rel_name)
+            and hasattr(db_model, "awaitable_attrs")
+        ):
+            items = await getattr(db_model.awaitable_attrs, rel_name)
+
+        return items
+    except (AttributeError, TypeError):
+        if hasattr(db_model, "awaitable_attrs") and hasattr(
+            db_model.awaitable_attrs,
+            rel_name,
+        ):
+            return await getattr(db_model.awaitable_attrs, rel_name)
+        return []
 
 logger = get_logger(__name__)
 
@@ -36,6 +60,40 @@ class ModelMapper[TDBModel: NaradaDBBase, TDomainModel](Protocol):
     def to_db(domain_model: TDomainModel) -> TDBModel:
         """Convert domain model to database model."""
         ...
+        
+        
+@define(frozen=True, slots=True)
+class BaseModelMapper[TDBModel: NaradaDBBase, TDomainModel]:
+    """Base implementation of ModelMapper with common functionality.
+    
+    This provides a foundation for building domain-specific mappers
+    with consistent behavior and reduced boilerplate.
+    
+    Usage:
+        @define(frozen=True, slots=True)
+        class UserMapper(BaseModelMapper[DBUser, User]):
+            @staticmethod
+            async def to_domain(db_model: DBUser) -> User:
+                if not db_model:
+                    return None
+                return User(...)
+                
+            @staticmethod
+            def to_db(domain_model: User) -> DBUser:
+                return DBUser(...)
+    """
+    
+    @staticmethod
+    async def to_domain(db_model: TDBModel) -> TDomainModel:
+        """Default implementation returns None for None input."""
+        if not db_model:
+            return None
+        raise NotImplementedError("Subclasses must implement to_domain")
+        
+    @staticmethod
+    def to_db(domain_model: TDomainModel) -> TDBModel:
+        """Default implementation raises NotImplementedError."""
+        raise NotImplementedError("Subclasses must implement to_db")
 
 
 class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:

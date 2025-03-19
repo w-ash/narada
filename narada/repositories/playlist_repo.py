@@ -139,8 +139,16 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
         self,
         tracks: list[Track],
         track_repo: UnifiedTrackRepository,
+        connector: str | None = None,
     ) -> list[Track]:
-        """Save tracks that don't have IDs yet and return updated tracks."""
+        """Save tracks that don't have IDs yet and return updated tracks.
+
+        Args:
+            tracks: List of tracks to save
+            track_repo: Repository for track operations
+            connector: Optional connector name if tracks are from a specific source
+                      (creates "direct" mappings with 100% confidence)
+        """
         if not tracks:
             return []
 
@@ -148,7 +156,16 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
         for track in tracks:
             if not track.id:
                 try:
-                    saved_track = await track_repo.save_track(track)
+                    # Use direct connector method if connector is specified and track has that ID
+                    if connector and connector in track.connector_track_ids:
+                        # This explicitly creates a "direct" mapping with 100% confidence
+                        saved_track = await track_repo.create_track_from_connector_data(
+                            track=track, connector=connector
+                        )
+                    else:
+                        # Otherwise use basic track saving (no mappings created)
+                        saved_track = await track_repo.save_track(track)
+
                     updated_tracks.append(saved_track)
                 except Exception as e:
                     # Use proper exception chaining
@@ -343,8 +360,17 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
         track_repo: UnifiedTrackRepository,
     ) -> Playlist:
         """Implementation to create a new playlist with tracks."""
-        # Save tracks first
-        updated_tracks = await self._save_new_tracks(playlist.tracks, track_repo)
+        # Determine source connector if available
+        source_connector = None
+        for possible_connector in ["spotify", "lastfm", "musicbrainz"]:
+            if possible_connector in playlist.connector_playlist_ids:
+                source_connector = possible_connector
+                break
+
+        # Save tracks first with source connector for proper mappings
+        updated_tracks = await self._save_new_tracks(
+            playlist.tracks, track_repo, connector=source_connector
+        )
 
         # Create the playlist DB entity
         db_playlist = self.mapper.to_db(playlist)
@@ -388,9 +414,18 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
             ),
         )
 
+        # Determine source connector if available
+        source_connector = None
+        for possible_connector in ["spotify", "lastfm", "musicbrainz"]:
+            if possible_connector in playlist.connector_playlist_ids:
+                source_connector = possible_connector
+                break
+
         # Process tracks and mappings in parallel
         if playlist.tracks:
-            updated_tracks = await self._save_new_tracks(playlist.tracks, track_repo)
+            updated_tracks = await self._save_new_tracks(
+                playlist.tracks, track_repo, connector=source_connector
+            )
             await self._update_playlist_tracks(playlist_id, updated_tracks)
 
         # Update connector mappings
