@@ -77,7 +77,7 @@ class MetricResolver(Protocol):
         self,
         track_ids: list[int],
         metric_name: str,
-    ) -> dict[str, Any]: ...
+    ) -> dict[int, Any]: ...
 
 
 # Simple module-level registries

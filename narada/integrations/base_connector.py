@@ -78,7 +78,7 @@ class BaseMetricResolver:
     # Connector name to be overridden by subclasses
     CONNECTOR: ClassVar[str] = ""
 
-    async def resolve(self, track_ids: list[int], metric_name: str) -> dict[str, Any]:
+    async def resolve(self, track_ids: list[int], metric_name: str) -> dict[int, Any]:
         """Fetch stored service metrics from the database.
 
         This implementation:
@@ -92,7 +92,7 @@ class BaseMetricResolver:
             metric_name: Metric to resolve
 
         Returns:
-            Dictionary mapping track_id strings to metric values
+            Dictionary mapping track_id integers to metric values
         """
         if not track_ids:
             return {}
@@ -187,8 +187,9 @@ class BaseMetricResolver:
 
             # Return with integer keys with None for missing values (not 0)
             # This ensures the system can distinguish between "0 plays" and "unknown plays"
+            # Important: Return integer keys to maintain consistent ID representation
             return {
-                track_id: metrics_dict.get(track_id, None)
+                int(track_id): metrics_dict.get(track_id, None)
                 for track_id in track_ids
             }
 

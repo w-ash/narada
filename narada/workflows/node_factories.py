@@ -182,9 +182,12 @@ def create_enricher_node(config: dict) -> NodeFn:
                         value = extractor(result)
 
                     if value is not None:
-                        values[str(track_id)] = value
-                except Exception:
-                    pass
+                        # Use integer track IDs consistently
+                        values[track_id] = value
+                except Exception as e:
+                    logger.debug(
+                        f"Failed to extract attribute '{attr}' for track {track_id}: {e}"
+                    )
 
             if values:
                 metrics[attr] = values
