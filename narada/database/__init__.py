@@ -30,23 +30,31 @@ from narada.database.db_connection import (
     soft_delete_record,
 )
 from narada.database.db_models import (
-    DBPlayCount,
+    DBConnectorTrack,
     DBPlaylist,
     DBPlaylistMapping,
     DBPlaylistTrack,
+    DBSyncCheckpoint,
     DBTrack,
+    DBTrackLike,
     DBTrackMapping,
+    DBTrackMetric,
+    DBTrackPlay,
     init_db,
 )
 
 # Define explicit public API
 __all__ = [
-    "DBPlayCount",
+    "DBConnectorTrack",
     "DBPlaylist",
     "DBPlaylistMapping",
     "DBPlaylistTrack",
+    "DBSyncCheckpoint",
     "DBTrack",
+    "DBTrackLike",
     "DBTrackMapping",
+    "DBTrackMetric",
+    "DBTrackPlay",
     "engine",
     "get_session",
     "init_db",

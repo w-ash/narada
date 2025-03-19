@@ -18,7 +18,8 @@ from narada.config import get_logger
 from narada.core.models import Playlist, Track, TrackList
 from narada.database.db_connection import get_session
 from narada.integrations.spotify import SpotifyConnector
-from narada.repositories import PlaylistRepository, TrackRepository
+from narada.repositories.playlist import PlaylistRepository
+from narada.repositories.track import UnifiedTrackRepository
 
 logger = get_logger(__name__)
 
@@ -38,7 +39,7 @@ async def persist_tracks(tracklist: TrackList) -> tuple[list[Track], dict]:
     stats = {"new_tracks": 0, "updated_tracks": 0}
 
     async with get_session() as session:
-        track_repo = TrackRepository(session)
+        track_repo = UnifiedTrackRepository(session)
         db_tracks = []
 
         for track in tracklist.tracks:
@@ -76,7 +77,7 @@ async def handle_internal_destination(
     # Create playlist
     async with get_session() as session:
         playlist_repo = PlaylistRepository(session)
-        track_repo = TrackRepository(session)
+        track_repo = UnifiedTrackRepository(session)
 
         playlist = Playlist(
             name=name,
@@ -118,7 +119,7 @@ async def handle_spotify_destination(
 
     async with get_session() as session:
         playlist_repo = PlaylistRepository(session)
-        track_repo = TrackRepository(session)
+        track_repo = UnifiedTrackRepository(session)
 
         # Create playlist with Spotify ID
         playlist = Playlist(
@@ -162,7 +163,7 @@ async def handle_update_spotify_destination(
 
     # Update playlist in database and Spotify
     async with get_session() as session:
-        track_repo = TrackRepository(session)
+        track_repo = UnifiedTrackRepository(session)
         playlist_repo = PlaylistRepository(session)
 
         # Get existing playlist by connector ID

@@ -31,7 +31,7 @@ from narada.core.transforms import (  # Type definitions; Core pipeline function
 )
 
 # Import repository classes
-from narada.repositories import BaseRepository, PlaylistRepository, TrackRepository
+from narada.repositories import BaseRepository, PlaylistRepository, UnifiedTrackRepository
 
 # Define explicit public API
 __all__ = [
@@ -43,7 +43,7 @@ __all__ = [
     "PlaylistRepository",
     "Track",
     "TrackList",
-    "TrackRepository",
+    "UnifiedTrackRepository",
     "Transform",
     "batch_match_tracks",
     "concatenate",

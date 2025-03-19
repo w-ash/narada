@@ -16,7 +16,7 @@ from narada.database.db_connection import get_session
 from narada.integrations.lastfm import LastFmConnector
 from narada.integrations.musicbrainz import MusicBrainzConnector
 from narada.integrations.spotify import SpotifyConnector
-from narada.repositories.track import TrackRepository
+from narada.repositories.track import UnifiedTrackRepository
 
 logger = get_logger(__name__)
 
@@ -72,7 +72,7 @@ async def batch_match_tracks(
 
     # Check for existing mappings in the database
     async with get_session() as session:
-        track_repo = TrackRepository(session)
+        track_repo = UnifiedTrackRepository(session)
 
         # Get existing mappings from database for all tracks
         existing_mappings = await track_repo.get_connector_mappings(
@@ -92,24 +92,18 @@ async def batch_match_tracks(
             ):
                 connector_id = existing_mappings[track.id][connector]
 
-                # Get detailed mapping information
-                mapping_details = await track_repo.get_track_mapping_details(
-                    track.id,
-                    connector,
-                )
+                # Get detailed mapping information from connector data
+                track_with_details = await track_repo.find_track("internal", str(track.id))
+                connector_metadata = track_with_details.connector_metadata.get(connector, {}) if track_with_details else {}
 
                 # Create a result with mapping data from the database
                 db_mapped_tracks[track.id] = MatchResult(
                     track=track.with_connector_track_id(connector, connector_id),
                     success=True,
                     connector_id=connector_id,
-                    confidence=mapping_details.confidence if mapping_details else 80,
-                    match_method=mapping_details.match_method
-                    if mapping_details
-                    else "unknown",
-                    metadata=mapping_details.connector_metadata
-                    if mapping_details
-                    else {},
+                    confidence=connector_metadata.get("confidence", 80),
+                    match_method=connector_metadata.get("match_method", "unknown"),
+                    metadata=connector_metadata,
                 )
             else:
                 # This track needs matching
@@ -147,20 +141,32 @@ async def batch_match_tracks(
     # Save new matches to database
     if new_matches:
         async with get_session() as session:
-            track_repo = TrackRepository(session)
-            mappings_to_save = [
-                (
-                    result.track.id,
-                    connector,
-                    result.connector_id,
-                    result.confidence,
-                    result.match_method,
-                    result.metadata,
-                )
-                for result in new_matches.values()
-            ]
-
-            await track_repo.save_connector_mappings(mappings_to_save)
+            track_repo = UnifiedTrackRepository(session)
+            
+            # Process and save each match
+            for result in new_matches.values():
+                if not result.track.id:
+                    logger.warning("Cannot save match for track with no ID")
+                    continue
+                    
+                # Get the track
+                track = await track_repo.find_track("internal", str(result.track.id))
+                if not track:
+                    logger.warning(f"Track {result.track.id} not found for saving mapping")
+                    continue
+                
+                # Add connector ID and metadata
+                track = track.with_connector_track_id(connector, result.connector_id)
+                track = track.with_connector_metadata(connector, {
+                    "confidence": result.confidence,
+                    "match_method": result.match_method,
+                    "matched_at": datetime.now(UTC).isoformat(),
+                    **result.metadata,
+                })
+                
+                # Save the updated track
+                await track_repo.save_track(track)
+            
             await session.commit()
 
     # Combine all results

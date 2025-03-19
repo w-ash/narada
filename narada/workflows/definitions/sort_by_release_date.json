@@ -1,0 +1,36 @@
+{
+  "id": "sort_by_release_date",
+  "name": "Sort by Release Date",
+  "description": "Sort a Spotify playlist by track release date",
+  "version": "1.0",
+  "tasks": [
+    {
+      "id": "source",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "03xJ28l0eGh3UfZPOtPEl7"
+      }
+    },
+    {
+      "id": "sort",
+      "type": "sorter.by_release_date",
+      "config": {
+        "reverse": false
+      },
+      "upstream": [
+        "source"
+      ]
+    },
+    {
+      "id": "destination",
+      "type": "destination.create_spotify_playlist",
+      "config": {
+        "name": "Sorted by Release Date",
+        "description": "Tracks sorted by release date (oldest first)"
+      },
+      "upstream": [
+        "sort"
+      ]
+    }
+  ]
+}

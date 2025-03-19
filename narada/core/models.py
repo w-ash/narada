@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 import attr
+import attrs
 from attrs import define, field, validators
 
 # Type variables for generic operations
@@ -30,6 +31,7 @@ class Track:
     essential metadata while supporting resolution to external connectors.
     """
 
+    # Core metadata
     title: str = field(validator=validators.instance_of(str))
     artists: list[Artist] = field(
         factory=list,
@@ -51,59 +53,21 @@ class Track:
 
     def with_play_count(self, count: int) -> "Track":
         """Create a new track with play count information."""
-        return self.__class__(
-            title=self.title,
-            artists=self.artists,
-            album=self.album,
-            duration_ms=self.duration_ms,
-            release_date=self.release_date,
-            isrc=self.isrc,
-            id=self.id,
-            play_count=count,
-            connector_track_ids=self.connector_track_ids.copy(),
-            connector_metadata=self.connector_metadata.copy(),
-        )
+        return attrs.evolve(self, play_count=count)
 
     def with_connector_track_id(self, connector: str, sid: str) -> "Track":
         """Create a new track with additional connector identifier."""
         new_ids = self.connector_track_ids.copy()
         new_ids[connector] = sid
-
-        return self.__class__(
-            title=self.title,
-            artists=self.artists,
-            album=self.album,
-            duration_ms=self.duration_ms,
-            release_date=self.release_date,
-            isrc=self.isrc,
-            id=self.id,
-            play_count=self.play_count,
-            connector_track_ids=new_ids,
-            connector_metadata=self.connector_metadata.copy(),
-        )
+        return attrs.evolve(self, connector_track_ids=new_ids)
 
     def with_id(self, db_id: int) -> "Track":
-        """Set the internal database ID for this track.
-
-        This is the source of truth for track identity in our system.
-        """
+        """Set the internal database ID for this track."""
         if not isinstance(db_id, int) or db_id <= 0:
             raise ValueError(
                 f"Invalid database ID: {db_id}. Must be a positive integer.",
             )
-
-        return self.__class__(
-            title=self.title,
-            artists=self.artists,
-            album=self.album,
-            duration_ms=self.duration_ms,
-            release_date=self.release_date,
-            isrc=self.isrc,
-            id=db_id,
-            play_count=self.play_count,
-            connector_track_ids=self.connector_track_ids.copy(),
-            connector_metadata=self.connector_metadata.copy(),
-        )
+        return attrs.evolve(self, id=db_id)
 
     def with_connector_metadata(
         self,
@@ -113,19 +77,39 @@ class Track:
         """Create a new track with additional connector metadata."""
         new_metadata = self.connector_metadata.copy()
         new_metadata[connector] = {**new_metadata.get(connector, {}), **metadata}
+        return attrs.evolve(self, connector_metadata=new_metadata)
 
-        return self.__class__(
-            title=self.title,
-            artists=self.artists,
-            album=self.album,
-            duration_ms=self.duration_ms,
-            release_date=self.release_date,
-            isrc=self.isrc,
-            id=self.id,
-            play_count=self.play_count,
-            connector_track_ids=self.connector_track_ids.copy(),
-            connector_metadata=new_metadata,
-        )
+    def with_like_status(
+        self,
+        service: str,
+        is_liked: bool,
+        timestamp: datetime | None = None,
+    ) -> "Track":
+        """Create a new track with updated like status for the specified service."""
+        new_metadata = self.connector_metadata.copy()
+        service_meta = new_metadata.get(service, {}).copy()
+
+        service_meta["is_liked"] = is_liked
+        if timestamp:
+            service_meta["liked_at"] = timestamp.isoformat()
+
+        new_metadata[service] = service_meta
+        return attrs.evolve(self, connector_metadata=new_metadata)
+
+    def is_liked_on(self, service: str) -> bool:
+        """Check if track is liked/loved on the specified service."""
+        return bool(self.connector_metadata.get(service, {}).get("is_liked", False))
+
+    def get_liked_timestamp(self, service: str) -> datetime | None:
+        """Get the timestamp when track was liked on the service."""
+        iso_timestamp = self.connector_metadata.get(service, {}).get("liked_at")
+        if not iso_timestamp:
+            return None
+
+        try:
+            return datetime.fromisoformat(iso_timestamp)
+        except ValueError:
+            return None
 
     def get_connector_attribute(
         self,
@@ -134,8 +118,75 @@ class Track:
         default=None,
     ) -> Any:
         """Get a specific attribute from connector metadata."""
-        connector_data = self.connector_metadata.get(connector, {})
-        return connector_data.get(attribute, default)
+        return self.connector_metadata.get(connector, {}).get(attribute, default)
+
+
+@define(frozen=True, slots=True)
+class TrackLike:
+    """Immutable representation of a track like/love interaction."""
+
+    track_id: int
+    service: str  # 'spotify', 'lastfm', 'internal'
+    is_liked: bool = True  # Default to liked since most cases create likes
+    liked_at: datetime | None = None
+    last_synced: datetime | None = None
+    id: int | None = None  # Database ID if available
+
+
+@define(frozen=True, slots=True)
+class TrackPlay:
+    """Immutable record of a track play event."""
+
+    track_id: int
+    service: str
+    played_at: datetime
+    ms_played: int | None = None
+    context: dict[str, Any] | None = None
+    id: int | None = None
+
+
+@define(frozen=True, slots=True)
+class ConnectorTrack:
+    """External track representation from a specific music service."""
+
+    connector_name: str
+    connector_track_id: str
+    title: str
+    artists: list[Artist]
+    album: str | None = None
+    duration_ms: int | None = None
+    isrc: str | None = None
+    release_date: datetime | None = None
+    raw_metadata: dict[str, Any] = field(factory=dict)
+    last_updated: datetime = field(factory=lambda: datetime.now(UTC))
+    id: int | None = None
+
+
+@define(frozen=True, slots=True)
+class SyncCheckpoint:
+    """Represents the state of a synchronization process."""
+
+    user_id: str
+    service: str
+    entity_type: str  # 'likes', 'plays'
+    last_timestamp: datetime | None = None
+    cursor: str | None = None  # For pagination/continuation
+    id: int | None = None
+
+    def with_update(
+        self,
+        timestamp: datetime,
+        cursor: str | None = None,
+    ) -> "SyncCheckpoint":
+        """Create a new checkpoint with updated state."""
+        return self.__class__(
+            user_id=self.user_id,
+            service=self.service,
+            entity_type=self.entity_type,
+            last_timestamp=timestamp,
+            cursor=cursor or self.cursor,
+            id=self.id,
+        )
 
 
 @define(frozen=True, slots=True)

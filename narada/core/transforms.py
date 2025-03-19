@@ -218,6 +218,79 @@ def exclude_artists(
     )
 
 
+@curry
+def filter_by_metric_range(
+    metric_name: str,
+    min_value: float | None = None,
+    max_value: float | None = None,
+    include_missing: bool = False,
+    tracklist: TrackList | None = None,
+) -> Transform | TrackList:
+    """
+    Filter tracks based on a metric value range.
+    
+    Args:
+        metric_name: Name of the metric to filter by (e.g., 'lastfm_user_playcount')
+        min_value: Minimum value (inclusive), or None for no minimum
+        max_value: Maximum value (inclusive), or None for no maximum
+        include_missing: Whether to include tracks without the metric
+        tracklist: Optional tracklist to transform immediately
+        
+    Returns:
+        Transformation function or transformed tracklist if provided
+    """
+    
+    def is_in_range(track: Track) -> bool:
+        """Check if track's metric is within the specified range."""
+        if not track.id:
+            return include_missing
+            
+        # Get the metrics dictionary from the tracklist metadata
+        metrics = tracklist.metadata.get("metrics", {})
+        metric_values = metrics.get(metric_name, {})
+        
+        # Check if track has the metric
+        track_id_str = str(track.id)
+        if track_id_str not in metric_values:
+            return include_missing
+            
+        value = metric_values[track_id_str]
+        
+        # Check range bounds
+        if min_value is not None and value < min_value:
+            return False
+            
+        if max_value is not None and value > max_value:
+            return False
+            
+        return True
+    
+    def transform(t: TrackList) -> TrackList:
+        """Apply the metric filter transformation."""
+        # Set the tracklist for metric lookup in is_in_range
+        nonlocal tracklist
+        tracklist = t
+        
+        # Apply filter
+        result = filter_by_predicate(is_in_range)(t)
+        
+        # Add metadata about the filter operation
+        filtered_count = len(result.tracks)
+        return cast(TrackList, result).with_metadata(
+            "filter_metrics", {
+                "metric_name": metric_name,
+                "min_value": min_value,
+                "max_value": max_value,
+                "include_missing": include_missing,
+                "original_count": len(t.tracks),
+                "filtered_count": filtered_count,
+                "removed_count": len(t.tracks) - filtered_count,
+            }
+        )
+        
+    return transform(tracklist) if tracklist is not None else transform
+
+
 # === Track Sorting ===
 
 
@@ -262,24 +335,65 @@ def sort_by_attribute(
 
     def transform(t: TrackList) -> TrackList:
         """Apply the sorting transformation with metrics-driven approach."""
+        from narada.config import get_logger
+        logger = get_logger(__name__)
+        
         # Simply use metrics that were resolved at the node boundary
         metrics_dict = t.metadata.get("metrics", {}).get(metric_name, {})
+        
+        # Validate that metrics keys are integers (our expected format)
+        if metrics_dict:
+            # Check if metrics dictionary has string keys (which is an error)
+            string_keys = [k for k in metrics_dict.keys() if isinstance(k, str)]
+            if string_keys:
+                # Instead of silently working around this, throw an error so we can fix it
+                # at the source - track IDs should be integers
+                sample_keys = string_keys[:5]
+                raise TypeError(
+                    f"Metrics dictionary contains string keys instead of integer track IDs: {sample_keys}. "
+                    f"This indicates an upstream issue in metric resolution or storage."
+                )
+                
+        # Check if we have any non-null values
+        non_null_values = {k: v for k, v in metrics_dict.items() if v is not None}
+
+        # Log basic sorting info with a sample of what we're working with
+        logger.info(
+            f"Sorting by {metric_name}",
+            metric_name=metric_name,
+            metrics_count=len(metrics_dict),
+            non_null_count=len(non_null_values),
+            sample_metrics=list(non_null_values.items())[:3] if non_null_values else []
+        )
 
         # Create enhanced key function that prioritizes metrics
         def enhanced_key_fn(track: Track) -> Any:
-            if track.id and str(track.id) in metrics_dict:
-                # Use resolved metric
-                return metrics_dict[str(track.id)]
-            # Fall back to original key function
-            return key_fn(track)
+            if not track.id:
+                return key_fn(track)
+                
+            # Check if track ID exists in metrics - track IDs should be integers
+            if track.id in metrics_dict:
+                # Use resolved metric if it exists and isn't None
+                metric_value = metrics_dict[track.id]
+                if metric_value is not None:
+                    return metric_value
+                    
+            # For missing or None values, use a default that will sort appropriately
+            if reverse:
+                # When sorting in descending order (reverse=True), put None values at the end
+                return float('-inf')  # Lowest possible value
+            else:
+                # When sorting in ascending order, put None values at the end
+                return float('inf')   # Highest possible value
 
         # Sort tracks using the enhanced key function
         sorted_tracks = sorted(t.tracks, key=enhanced_key_fn, reverse=reverse)
         result = t.with_tracks(sorted_tracks)
 
         # Store metrics in tracklist metadata (preserving existing metrics)
+        # Use integer track IDs for consistency
         track_metrics = {
-            str(track.id): enhanced_key_fn(track)
+            track.id: enhanced_key_fn(track)
             for track in t.tracks
             if track.id is not None
         }

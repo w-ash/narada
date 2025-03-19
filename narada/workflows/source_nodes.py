@@ -7,7 +7,7 @@ from narada.core.models import TrackList
 from narada.database.db_connection import get_session
 from narada.integrations.spotify import SpotifyConnector
 from narada.repositories.playlist import PlaylistRepository
-from narada.repositories.track import TrackRepository
+from narada.repositories.track import UnifiedTrackRepository
 
 logger = get_logger(__name__)
 
@@ -66,7 +66,7 @@ async def spotify_playlist_source(_context: dict, config: dict) -> dict[str, Any
     # Save playlist and tracks to database
     async with get_session() as session:
         # Create repository instances
-        track_repo = TrackRepository(session)
+        track_repo = UnifiedTrackRepository(session)
         playlist_repo = PlaylistRepository(session)
 
         # First, try to get by connector ID
@@ -118,7 +118,7 @@ async def spotify_playlist_source(_context: dict, config: dict) -> dict[str, Any
                 logger.error(f"Track missing ID: {track.title} by {[a.name for a in track.artists]}")
             raise ValueError(
                 f"Critical error: {len(missing_ids)}/{len(tracklist.tracks)} tracks missing IDs. "
-                "Check repository implementation and eager loading configuration."
+                "Check repository implementation and eager loading configuration.",
             )
 
         return {

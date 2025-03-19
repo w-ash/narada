@@ -240,12 +240,16 @@ class SafeQuery[T: Any]:
 
 # Import database models after base class is defined to avoid circular imports
 from narada.database.db_models import (  # noqa
-    DBPlayCount,
+    DBConnectorTrack,
     DBPlaylist,
     DBPlaylistMapping,
     DBPlaylistTrack,
+    DBSyncCheckpoint,
     DBTrack,
+    DBTrackLike,
     DBTrackMapping,
+    DBTrackMetric,
+    DBTrackPlay,
 )
 
 # Create aliases for public API
@@ -254,12 +258,16 @@ session_factory = get_session_factory()
 
 
 __all__ = [
-    "DBPlayCount",
+    "DBConnectorTrack",
     "DBPlaylist",
     "DBPlaylistMapping",
     "DBPlaylistTrack",
+    "DBSyncCheckpoint",
     "DBTrack",
+    "DBTrackLike",
     "DBTrackMapping",
+    "DBTrackMetric",
+    "DBTrackPlay",
     "SafeQuery",
     "create_db_engine",
     "create_session_factory",

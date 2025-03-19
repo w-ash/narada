@@ -18,7 +18,7 @@ from narada.database.db_models import (
 )
 from narada.repositories.base import BaseRepository, ModelMapper
 from narada.repositories.repo_decorator import db_operation
-from narada.repositories.track import TrackRepository
+from narada.repositories.track import UnifiedTrackRepository
 
 logger = get_logger(__name__)
 
@@ -143,7 +143,7 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
     async def _save_new_tracks(
         self,
         tracks: list[Track],
-        track_repo: TrackRepository,
+        track_repo: UnifiedTrackRepository,
     ) -> list[Track]:
         """Save tracks that don't have IDs yet."""
         updated_tracks = []
@@ -331,7 +331,7 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
     async def _create_playlist_impl(
         self,
         playlist: Playlist,
-        track_repo: TrackRepository,
+        track_repo: UnifiedTrackRepository,
     ) -> Playlist:
         """Implementation to create a new playlist with tracks."""
         # Save tracks first
@@ -361,7 +361,7 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
         self,
         playlist_id: int,
         playlist: Playlist,
-        track_repo: TrackRepository,
+        track_repo: UnifiedTrackRepository,
     ) -> Playlist:
         """Implementation for updating an existing playlist."""
         # Update basic properties first with a simple dict to avoid mapper issues
@@ -461,7 +461,7 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
     async def save_playlist(
         self,
         playlist: Playlist,
-        track_repo: TrackRepository,
+        track_repo: UnifiedTrackRepository,
     ) -> Playlist:
         """Save playlist and all its tracks atomically."""
         if not playlist.name:
@@ -476,7 +476,7 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
         self,
         playlist_id: int,
         playlist: Playlist,
-        track_repo: TrackRepository,
+        track_repo: UnifiedTrackRepository,
     ) -> Playlist:
         """Update existing playlist."""
         if not playlist.name:

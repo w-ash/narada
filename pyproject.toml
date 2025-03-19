@@ -49,6 +49,7 @@ line-length = 88
 target-version = "py313"
 preview = true
 
+[tool.ruff.lint]
 # Linting rules
 select = [
     "E",     # pycodestyle errors
@@ -81,17 +82,16 @@ fixable = ["ALL"]
 unfixable = []
 
 # Per-file rule exceptions
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]   # Don't complain about unused imports in __init__ files
 "tests/**/*.py" = ["S101"] # Allow assert in tests
 
 # Import sorting configuration
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 known-first-party = ["narada"]
 section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
 combine-as-imports = true
 split-on-trailing-comma = true
-lines-between-types = 1
 force-single-line = false           # Allow multi-line imports
 force-sort-within-sections = true   # Sort within sections
 from-first = false                  # Put "from" imports after regular imports
@@ -99,12 +99,12 @@ detect-same-package = true          # Similar to grouping by package
 order-by-type = true                # Organize by import type
 
 # Python 3.13+ specific settings via pyupgrade
-[tool.ruff.pyupgrade]
+[tool.ruff.lint.pyupgrade]
 # Keep typed versions of builtins for better type checking
 keep-runtime-typing = true
 
 # Configure typing practices
-[tool.ruff.pydocstyle]
+[tool.ruff.lint.pydocstyle]
 convention = "google"
 
 # Formatter configuration (Compatible with Ruff 0.9.9)
@@ -115,12 +115,12 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 # flake8-annotations settings
-[tool.ruff.flake8-annotations]
+[tool.ruff.lint.flake8-annotations]
 allow-star-arg-any = true
 suppress-none-returning = true
 
 # flake8-bugbear settings
-[tool.ruff.flake8-bugbear]
+[tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["typer.Argument", "typer.Option"]
 
 # Testing configuration

@@ -22,6 +22,7 @@ from narada.core.transforms import (
     exclude_artists,
     exclude_tracks,
     filter_by_date_range,
+    filter_by_metric_range,
     filter_duplicates,
     interleave,
     select_by_method,
@@ -46,25 +47,25 @@ TRANSFORM_REGISTRY = {
             ctx.data[cfg["exclusion_source"]]["tracklist"].tracks,
             cfg.get("exclude_all_artists", False),
         ),
+        "by_metric": lambda _ctx, cfg: filter_by_metric_range(
+            metric_name=cfg["metric_name"],
+            min_value=cfg.get("min_value"),
+            max_value=cfg.get("max_value"),
+            include_missing=cfg.get("include_missing", False),
+        ),
     },
     "sorter": {
-        "by_user_plays": lambda ctx, cfg: sort_by_attribute(
-            key_fn=lambda track: (
-                ctx.get(f"match_results.{track.id}.user_play_count", 0)
-                if track.id
-                else 0
-            ),
-            metric_name="user_play_count",
+        "by_metric": lambda _ctx, cfg: sort_by_attribute(
+            # Dynamic metric sorter - pulls metric_name from config
+            key_fn=cfg.get("metric_name"),
+            metric_name=cfg.get("metric_name"),
             reverse=cfg.get("reverse", True),
         ),
-        "by_spotify_popularity": lambda _ctx, cfg: sort_by_attribute(
-            key_fn=lambda track: track.get_connector_attribute(
-                "spotify",
-                "popularity",
-                0,
-            ),
-            metric_name="spotify_popularity",
-            reverse=cfg.get("reverse", True),
+        "by_release_date": lambda _ctx, cfg: sort_by_attribute(
+            # Sort tracks by release date
+            key_fn=lambda track: track.release_date,
+            metric_name="release_date",
+            reverse=cfg.get("reverse", False),  # Default to oldest first
         ),
     },
     "selector": {
