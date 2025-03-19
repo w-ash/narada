@@ -47,13 +47,8 @@ class Track:
 
     # Extended properties
     id: int | None = field(default=None)
-    play_count: int | None = field(default=None)
     connector_track_ids: dict[str, str] = field(factory=dict)
     connector_metadata: dict[str, dict[str, Any]] = field(factory=dict)
-
-    def with_play_count(self, count: int) -> "Track":
-        """Create a new track with play count information."""
-        return attrs.evolve(self, play_count=count)
 
     def with_connector_track_id(self, connector: str, sid: str) -> "Track":
         """Create a new track with additional connector identifier."""

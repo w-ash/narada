@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from narada.database.db_connection import get_session
-from narada.database.init_db import init_db
+from narada.database.db_models import init_db
 
 
 @pytest.fixture(scope="session")

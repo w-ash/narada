@@ -3,11 +3,14 @@
 import asyncio
 from importlib.metadata import metadata
 import time
+from typing import Any
 
+from attrs import define, field
 import backoff
 import musicbrainzngs
 
 from narada.config import get_logger, resilient_operation
+from narada.integrations.base_connector import BatchProcessor
 
 # Get contextual logger with service binding
 logger = get_logger(__name__).bind(service="musicbrainz")
@@ -20,6 +23,7 @@ app_url = pkg_meta.get("Home-page", "https://github.com/user/narada")
 musicbrainzngs.set_useragent(app_name, app_version, app_url)
 
 
+@define(slots=True)
 class MusicBrainzConnector:
     """Thin wrapper around musicbrainzngs with rate limiting.
 
@@ -27,11 +31,12 @@ class MusicBrainzConnector:
     while strictly adhering to MusicBrainz rate limits (1 req/sec).
     """
 
-    def __init__(self) -> None:
+    _last_request_time: float = field(default=0.0)
+    _request_lock: asyncio.Lock = field(factory=asyncio.Lock, repr=False)
+    
+    def __attrs_post_init__(self) -> None:
         """Initialize MusicBrainz connector."""
         logger.debug("Initializing MusicBrainz connector")
-        self._last_request_time = 0
-        self._request_lock = asyncio.Lock()
         
     async def get_recording_by_isrc(self, isrc: str) -> str | None:
         """
@@ -68,7 +73,7 @@ class MusicBrainzConnector:
             logger.exception(f"Error getting recording by ISRC: {e}")
             return None
 
-    async def _rate_limited_request(self, func, *args, **kwargs):
+    async def _rate_limited_request(self, func, *args, **kwargs) -> Any:
         """Execute a rate-limited MusicBrainz request ensuring 1 req/sec compliance."""
         async with self._request_lock:
             # Ensure at least 1.1s between requests (safety margin)
@@ -85,7 +90,6 @@ class MusicBrainzConnector:
                 # Handle 404 errors (not found) differently than other errors
                 if "404" in str(e):
                     # Just return None for 404s rather than raising
-                    # Let the calling function handle the logging with context
                     return None
                 else:
                     # For other API errors, log and re-raise
@@ -109,70 +113,52 @@ class MusicBrainzConnector:
         # Deduplicate ISRCs
         unique_isrcs = list({isrc for isrc in isrcs if isrc})
         logger.info(f"Looking up {len(unique_isrcs)} unique ISRCs")
-        results = {}
-
-        # Process ISRCs with controlled concurrency
-        semaphore = asyncio.Semaphore(concurrency)
-
+        
+        # Create batch processor for standardized batch handling
+        processor = BatchProcessor[str, tuple[str, str | None]](
+            batch_size=batch_size,
+            concurrency_limit=concurrency,
+        )
+        
         async def process_isrc(isrc: str) -> tuple[str, str | None]:
             """Process a single ISRC with rate limiting."""
-            async with semaphore:
-                try:
-                    response = await self._rate_limited_request(
-                        musicbrainzngs.get_recordings_by_isrc,
-                        isrc,
-                        includes=["artists"],
-                    )
+            try:
+                response = await self._rate_limited_request(
+                    musicbrainzngs.get_recordings_by_isrc,
+                    isrc,
+                    includes=["artists"],
+                )
 
-                    # Check if response is None (404 from _rate_limited_request)
-                    if response is None:
-                        logger.warning(
-                            "ISRC not found in MusicBrainz",
-                            isrc=isrc,
-                            status="not_found",
-                        )
-                        return isrc, None
-
-                    recordings = response.get("isrc", {}).get("recording-list", [])
-                    if not recordings:
-                        logger.debug(
-                            "ISRC found but no recordings associated",
-                            isrc=isrc,
-                        )
-                        return isrc, None
-
-                    # Return the first recording's MBID (most common case)
-                    mbid = recordings[0].get("id")
-                    if mbid:
-                        logger.debug(
-                            "ISRC successfully resolved",
-                            isrc=isrc,
-                            mbid=mbid,
-                        )
-                    return isrc, mbid
-
-                except Exception as e:
-                    logger.warning(
-                        "Error processing ISRC lookup",
-                        isrc=isrc,
-                        error=str(e),
-                        error_type=type(e).__name__,
-                    )
+                # Check if response is None (404 from _rate_limited_request)
+                if response is None:
+                    logger.debug("ISRC not found in MusicBrainz", isrc=isrc)
                     return isrc, None
 
-        # Process ISRCs in batches
-        for i in range(0, len(unique_isrcs), batch_size):
-            batch = unique_isrcs[i : i + batch_size]
-            batch_tasks = [process_isrc(isrc) for isrc in batch]
-            batch_results = await asyncio.gather(*batch_tasks)
+                recordings = response.get("isrc", {}).get("recording-list", [])
+                if not recordings:
+                    logger.debug("ISRC found but no recordings associated", isrc=isrc)
+                    return isrc, None
 
-            # Add successful results to mapping using dictionary comprehension
-            results.update({isrc: mbid for isrc, mbid in batch_results if mbid})
+                # Return the first recording's MBID (most common case)
+                mbid = recordings[0].get("id")
+                if mbid:
+                    logger.debug("ISRC successfully resolved", isrc=isrc, mbid=mbid)
+                return isrc, mbid
 
-            # Log progress
-            processed = min(i + batch_size, len(unique_isrcs))
-            logger.debug(f"Processed {processed}/{len(unique_isrcs)} ISRCs")
+            except Exception as e:
+                logger.warning("Error processing ISRC lookup", isrc=isrc, error=str(e))
+                return isrc, None
 
+        # Use the batch processor to handle all ISRCs
+        batch_results = await processor.process(
+            items=unique_isrcs,
+            process_func=process_isrc,
+            sleep_time=0.0,  # No additional sleep needed, rate limiting is in _rate_limited_request
+        )
+        
+        # Filter successful results into a dictionary
+        results = {isrc: mbid for isrc, mbid in batch_results if mbid}
+        
         logger.info(f"ISRC lookup complete, found {len(results)} matches")
         return results
 

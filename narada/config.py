@@ -99,6 +99,38 @@ _config: dict[str, Any] = {
     "LASTFM_ENRICHER_CONCURRENCY": int(os.getenv("LASTFM_ENRICHER_CONCURRENCY", "5")),
     "TRACK_BATCH_RETRY_COUNT": int(os.getenv("TRACK_BATCH_RETRY_COUNT", "3")),
     "TRACK_BATCH_RETRY_DELAY": int(os.getenv("TRACK_BATCH_RETRY_DELAY", "5")),
+    
+    # Global API defaults
+    "DEFAULT_API_BATCH_SIZE": int(os.getenv("DEFAULT_API_BATCH_SIZE", "50")),
+    "DEFAULT_API_CONCURRENCY": int(os.getenv("DEFAULT_API_CONCURRENCY", "5")),
+    "DEFAULT_API_RETRY_COUNT": int(os.getenv("DEFAULT_API_RETRY_COUNT", "3")),
+    "DEFAULT_API_RETRY_BASE_DELAY": float(os.getenv("DEFAULT_API_RETRY_BASE_DELAY", "1.0")),
+    "DEFAULT_API_RETRY_MAX_DELAY": float(os.getenv("DEFAULT_API_RETRY_MAX_DELAY", "30.0")),
+    "DEFAULT_API_REQUEST_DELAY": float(os.getenv("DEFAULT_API_REQUEST_DELAY", "0.2")),
+    
+    # LastFM API settings - conservative due to rate limits
+    "LASTFM_API_BATCH_SIZE": int(os.getenv("LASTFM_API_BATCH_SIZE", "20")), 
+    "LASTFM_API_CONCURRENCY": int(os.getenv("LASTFM_API_CONCURRENCY", "3")),
+    "LASTFM_API_RETRY_COUNT": int(os.getenv("LASTFM_API_RETRY_COUNT", "5")),
+    "LASTFM_API_RETRY_BASE_DELAY": float(os.getenv("LASTFM_API_RETRY_BASE_DELAY", "1.0")),
+    "LASTFM_API_RETRY_MAX_DELAY": float(os.getenv("LASTFM_API_RETRY_MAX_DELAY", "60.0")),
+    "LASTFM_API_REQUEST_DELAY": float(os.getenv("LASTFM_API_REQUEST_DELAY", "0.25")),
+    
+    # Spotify API settings
+    "SPOTIFY_API_BATCH_SIZE": int(os.getenv("SPOTIFY_API_BATCH_SIZE", "50")),
+    "SPOTIFY_API_CONCURRENCY": int(os.getenv("SPOTIFY_API_CONCURRENCY", "5")),
+    "SPOTIFY_API_RETRY_COUNT": int(os.getenv("SPOTIFY_API_RETRY_COUNT", "3")),
+    "SPOTIFY_API_RETRY_BASE_DELAY": float(os.getenv("SPOTIFY_API_RETRY_BASE_DELAY", "0.5")),
+    "SPOTIFY_API_RETRY_MAX_DELAY": float(os.getenv("SPOTIFY_API_RETRY_MAX_DELAY", "30.0")),
+    "SPOTIFY_API_REQUEST_DELAY": float(os.getenv("SPOTIFY_API_REQUEST_DELAY", "0.1")),
+    
+    # MusicBrainz API settings
+    "MUSICBRAINZ_API_BATCH_SIZE": int(os.getenv("MUSICBRAINZ_API_BATCH_SIZE", "50")),
+    "MUSICBRAINZ_API_CONCURRENCY": int(os.getenv("MUSICBRAINZ_API_CONCURRENCY", "5")),
+    "MUSICBRAINZ_API_RETRY_COUNT": int(os.getenv("MUSICBRAINZ_API_RETRY_COUNT", "3")),
+    "MUSICBRAINZ_API_RETRY_BASE_DELAY": float(os.getenv("MUSICBRAINZ_API_RETRY_BASE_DELAY", "1.0")),
+    "MUSICBRAINZ_API_RETRY_MAX_DELAY": float(os.getenv("MUSICBRAINZ_API_RETRY_MAX_DELAY", "30.0")),
+    "MUSICBRAINZ_API_REQUEST_DELAY": float(os.getenv("MUSICBRAINZ_API_REQUEST_DELAY", "0.2")),
 }
 
 

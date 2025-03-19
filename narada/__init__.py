@@ -8,10 +8,10 @@ try:
         __version__ = version("narada")
     except PackageNotFoundError:
         # Development environment fallback
-        __version__ = "0.1.2-dev"
+        __version__ = "0.1.3-dev"
 except ImportError:
     # Extreme fallback for environments without importlib.metadata
-    __version__ = "0.1.2-dev"
+    __version__ = "0.1.3-dev"
 
 __author__ = "Ash Wright"
 __license__ = "MIT"

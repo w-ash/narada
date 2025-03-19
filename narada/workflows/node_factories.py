@@ -111,10 +111,17 @@ def create_enricher_node(config: dict) -> NodeFn:
     """Create an enricher node for metadata extraction and attachment.
 
     Architectural separation of concerns:
-    - Matcher handles identity resolution ("Is this track X the same as track Y?")
-    - Enricher handles metadata extraction ("What do we know about this track?")
+    - Matcher: Resolves identity ("Is internal track X the same as connector track X?")
+    - Integration: Handles external API communication
+    - Repository: Manages persistence of identified tracks
+    - Enricher: Coordinates the process and extracts/attaches metadata
 
-    The enricher uses a clean pipeline architecture:
+    This clean architecture ensures:
+    1. Each component has a single responsibility
+    2. Components can evolve independently
+    3. Testing can be performed in isolation
+
+    Workflow steps:
     1. Extract tracks from input tracklist
     2. Resolve track identity across services via matcher
     3. Extract valuable metadata attributes
@@ -140,93 +147,64 @@ def create_enricher_node(config: dict) -> NodeFn:
         ctx = NodeContext(context)
         tracklist = ctx.extract_tracklist()
 
-        logger = get_logger(__name__)
-        with logger.contextualize(operation="enrichment", connector=enricher_type):
-            logger.info(
-                f"Starting {enricher_type} enrichment",
-                track_count=len(tracklist.tracks),
-            )
+        # Initialize connector instance
+        connector_instance = enricher_config["factory"](node_config)
 
-            # Initialize connector instance
-            connector_instance = enricher_config["factory"](node_config)
+        # Resolve track identities through matcher service
+        match_results = await batch_match_tracks(
+            tracklist,
+            enricher_type,
+            connector_instance,
+        )
 
-            # Get batch configuration from node config or fall back to global config
-            from narada.config import get_config
+        # Extract configured metrics from match results
+        metrics = {}
 
-            batch_size = node_config.get(
-                "batch_size",
-                get_config("LASTFM_ENRICHER_BATCH_SIZE", 50),
-            )
-            concurrency_limit = node_config.get(
-                "concurrency",
-                get_config("LASTFM_ENRICHER_CONCURRENCY", 5),
-            )
+        for attr in config.get("attributes", []):
+            extractor = enricher_config["extractors"].get(attr)
+            if not extractor:
+                continue
 
-            # Resolve track identities through matcher service
-            match_results = await batch_match_tracks(
-                tracklist,
-                enricher_type,
-                connector_instance,
-                batch_size=batch_size,
-                concurrency_limit=concurrency_limit,
-            )
+            values = {}
 
-            # Extract configured metrics from match results
-            metrics = {}
-
-            for attr in config.get("attributes", []):
-                extractor = enricher_config["extractors"].get(attr)
-                if not extractor:
-                    logger.warning(
-                        f"No extractor for {attr}",
-                        connector=enricher_type,
-                    )
+            # Extract metrics from successful matches
+            for track_id, result in match_results.items():
+                if not result.success or track_id is None:
                     continue
 
-                values = {}
+                try:
+                    # Extract value using the appropriate method based on the attribute
+                    if attr in result.metadata:
+                        # Direct access from metadata if available there
+                        value = result.metadata.get(attr)
+                    else:
+                        # Use configured extractor for standard attributes
+                        value = extractor(result)
 
-                # Extract metrics from successful matches
-                for track_id, result in match_results.items():
-                    if not result.success or track_id is None:
-                        continue
+                    if value is not None:
+                        values[str(track_id)] = value
+                except Exception:
+                    pass
 
-                    try:
-                        # Extract value using the appropriate method based on the attribute
-                        if attr in result.metadata:
-                            # Direct access from metadata if available there
-                            value = result.metadata.get(attr)
-                        else:
-                            # Use configured extractor for standard attributes
-                            value = extractor(result)
+            if values:
+                metrics[attr] = values
 
-                        if value is not None:
-                            values[str(track_id)] = value
-                    except Exception as e:
-                        logger.exception(
-                            f"Extraction error: {e}",
-                            track_id=track_id,
-                        )
+        # Attach metrics to tracklist
+        if metrics:
+            current_metrics = tracklist.metadata.get("metrics", {})
+            enriched = tracklist.with_metadata(
+                "metrics",
+                {**current_metrics, **metrics},
+            )
+        else:
+            enriched = tracklist
 
-                if values:
-                    metrics[attr] = values
-                    logger.info(f"Extracted {attr}", count=len(values))
-
-            # Attach metrics to tracklist
-            if metrics:
-                current_metrics = tracklist.metadata.get("metrics", {})
-                enriched = tracklist.with_metadata(
-                    "metrics",
-                    {**current_metrics, **metrics},
-                )
-            else:
-                enriched = tracklist
-
-            return {
-                "tracklist": enriched,
-                "match_results": match_results,
-                "operation": f"{enricher_type}_enrichment",
-                "metrics_count": len(metrics),
-            }
+        return {
+            "tracklist": enriched,
+            "match_results": match_results,
+            "operation": f"{enricher_type}_enrichment",
+            "metrics_count": len(metrics),
+        }
 
     return node_impl
 
@@ -265,19 +243,17 @@ def create_filter_node(filter_type: str, operation_name: str | None = None) -> N
 
 def create_sorter_node(sorter_type: str, operation_name: str | None = None) -> NodeFn:
     """Create a sorter node with integrated metadata resolution."""
-    # Map sorters to required metrics
-    metric_map = {
-        "by_spotify_popularity": "spotify_popularity",
-        "by_user_plays": "user_play_count",
-    }
-
     # Get base transform
     transform_fn = make_node("sorter", sorter_type, operation_name)
-    needed_metric = metric_map.get(sorter_type)
 
     async def node_with_resolution(context: dict, config: dict) -> dict:
         """Node wrapper that resolves metrics before transformation."""
         ctx = NodeContext(context)
+
+        # Extract the metric name from config for by_metric
+        needed_metric = (
+            config.get("metric_name") if sorter_type == "by_metric" else None
+        )
 
         # Only attempt resolution if this transform needs metrics
         if needed_metric:
@@ -292,11 +268,22 @@ def create_sorter_node(sorter_type: str, operation_name: str | None = None) -> N
                 if needed_metric in metric_resolvers:
                     track_ids = [t.id for t in tracklist.tracks if t.id]
                     if track_ids:
+                        # Resolve and log metrics in a simpler way
                         resolved = await metric_resolvers[needed_metric].resolve(
                             track_ids,
                             needed_metric,
                         )
+
                         if resolved:
+                            # Single, focused log with key metrics
+                            non_zero_count = sum(1 for v in resolved.values() if v != 0)
+                            logger.info(
+                                f"Resolved {needed_metric} metrics",
+                                tracks=len(track_ids),
+                                metrics_found=len(resolved),
+                                non_zero=non_zero_count,
+                            )
+
                             # Update tracklist in context with resolved metrics
                             updated = tracklist.with_metadata(
                                 "metrics",

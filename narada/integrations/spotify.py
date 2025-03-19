@@ -3,20 +3,21 @@
 import asyncio
 from datetime import UTC, datetime
 import os
-from typing import Any
+from typing import Any, ClassVar
 
-import attrs
+from attrs import define, field
 import backoff
 from dotenv import load_dotenv
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
-from sqlalchemy import select
 
 from narada.config import get_logger, resilient_operation
 from narada.core.models import Artist, Playlist, Track
-from narada.core.protocols import register_metric_resolver
-from narada.database.db_connection import get_session
-from narada.database.db_models import DBTrackMapping
+from narada.integrations.base_connector import (
+    BaseMetricResolver,
+    ConnectorConfig,
+    register_metrics,
+)
 
 # Get contextual logger with service binding
 logger = get_logger(__name__).bind(service="spotify")
@@ -28,7 +29,7 @@ os.environ["SPOTIPY_CLIENT_SECRET"] = os.getenv("SPOTIFY_CLIENT_SECRET", "")
 os.environ["SPOTIPY_REDIRECT_URI"] = os.getenv("SPOTIFY_REDIRECT_URI", "")
 
 
-@attrs.define
+@define(slots=True)
 class SpotifyConnector:
     """Thin wrapper around spotipy with domain model conversion.
 
@@ -40,7 +41,7 @@ class SpotifyConnector:
     All methods handle rate limiting via backoff decorator.
     """
 
-    client: spotipy.Spotify = attrs.field(init=False)
+    client: spotipy.Spotify = field(init=False, repr=False)
 
     def __attrs_post_init__(self) -> None:
         """Initialize Spotify client with OAuth configuration."""
@@ -324,7 +325,7 @@ def convert_spotify_playlist_to_domain(spotify_playlist: dict[str, Any]) -> Play
     return playlist.with_connector_playlist_id("spotify", spotify_playlist["id"])
 
 
-def get_connector_config():
+def get_connector_config() -> ConnectorConfig:
     """Spotify connector configuration."""
     return {
         "extractors": {
@@ -339,58 +340,23 @@ def get_connector_config():
         },
         "dependencies": ["auth"],
         "factory": lambda _params: SpotifyConnector(),
-        "metrics": {"popularity": "popularity"},
+        "metrics": SpotifyMetricResolver.FIELD_MAP,
     }
 
 
-@attrs.define
-class SpotifyMetricResolver:
+@define(frozen=True, slots=True)
+class SpotifyMetricResolver(BaseMetricResolver):
     """Resolves Spotify metrics from persistence layer."""
 
-    async def resolve(self, track_ids: list[int], metric_name: str) -> dict[str, Any]:
-        """Fetch stored Spotify metadata from the database.
+    # Map metric names to connector metadata fields
+    FIELD_MAP: ClassVar[dict[str, str]] = {
+        "spotify_popularity": "popularity",
+        "explicit_flag": "explicit",
+    }
 
-        Args:
-            track_ids: List of internal track IDs
-            metric_name: Metric to resolve (used to determine field name)
-
-        Returns:
-            Dictionary mapping track_id strings to metric values
-        """
-        if not track_ids:
-            return {}
-
-        # Map metric names to connector metadata fields
-        field_map = {
-            "spotify_popularity": "popularity",
-            "explicit_flag": "explicit",
-        }
-
-        # Get the connector field name
-        field = field_map.get(metric_name)
-        if not field:
-            return {}
-
-        # Fetch metadata efficiently with a single query
-        async with get_session() as session:
-            stmt = select(
-                DBTrackMapping.track_id,
-                DBTrackMapping.connector_metadata,
-            ).where(
-                DBTrackMapping.connector_name == "spotify",
-                DBTrackMapping.track_id.in_(track_ids),
-                DBTrackMapping.is_deleted == False,  # noqa: E712
-            )
-
-            results = await session.execute(stmt)
-
-            # Extract field from connector metadata
-            return {
-                str(track_id): metadata.get(field, 0)
-                for track_id, metadata in results
-                if metadata and field in metadata
-            }
+    # Connector name for database operations
+    CONNECTOR: ClassVar[str] = "spotify"
 
 
-# Register at module initialization time
-register_metric_resolver("spotify_popularity", SpotifyMetricResolver())
+# Register all metric resolvers at once
+register_metrics(SpotifyMetricResolver(), SpotifyMetricResolver.FIELD_MAP)

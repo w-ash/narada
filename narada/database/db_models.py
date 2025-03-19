@@ -141,6 +141,7 @@ class DBTrackMapping(NaradaDBBase):
     )
     match_method: Mapped[str] = mapped_column(String(32))
     confidence: Mapped[int]
+    confidence_evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
     # Relationships
     track: Mapped["DBTrack"] = relationship(
@@ -224,7 +225,7 @@ class DBTrackPlay(NaradaDBBase):
     context: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
     # Relationships
-    track: Mapped["DBTrack"] = relationship(
+    track: Mapped[DBTrack] = relationship(
         back_populates="plays",
         passive_deletes=True,
     )
@@ -315,10 +316,31 @@ async def init_db() -> None:
     """Initialize database schema.
 
     Creates all tables if they don't exist.
+    This is a safe operation that won't affect existing data.
     """
+    from sqlalchemy import inspect
+
     from narada.database.db_connection import get_engine
 
     engine = get_engine()
-    async with engine.begin() as conn:
-        await conn.run_sync(NaradaDBBase.metadata.create_all)
-    logger.info("Database schema initialized")
+
+    try:
+        # First check if tables exist (for informational purposes)
+        async with engine.connect() as conn:
+            inspector = await conn.run_sync(inspect)
+            existing_tables = await conn.run_sync(lambda _: inspector.get_table_names())
+            has_tables = bool(existing_tables)
+
+            if has_tables:
+                logger.info(f"Found existing tables: {existing_tables}")
+
+        # Create tables - SQLAlchemy will skip tables that already exist
+        async with engine.begin() as conn:
+            await conn.run_sync(NaradaDBBase.metadata.create_all)
+            logger.info("Database schema verified - all tables exist")
+
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        raise
+    else:
+        logger.info("Database schema initialization complete")

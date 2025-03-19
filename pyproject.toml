@@ -25,6 +25,7 @@ toolz = "^1.0.0"
 backoff = "^2.2.1"
 prefect = "^3.2.7"
 aiosqlite = "^0.21.0"  # Async SQLite support
+rapidfuzz = "^3.8.1"  # High-performance fuzzy string matching
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.4"
@@ -77,7 +78,7 @@ select = [
     "PYI",   # Stub file linting
 ]
 
-ignore = ["E501"]  # Line too long (handled by formatter)
+ignore = ["E501", "COM812"]  # Line too long (handled by formatter), COM812 conflicts with formatter
 fixable = ["ALL"]
 unfixable = []
 

@@ -1,0 +1,44 @@
+{
+  "id": "sort_by_lastfm_user_playcount",
+  "name": "Sort by LastFM User Playcount",
+  "description": "Sort a Spotify playlist by Last.fm play counts and create a ranked version",
+  "version": "1.2",
+  "tasks": [
+    {
+      "id": "source",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "7q1EoF8IY4cKNGvB7i2brq"
+      }
+    },
+    {
+      "id": "enrich",
+      "type": "enricher.lastfm",
+      "upstream": [
+        "source"
+      ]
+    },
+    {
+      "id": "sort",
+      "type": "sorter.by_metric",
+      "config": {
+        "metric_name": "lastfm_user_playcount",
+        "reverse": true
+      },
+      "upstream": [
+        "enrich"
+      ]
+    },
+    {
+      "id": "destination",
+      "type": "destination.create_spotify_playlist",
+      "config": {
+        "name": "Sorted by Play Count",
+        "description": "Tracks sorted by Last.fm play count (most played first)"
+      },
+      "upstream": [
+        "sort"
+      ]
+    }
+  ]
+}

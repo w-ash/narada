@@ -40,6 +40,10 @@ class UnifiedTrackRepository:
         """Get cached metrics with TTL awareness."""
         return await self.core.get_track_metrics(*args, **kwargs)
         
+    async def get_connector_metadata(self, *args, **kwargs):
+        """Get metadata from connector tracks."""
+        return await self.core.get_connector_metadata(*args, **kwargs)
+        
     async def save_track_metrics(self, *args, **kwargs):
         """Save metrics for multiple tracks efficiently."""
         return await self.core.save_track_metrics(*args, **kwargs)
@@ -47,6 +51,14 @@ class UnifiedTrackRepository:
     async def get_or_create(self, *args, **kwargs):
         """Find a track by attributes or create it if it doesn't exist."""
         return await self.core.get_or_create(*args, **kwargs)
+        
+    async def save_mapping_confidence_evidence(self, *args, **kwargs):
+        """Save confidence evidence to the track_mapping record."""
+        return await self.core.save_mapping_confidence_evidence(*args, **kwargs)
+        
+    async def get_mapping_confidence_evidence(self, *args, **kwargs):
+        """Get confidence evidence from a track_mapping record."""
+        return await self.core.get_mapping_confidence_evidence(*args, **kwargs)
     
     # Re-export sync operations
     async def get_track_likes(self, *args, **kwargs):

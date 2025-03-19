@@ -42,6 +42,7 @@ def register_commands(app: typer.Typer) -> None:
     app.command()(status)
     app.command()(setup)
     app.command(name="workflow")(run_workflow)
+    app.command(name="init-db")(initialize_database)
 
 
 @resilient_operation("spotify_check")
@@ -66,22 +67,25 @@ async def _check_spotify() -> tuple[bool, str]:
 @resilient_operation("lastfm_check")
 async def _check_lastfm() -> tuple[bool, str]:
     """Check Last.fm API connectivity."""
-    from narada.integrations.lastfm import LastFmConnector
+    from narada.integrations.lastfm import LastFMConnector
 
-    connector = LastFmConnector()
+    connector = LastFMConnector()
     match connector:
-        case _ if not connector.api_key:
-            return False, "Not configured - missing API key"
-        case _ if not connector.username:
+        case _ if not connector.client:
+            return False, "Not configured - missing API credentials"
+        case _ if not connector.lastfm_username:
             return True, "API connected (no username configured)"
         case _:
             try:
-                play_count = await connector.get_track_play_count(
-                    "The Beatles",
-                    "Let It Be",
-                    connector.username,
+                track_info = await connector.get_lastfm_track_info(
+                    artist_name="Caribou",
+                    track_title="Volume",
+                    lastfm_username=connector.lastfm_username,
                 )
-                return bool(play_count.track_url), f"Connected as {connector.username}"
+                if track_info.lastfm_url:
+                    return True, f"Connected as {connector.lastfm_username}"
+                else:
+                    return False, "Connected but failed to retrieve track data"
             except Exception as e:
                 return False, f"API error: {e}"
 
@@ -540,4 +544,42 @@ def run_workflow(
             console.print("[bold red]✗ Workflow failed[/bold red]")
             console.print(f"[red]Error: {e!s}[/red]")
             logger.exception("Workflow execution failed")
+            raise typer.Exit(1) from e
+
+
+def initialize_database() -> None:
+    """Initialize the database schema based on current models.
+
+    This command creates database tables that don't yet exist.
+    Existing tables are left untouched.
+    """
+    import asyncio
+
+    from narada.database.db_models import init_db
+
+    with console.status("[bold blue]Initializing database schema...") as status:
+        try:
+            # Run the initialization
+            asyncio.run(init_db())
+
+            # Display success message
+            status.update("[bold green]Database initialization complete!")
+            console.print(
+                "\n[bold green]✓ Database schema initialized successfully[/bold green]",
+            )
+
+            # Show next steps
+            console.print("\nNext steps:")
+            console.print(
+                "  • Run [cyan]narada status[/cyan] to check service connections",
+            )
+            console.print("  • Run [cyan]narada setup[/cyan] to configure API keys")
+            console.print("  • Run [cyan]narada workflow[/cyan] to execute a workflow")
+
+            logger.info("Database initialization completed successfully")
+
+        except Exception as e:
+            status.update("[bold red]Database initialization failed!")
+            console.print(f"\n[bold red]✗ Error initializing database:[/bold red] {e}")
+            logger.exception("Database initialization failed")
             raise typer.Exit(1) from e

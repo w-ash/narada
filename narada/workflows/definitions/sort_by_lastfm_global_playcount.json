@@ -1,6 +1,6 @@
 {
-  "id": "sort_by_plays",
-  "name": "Sort by Play Count",
+  "id": "sort_by_lastfm_global_playcount",
+  "name": "Sort by LastFM Global Playcount",
   "description": "Sort a Spotify playlist by Last.fm play counts and create a ranked version",
   "version": "1.2",
   "tasks": [
@@ -8,26 +8,22 @@
       "id": "source",
       "type": "source.spotify_playlist",
       "config": {
-        "playlist_id": "7q1EoF8IY4cKNGvB7i2brq"
+        "playlist_id": "03xJ28l0eGh3UfZPOtPEl7"
       }
     },
     {
       "id": "enrich",
       "type": "enricher.lastfm",
-      "config": {
-        "batch_size": 50,
-        "concurrency": 5
-      },
       "upstream": [
         "source"
       ]
     },
     {
       "id": "sort",
-      "type": "sorter.by_user_plays",
+      "type": "sorter.by_metric",
       "config": {
-        "reverse": true,
-        "min_confidence": 80
+        "metric_name": "lastfm_global_playcount",
+        "reverse": true
       },
       "upstream": [
         "enrich"

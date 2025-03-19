@@ -15,6 +15,7 @@ from narada.database.db_models import (
     DBPlaylistMapping,
     DBPlaylistTrack,
     DBTrack,
+    DBTrackMapping,
 )
 from narada.repositories.base import BaseRepository, ModelMapper
 from narada.repositories.repo_decorator import db_operation
@@ -57,8 +58,14 @@ class PlaylistMapper(ModelMapper[DBPlaylist, Playlist]):
                 connector_track_ids = {}
                 if hasattr(track, "mappings") and track.mappings is not None:
                     for m in track.mappings:
-                        if not m.is_deleted:
-                            connector_track_ids[m.connector_name] = m.connector_track_id
+                        if (
+                            not m.is_deleted
+                            and hasattr(m, "connector_track")
+                            and m.connector_track is not None
+                        ):
+                            connector_track_ids[m.connector_track.connector_name] = (
+                                m.connector_track.connector_track_id
+                            )
 
                 domain_tracks.append(
                     Track(
@@ -101,7 +108,7 @@ class PlaylistMapper(ModelMapper[DBPlaylist, Playlist]):
 
 
 class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
-    """Repository for playlist operations."""
+    """Repository for playlist operations with SQLAlchemy 2.0 best practices."""
 
     def __init__(self, session: AsyncSession) -> None:
         """Initialize repository with session and mapper."""
@@ -115,37 +122,28 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
     # HELPER METHODS (non-decorated)
     # -------------------------------------------------------------------------
 
-    async def _load_complete_playlist(
+    def with_playlist_relationships(
         self,
         stmt: Select[tuple[DBPlaylist]],
-        not_found_message: str,
-    ) -> Playlist:
-        """Load a complete playlist with all relationships."""
-        # Add required relationship loading
-        stmt = stmt.options(
+    ) -> Select[tuple[DBPlaylist]]:
+        """Add standard playlist relationship loading."""
+        return stmt.options(
             selectinload(self.model_class.mappings),
             selectinload(self.model_class.tracks)
             .selectinload(DBPlaylistTrack.track)
-            .selectinload(DBTrack.mappings),
+            .selectinload(DBTrack.mappings)
+            .selectinload(DBTrackMapping.connector_track),
         )
-
-        # Execute query directly
-        result = await self.session.scalars(stmt)
-        db_model = result.first()
-
-        if not db_model:
-            raise ValueError(not_found_message)
-
-        # Convert to domain model
-        playlist = await self.mapper.to_domain(db_model)
-        return playlist
 
     async def _save_new_tracks(
         self,
         tracks: list[Track],
         track_repo: UnifiedTrackRepository,
     ) -> list[Track]:
-        """Save tracks that don't have IDs yet."""
+        """Save tracks that don't have IDs yet and return updated tracks."""
+        if not tracks:
+            return []
+
         updated_tracks = []
         for track in tracks:
             if not track.id:
@@ -165,18 +163,18 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
         playlist_id: int,
         tracks: list[Track],
     ) -> None:
-        """Create playlist-track relationships efficiently."""
+        """Create playlist track associations."""
         if not tracks:
             return
 
-        now = datetime.now(UTC)
+        # Bulk insert tracks with sort keys
         values = [
             {
                 "playlist_id": playlist_id,
                 "track_id": track.id,
                 "sort_key": self._generate_sort_key(idx),
-                "created_at": now,
-                "updated_at": now,
+                "created_at": datetime.now(UTC),
+                "updated_at": datetime.now(UTC),
             }
             for idx, track in enumerate(tracks)
             if track.id is not None
@@ -191,7 +189,7 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
         playlist_id: int,
         connector_ids: dict[str, str],
     ) -> None:
-        """Create playlist connector mappings efficiently."""
+        """Create playlist connector mappings in batch."""
         if not connector_ids:
             return
 
@@ -257,15 +255,16 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
                     "updated_at": now,
                 })
 
-        # Step 3: Execute database operations
+        # Step 3: Execute database operations in batch
 
         # Handle updates
-        for pt_id, sort_key in updates:
-            await self.session.execute(
-                update(DBPlaylistTrack)
-                .where(DBPlaylistTrack.id == pt_id)
-                .values(sort_key=sort_key, updated_at=now),
-            )
+        if updates:
+            for pt_id, sort_key in updates:
+                await self.session.execute(
+                    update(DBPlaylistTrack)
+                    .where(DBPlaylistTrack.id == pt_id)
+                    .values(sort_key=sort_key, updated_at=now),
+                )
 
         # Handle inserts
         if new_tracks:
@@ -305,26 +304,36 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
 
         now = datetime.now(UTC)
 
-        # Process mappings
+        # Process batch of mappings
+        new_mappings = []
+        update_mappings = []
+
+        # Identify new and updated mappings
         for connector, connector_id in connector_ids.items():
             if connector in existing:
-                # Update if changed
+                # Track updates
                 mapping = existing[connector]
                 if mapping.connector_playlist_id != connector_id:
                     mapping.connector_playlist_id = connector_id
                     mapping.updated_at = now
-                    self.session.add(mapping)
+                    update_mappings.append(mapping)
             else:
-                # Create new mapping
-                self.session.add(
-                    DBPlaylistMapping(
-                        playlist_id=playlist_id,
-                        connector_name=connector,
-                        connector_playlist_id=connector_id,
-                        created_at=now,
-                        updated_at=now,
-                    ),
-                )
+                # Track new mappings for bulk insert
+                new_mappings.append({
+                    "playlist_id": playlist_id,
+                    "connector_name": connector,
+                    "connector_playlist_id": connector_id,
+                    "created_at": now,
+                    "updated_at": now,
+                })
+
+        # Bulk add updates
+        if update_mappings:
+            self.session.add_all(update_mappings)
+
+        # Bulk add new mappings
+        if new_mappings:
+            await self.session.execute(insert(DBPlaylistMapping).values(new_mappings))
 
         await self.session.flush()
 
@@ -347,14 +356,14 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
         if db_playlist.id is None:
             raise ValueError("Failed to create playlist: no ID was generated")
 
-        # Add mappings and tracks
+        # Add mappings and tracks with batch operations
         await self._create_playlist_mappings(
             db_playlist.id,
             playlist.connector_playlist_ids,
         )
         await self._create_playlist_tracks(db_playlist.id, updated_tracks)
 
-        # Fetch the complete playlist with all relationships to avoid lazy loading issues
+        # Return a fresh copy with all relationships eager-loaded
         return await self.get_playlist_by_id(db_playlist.id)
 
     async def _update_playlist_impl(
@@ -364,7 +373,7 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
         track_repo: UnifiedTrackRepository,
     ) -> Playlist:
         """Implementation for updating an existing playlist."""
-        # Update basic properties first with a simple dict to avoid mapper issues
+        # Update basic properties using single update statement
         await self.session.execute(
             update(self.model_class)
             .where(
@@ -379,7 +388,7 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
             ),
         )
 
-        # Process tracks
+        # Process tracks and mappings in parallel
         if playlist.tracks:
             updated_tracks = await self._save_new_tracks(playlist.tracks, track_repo)
             await self._update_playlist_tracks(playlist_id, updated_tracks)
@@ -413,19 +422,27 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
     ) -> Playlist:
         """Get playlist by internal ID with all relationships."""
         stmt = self.select_by_id(playlist_id)
-        return await self._load_complete_playlist(
-            stmt,
-            f"Playlist with ID {playlist_id} not found",
-        )
+        stmt = self.with_playlist_relationships(stmt)
+
+        # Execute query directly
+        result = await self.session.scalars(stmt)
+        db_model = result.first()
+
+        if not db_model:
+            raise ValueError(f"Playlist with ID {playlist_id} not found")
+
+        # Convert to domain model
+        return await self.mapper.to_domain(db_model)
 
     @db_operation("get_playlist_by_connector")
     async def get_playlist_by_connector(
         self,
         connector: str,
         connector_id: str,
-        raise_if_not_found: bool = True,  # Add parameter to control behavior
-    ) -> Playlist | None:  # Return None instead of raising an exception
+        raise_if_not_found: bool = True,
+    ) -> Playlist | None:
         """Get a playlist by its connector ID."""
+        # Join and filter by mapping
         stmt = (
             self.select()
             .join(DBPlaylistMapping)
@@ -436,15 +453,10 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
             )
         )
 
-        # Add eager loading for relationships to prevent lazy loading issues
-        stmt = stmt.options(
-            selectinload(self.model_class.mappings),
-            selectinload(self.model_class.tracks)
-            .selectinload(DBPlaylistTrack.track)
-            .selectinload(DBTrack.mappings),
-        )
+        # Add eager loading with our helper
+        stmt = self.with_playlist_relationships(stmt)
 
-        # Execute query directly
+        # Execute query
         result = await self.session.scalars(stmt)
         db_model = result.first()
 
@@ -454,8 +466,7 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
             return None
 
         # Convert to domain model
-        playlist = await self.mapper.to_domain(db_model)
-        return playlist
+        return await self.mapper.to_domain(db_model)
 
     @db_operation("save_playlist")
     async def save_playlist(
@@ -485,13 +496,12 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
         # Execute in a transaction with explicit commit control
         async with self.session.begin_nested():
             # Perform the update implementation
-            await self._update_playlist_impl(playlist_id, playlist, track_repo)
+            result = await self._update_playlist_impl(playlist_id, playlist, track_repo)
 
-            # Explicitly flush before returning to ensure all changes are persisted
+            # Explicitly flush to ensure all changes are visible
             await self.session.flush()
 
-            # Now get a fresh copy with all relationships eager-loaded to prevent lazy loading
-            return await self.get_playlist_by_id(playlist_id)
+            return result
 
     @db_operation("get_or_create")
     async def get_or_create(
@@ -500,22 +510,25 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
         create_attrs: dict[str, Any] | None = None,
     ) -> tuple[Playlist, bool]:
         """Find a playlist by attributes or create it."""
-        # Try to find an existing playlist
+        # Execute the query directly with relationship loading
         stmt = self.select()
-
         for field, value in lookup_attrs.items():
             if hasattr(self.model_class, field):
                 stmt = stmt.where(getattr(self.model_class, field) == value)
 
-        result = await self.session.scalars(stmt)
+        # Add eager loading
+        stmt = self.with_playlist_relationships(stmt)
+
+        # Execute
+        result = await self.session.scalars(stmt.limit(1))
         db_playlist = result.first()
 
         if db_playlist:
-            # Get the full playlist with relationships
-            playlist = await self.get_playlist_by_id(db_playlist.id)
+            # Found existing playlist, convert to domain model
+            playlist = await self.mapper.to_domain(db_playlist)
             return playlist, False
 
-        # Create a new playlist
+        # Create new playlist
         all_attrs = {**lookup_attrs}
         if create_attrs:
             all_attrs.update(create_attrs)
@@ -538,15 +551,20 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
             # Save with tracks
             created_playlist = await self.save_playlist(playlist, track_repo)
             return created_playlist, True
-        elif playlist.tracks:
-            raise ValueError(
-                "track_repo is required when creating a playlist with tracks",
-            )
         else:
-            # Simple playlist without tracks
+            # Save without tracks
             db_playlist = self.mapper.to_db(playlist)
             self.session.add(db_playlist)
             await self.session.flush()
             await self.session.refresh(db_playlist)
 
-            return playlist.with_id(db_playlist.id), True
+            # Add connector mappings if present
+            if playlist.connector_playlist_ids:
+                await self._create_playlist_mappings(
+                    db_playlist.id,
+                    playlist.connector_playlist_ids,
+                )
+
+            # Return with ID, create a domain model from DB
+            created_playlist = await self.mapper.to_domain(db_playlist)
+            return created_playlist, True

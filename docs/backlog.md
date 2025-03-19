@@ -1,7 +1,7 @@
 
 # Project Narada Backlog
 
-Current version: 0.1.2
+Current version: 0.1.3
 
 Note: We've completed use case 1B and are mid-way done with use case 1A 
 

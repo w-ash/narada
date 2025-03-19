@@ -296,11 +296,15 @@ Our database design follows a focused schema pattern that prioritizes essential 
 
 The schema consists of the following tables:
 - tracks
-- play_counts
+- connector_tracks
 - track_mappings
+- track_metrics
+- track_likes
+- track_plays
 - playlists
 - playlist_mappings
 - playlist_tracks
+- sync_checkpoints
 
 All tables inherit from `NaradaDBBase` which provides:
 - `id` (Primary Key)
@@ -311,7 +315,7 @@ All tables inherit from `NaradaDBBase` which provides:
 
 #### Tracks Table
 
-Central storage for music metadata with cross-connector identifiers.
+Central storage for music metadata with essential identification information.
 
 ```
 +---------------+-------------+--------------------------------------+
@@ -325,7 +329,7 @@ Central storage for music metadata with cross-connector identifiers.
 | release_date  | DateTime    | Release date when available          |
 | spotify_id    | String (IDX)| Spotify track identifier             |
 | isrc          | String (IDX)| International recording code         |
-| lastfm_url    | String      | Last.fm track URL                    |
+| mbid          | String (IDX)| MusicBrainz identifier               |
 | created_at    | DateTime    | Record creation timestamp            |
 | updated_at    | DateTime    | Last update timestamp                |
 | is_deleted    | Boolean     | Soft delete indicator                |
@@ -334,64 +338,149 @@ Central storage for music metadata with cross-connector identifiers.
 ```
 
 ##### Key Points
-1. **Connector Specific Fields** - Direct storage for common identifiers (spotify_id, isrc)
-2. **JSON Artist Storage** - Flexible handling of multiple artists per track
-3. **Metadata Optimization** - Core fields extracted for direct querying
+1. **Core Track Entity** - Primary source of truth for track information
+2. **Streamlined Identifiers** - Direct storage for common identifiers (spotify_id, isrc, mbid)
+3. **JSON Artist Storage** - Flexible handling of multiple artists per track
+4. **Rich Relationships** - Connected to mappings, metrics, likes, plays, and playlists
 
-#### Play Counts Table
+#### Connector Tracks Table
 
-Caches global and user-specific play count data from Last.fm.
-
-```
-+------------------+-------------+--------------------------------------+
-| play_counts      | Type        | Purpose                              |
-+------------------+-------------+--------------------------------------+
-| id               | Integer (PK)| Internal identifier                  |
-| track_id         | Integer (FK)| Reference to tracks table            |
-| user_id          | String      | Last.fm username                     |
-| play_count       | Integer     | Number of global plays               |
-| user_play_count  | Integer     | Number of user plays                 |
-| last_updated     | DateTime    | Cache timestamp                      |
-| created_at       | DateTime    | Record creation timestamp            |
-| updated_at       | DateTime    | Last update timestamp                |
-| is_deleted       | Boolean     | Soft delete indicator                |
-| deleted_at       | DateTime    | Deleted at timestamp                 |
-+------------------+-------------+--------------------------------------+
-```
-
-##### Key Points
-1. **Cache Design** - Structured as a cache with refresh timestamps
-2. **Dual Metrics** - Tracks both global and per-user play counts
-3. **Unique Constraint** - One count entry per track/user combination
-
-#### Track Connector Mappings Table
-
-The Track Connector Mappings table serves as our universal cross-connector integration layer for tracks.
+External service-specific track representations with rich metadata.
 
 ```
-+------------------------+-------------+--------------------------------------+
-| track_mappings         | Type        | Purpose                              |
-+------------------------+-------------+--------------------------------------+
-| id                     | Integer (PK)| Internal identifier                  |
-| track_id               | Integer (FK)| Reference to canonical track         |
-| connector_name         | String      | Platform identifier (spotify, lastfm)|
-| connector_id           | String      | Platform-specific identifier         |
-| match_method           | String      | Resolution method used               |
-| confidence             | Integer     | Match confidence (0-100)             |
-| last_verified          | DateTime    | Verification timestamp               |
-| connector_metadata     | JSON        | Connector-specific auxiliary data    |
-| created_at             | DateTime    | Record creation timestamp            |
-| updated_at             | DateTime    | Last update timestamp                |
-| is_deleted             | Boolean     | Soft delete indicator                |
-| deleted_at             | DateTime    | Deleted at timestamp                 |
-+------------------------+-------------+--------------------------------------+
++--------------------+-------------+--------------------------------------+
+| connector_tracks   | Type        | Purpose                              |
++--------------------+-------------+--------------------------------------+
+| id                 | Integer (PK)| Internal identifier                  |
+| connector_name     | String (IDX)| Service name (spotify, lastfm, etc)  |
+| connector_track_id | String      | External service track identifier    |
+| title              | String      | Track title in external service      |
+| artists            | JSON        | Artists as represented in service    |
+| album              | String      | Album name in external service       |
+| duration_ms        | Integer     | Duration in milliseconds             |
+| isrc               | String (IDX)| ISRC code if available               |
+| release_date       | DateTime    | Release date in external service     |
+| raw_metadata       | JSON        | Complete service-specific metadata   |
+| last_updated       | DateTime    | Timestamp of last metadata refresh   |
+| created_at         | DateTime    | Record creation timestamp            |
+| updated_at         | DateTime    | Last update timestamp                |
+| is_deleted         | Boolean     | Soft delete indicator                |
+| deleted_at         | DateTime    | Deleted at timestamp                 |
++--------------------+-------------+--------------------------------------+
 ```
 
 ##### Key Points
-1. **Connector-Agnostic Architecture** - Single table handles all connector integrations
-2. **Resolution Method Tracking** - Explicitly documents how each match was determined
-3. **Confidence Scoring** - Quantifies match quality on 0-100 scale
-4. **Metadata Storage** - JSON field stores connector-specific context
+1. **External Representation** - Preserves exactly how tracks appear in each service
+2. **Complete Metadata** - Captures all available metadata from each service
+3. **Independent Existence** - Can exist before being mapped to internal tracks
+4. **Efficiency** - Minimizes API calls by storing complete external track data
+
+#### Track Mappings Table
+
+Connects internal tracks to external service tracks with match quality metadata.
+
+```
++--------------------+-------------+--------------------------------------+
+| track_mappings     | Type        | Purpose                              |
++--------------------+-------------+--------------------------------------+
+| id                 | Integer (PK)| Internal identifier                  |
+| track_id           | Integer (FK)| Reference to canonical track         |
+| connector_track_id | Integer (FK)| Reference to connector track         |
+| match_method       | String      | Resolution method used               |
+| confidence         | Integer     | Match confidence (0-100)             |
+| created_at         | DateTime    | Record creation timestamp            |
+| updated_at         | DateTime    | Last update timestamp                |
+| is_deleted         | Boolean     | Soft delete indicator                |
+| deleted_at         | DateTime    | Deleted at timestamp                 |
++--------------------+-------------+--------------------------------------+
+```
+
+##### Key Points
+1. **True Many-to-Many** - Links internal tracks to connector tracks
+2. **Resolution Metadata** - Tracks match method and confidence
+3. **Enhanced Structure** - Points to complete connector track records
+4. **Flexible Architecture** - Supports future alternative match algorithms
+
+#### Track Metrics Table
+
+Time-series metrics for tracks from various services.
+
+```
++-------------------+-------------+--------------------------------------+
+| track_metrics     | Type        | Purpose                              |
++-------------------+-------------+--------------------------------------+
+| id                | Integer (PK)| Internal identifier                  |
+| track_id          | Integer (FK)| Reference to track                   |
+| connector_name    | String      | Source service name                  |
+| metric_type       | String      | Metric type (play_count, etc)        |
+| value             | Float       | Numeric metric value                 |
+| collected_at      | DateTime    | When the metric was collected        |
+| created_at        | DateTime    | Record creation timestamp            |
+| updated_at        | DateTime    | Last update timestamp                |
+| is_deleted        | Boolean     | Soft delete indicator                |
+| deleted_at        | DateTime    | Deleted at timestamp                 |
++-------------------+-------------+--------------------------------------+
+```
+
+##### Key Points
+1. **Time-Series Design** - Historical metrics with timestamps
+2. **Multiple Metric Types** - Supports various metrics (plays, popularity, etc.)
+3. **Service-Specific** - Clearly identifies the source of each metric
+4. **Flexible Value Type** - Floating-point for wider range of metrics
+
+#### Track Likes Table
+
+Track preference state across music services with synchronization support.
+
+```
++-----------------+-------------+--------------------------------------+
+| track_likes     | Type        | Purpose                              |
++-----------------+-------------+--------------------------------------+
+| id              | Integer (PK)| Internal identifier                  |
+| track_id        | Integer (FK)| Reference to track                   |
+| service         | String      | Service name (spotify, lastfm, etc)  |
+| is_liked        | Boolean     | Current like status                  |
+| liked_at        | DateTime    | When the track was liked             |
+| last_synced     | DateTime    | When sync was last performed         |
+| created_at      | DateTime    | Record creation timestamp            |
+| updated_at      | DateTime    | Last update timestamp                |
+| is_deleted      | Boolean     | Soft delete indicator                |
+| deleted_at      | DateTime    | Deleted at timestamp                 |
++-----------------+-------------+--------------------------------------+
+```
+
+##### Key Points
+1. **Like Status Tracking** - Records like/favorite status per service
+2. **Sync Support** - Timestamps for tracking synchronization
+3. **Historical Data** - Captures when tracks were liked
+4. **Uniqueness** - One like entry per track/service combination
+
+#### Track Plays Table
+
+Immutable record of track play events across services.
+
+```
++-----------------+-------------+--------------------------------------+
+| track_plays     | Type        | Purpose                              |
++-----------------+-------------+--------------------------------------+
+| id              | Integer (PK)| Internal identifier                  |
+| track_id        | Integer (FK)| Reference to track                   |
+| service         | String      | Service name (spotify, lastfm, etc)  |
+| played_at       | DateTime    | When the track was played            |
+| ms_played       | Integer     | Milliseconds played (optional)       |
+| context         | JSON        | Additional play context              |
+| created_at      | DateTime    | Record creation timestamp            |
+| updated_at      | DateTime    | Last update timestamp                |
+| is_deleted      | Boolean     | Soft delete indicator                |
+| deleted_at      | DateTime    | Deleted at timestamp                 |
++-----------------+-------------+--------------------------------------+
+```
+
+##### Key Points
+1. **Immutable Events** - Records individual play events
+2. **Timeline Ready** - Optimized for chronological queries
+3. **Complete Context** - JSON field for platform-specific context
+4. **Duration Tracking** - Optional tracking of how long content was played
 
 #### Playlists Table
 
@@ -428,7 +517,7 @@ Maps internal playlists to external connector playlists.
 | id                     | Integer (PK)| Internal identifier                  |
 | playlist_id            | Integer (FK)| Reference to our playlist            |
 | connector_name         | String      | Connector name (spotify, apple, etc) |
-| connector_id           | String      | Connector's playlist identifier      |
+| connector_playlist_id  | String      | Connector's playlist identifier      |
 | last_synced            | DateTime    | Last successful sync                 |
 | created_at             | DateTime    | Record creation timestamp            |
 | updated_at             | DateTime    | Last update timestamp                |
@@ -466,6 +555,33 @@ Maps the many-to-many relationship between playlists and tracks with ordering.
 2. **Implicit History** - Track position changes preserved through timestamps
 3. **Fast Retrieval** - Composite index optimizes ordered track fetching
 
+#### Sync Checkpoints Table
+
+Tracks synchronization state for incremental operations.
+
+```
++------------------+-------------+--------------------------------------+
+| sync_checkpoints | Type        | Purpose                              |
++------------------+-------------+--------------------------------------+
+| id               | Integer (PK)| Internal identifier                  |
+| user_id          | String      | User identifier                      |
+| service          | String      | Service name (spotify, lastfm, etc)  |
+| entity_type      | String      | Entity type (likes, plays, etc)      |
+| last_timestamp   | DateTime    | Last successful sync timestamp       |
+| cursor           | String      | Continuation token if applicable     |
+| created_at       | DateTime    | Record creation timestamp            |
+| updated_at       | DateTime    | Last update timestamp                |
+| is_deleted       | Boolean     | Soft delete indicator                |
+| deleted_at       | DateTime    | Deleted at timestamp                 |
++------------------+-------------+--------------------------------------+
+```
+
+##### Key Points
+1. **Incremental Sync** - Enables efficient incremental operations
+2. **Resumability** - Cursor support for paginated operations
+3. **Multi-Entity** - Supports different entity types per service
+4. **User Context** - Tracks separate sync state per user
+
 ### Design Decisions
 
 1. **Base Model Pattern**
@@ -473,38 +589,75 @@ Maps the many-to-many relationship between playlists and tracks with ordering.
    - Standardized soft delete, timestamps, and primary keys
    - Reduces duplicated code and ensures consistency
 
-2. **JSON for Complex Data**
-   - Artists and connector metadata stored as JSON
-   - Avoids complex joins while supporting nested data structures
-   - Trade-off: Less query optimization for complex filtering
+2. **Connector Architecture**
+   - Separation between internal records and connector-specific entities
+   - Allows complete metadata storage for each service
+   - Supports advanced cross-service entity resolution
 
-3. **Soft Delete Strategy**
+3. **JSON for Complex Data**
+   - Artists and raw metadata stored as JSON
+   - Avoids complex joins while supporting nested data structures
+   - Preserves complete information from external services
+
+4. **Temporal Design**
+   - Time-series metrics with explicit collection timestamps
+   - Event-based play records with chronological indexing
+   - Sync checkpoints for incremental processing
+
+5. **Soft Delete Strategy**
    - `is_deleted` flag with timestamp across all tables
    - Preserves relational integrity while allowing "deletion"
    - Enables data recovery and history preservation
 
-4. **Separation of Concerns**
-   - Core data separated from connector-specific mappings
-   - Enables clean cross-connector operations
-   - Maintains single source of truth for each entity type
+### Relationship Architecture
+
+The database uses a rich relationship model with SQLAlchemy's relationship feature:
+
+1. **Core Track Relationships**
+   - Track → Mappings → Connector Tracks (many-to-many)
+   - Track → Metrics (one-to-many)
+   - Track → Likes (one-to-many)
+   - Track → Plays (one-to-many)
+   - Track → Playlist Tracks → Playlists (many-to-many)
+
+2. **Playlist Relationships**
+   - Playlist → Playlist Tracks → Tracks (many-to-many)
+   - Playlist → Mappings (one-to-many)
+
+3. **Cascade Behavior**
+   - Appropriate cascade delete settings
+   - Passive delete flags for query optimization
+   - Proper orphan handling for clean relationship management
 
 ### Indexing Strategy
 
 | Table | Index | Type | Purpose | SQLAlchemy Implementation |
-|-------|-------|------|---------|-------------------------|
+|-------|-------|------|---------|---------------------------|
 | tracks | id | Primary | Primary key | `mapped_column(primary_key=True)` |
 | tracks | spotify_id | Single | Fast lookup by Spotify ID | `mapped_column(index=True)` |
 | tracks | isrc | Single | Fast lookup for entity resolution | `mapped_column(index=True)` |
-| play_counts | id | Primary | Primary key | `mapped_column(primary_key=True)` |
-| play_counts | (track_id, user_id) | Composite Unique | Enforce single count per track/user | `UniqueConstraint('track_id', 'user_id')` |
+| tracks | mbid | Single | Fast lookup by MusicBrainz ID | `mapped_column(index=True)` |
+| connector_tracks | id | Primary | Primary key | `mapped_column(primary_key=True)` |
+| connector_tracks | connector_name | Single | Fast filtering by service | `mapped_column(index=True)` |
+| connector_tracks | (connector_name, connector_track_id) | Composite Unique | Prevent duplicates | `UniqueConstraint('connector_name', 'connector_track_id')` |
+| connector_tracks | (connector_name, isrc) | Composite | Lookup by service and ISRC | `Index('ix_connector_tracks_lookup', 'connector_name', 'isrc')` |
 | track_mappings | id | Primary | Primary key | `mapped_column(primary_key=True)` |
-| track_mappings | (track_id, connector_name) | Composite | Fast lookup for specific connector | `Index('ix_track_mappings_lookup', 'track_id', 'connector_name')` |
-| track_mappings | (connector_name, connector_id) | Composite | Reverse lookups and duplicate prevention | `UniqueConstraint('connector_name', 'connector_id')` |
+| track_mappings | (track_id, connector_track_id) | Composite | Fast relationship lookup | `Index('ix_track_mappings_lookup', 'track_id', 'connector_track_id')` |
+| track_metrics | id | Primary | Primary key | `mapped_column(primary_key=True)` |
+| track_metrics | (track_id, connector_name, metric_type) | Composite | Fast metric lookup | `Index('ix_track_metrics_lookup', 'track_id', 'connector_name', 'metric_type')` |
+| track_likes | id | Primary | Primary key | `mapped_column(primary_key=True)` |
+| track_likes | (track_id, service) | Composite Unique | Enforce single like entry | `UniqueConstraint('track_id', 'service')` |
+| track_likes | (service, is_liked) | Composite | Fast filtering by service | `Index('ix_track_likes_lookup', 'service', 'is_liked')` |
+| track_plays | id | Primary | Primary key | `mapped_column(primary_key=True)` |
+| track_plays | service | Single | Filter by service | `Index('ix_track_plays_service', 'service')` |
+| track_plays | played_at | Single | Chronological queries | `Index('ix_track_plays_timeline', 'played_at')` |
 | playlists | id | Primary | Primary key | `mapped_column(primary_key=True)` |
 | playlist_tracks | id | Primary | Primary key | `mapped_column(primary_key=True)` |
 | playlist_tracks | (playlist_id, sort_key) | Composite | Ordered track retrieval | `Index('ix_playlist_tracks_order', 'playlist_id', 'sort_key')` |
 | playlist_mappings | id | Primary | Primary key | `mapped_column(primary_key=True)` |
-| playlist_mappings | (playlist_id, connector_name) | Composite Unique | Enforce single mapping per playlist/connector | `UniqueConstraint('playlist_id', 'connector_name')` |
+| playlist_mappings | (playlist_id, connector_name) | Composite Unique | Enforce single mapping | `UniqueConstraint('playlist_id', 'connector_name')` |
+| sync_checkpoints | id | Primary | Primary key | `mapped_column(primary_key=True)` |
+| sync_checkpoints | (user_id, service, entity_type) | Composite Unique | Enforce single checkpoint | `UniqueConstraint('user_id', 'service', 'entity_type')` |
 
 ### Database Session Management
 
@@ -513,6 +666,7 @@ The database implementation provides several key utilities:
 1. **Connection Pooling** - Configured with timeouts and recycling
 2. **Async Session Factory** - Type-safe async sessions with SQLAlchemy 2.0 patterns
 3. **Context Manager** - `get_session()` for clean transaction handling
+4. **Base Class Utilities** - Methods like `active_records()` and `mark_soft_deleted()`
 
 ## Connector Integration Strategy
 

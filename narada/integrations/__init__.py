@@ -10,9 +10,9 @@ from narada.core.protocols import ConnectorConfig
 
 # Import main connector classes for re-export
 from narada.integrations.lastfm import (
-    LastFmConnector,
-    LastFmPlayCount,
-    convert_lastfm_track_to_domain,
+    LastFMConnector,
+    LastFmMetricResolver,
+    LastFMTrackInfo,
 )
 from narada.integrations.musicbrainz import MusicBrainzConnector
 from narada.integrations.spotify import (
@@ -86,11 +86,11 @@ CONNECTORS = discover_connectors()
 # Define public API with explicit exports
 __all__ = [
     "CONNECTORS",
-    "LastFmConnector",
-    "LastFmPlayCount",
+    "LastFMConnector",
+    "LastFMTrackInfo",
+    "LastFmMetricResolver",
     "MusicBrainzConnector",
     "SpotifyConnector",
-    "convert_lastfm_track_to_domain",
     "convert_spotify_playlist_to_domain",
     "convert_spotify_track_to_domain",
     "discover_connectors",

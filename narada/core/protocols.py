@@ -80,10 +80,31 @@ class MetricResolver(Protocol):
     ) -> dict[str, Any]: ...
 
 
-# Simple module-level registry (no need for a class)
+# Simple module-level registries
 metric_resolvers: dict[str, MetricResolver] = {}
+metric_freshness: dict[str, int] = {
+    # Default freshness for all metrics (in hours)
+    "default": 24,
+    # Specific overrides for time-sensitive metrics
+    "lastfm_user_playcount": 1,
+    "lastfm_global_playcount": 24,
+    "lastfm_listeners": 24,
+    "spotify_popularity": 24,
+}
 
 
 def register_metric_resolver(metric_name: str, resolver: MetricResolver) -> None:
     """Register a metric resolver implementation."""
     metric_resolvers[metric_name] = resolver
+    
+    
+def get_metric_freshness(metric_name: str) -> int:
+    """Get the freshness requirement (in hours) for a metric.
+    
+    Args:
+        metric_name: The name of the metric to check
+        
+    Returns:
+        Maximum age in hours before the metric is considered stale
+    """
+    return metric_freshness.get(metric_name, metric_freshness["default"])

@@ -33,7 +33,7 @@ node(
 )(
     create_enricher_node({
         "connector": "lastfm",
-        "attributes": ["user_play_count", "global_play_count"],
+        "attributes": ["lastfm_user_playcount", "lastfm_global_playcount"],
     }),
 )
 
@@ -78,20 +78,20 @@ node(
     output_type="tracklist",
 )(create_filter_node("by_artists"))
 
+node(
+    "filter.by_metric",
+    description="Filters tracks based on metric value range",
+    input_type="tracklist",
+    output_type="tracklist",
+)(create_filter_node("by_metric"))
+
 # === SORTER NODES ===
 node(
-    "sorter.by_user_plays",
-    description="Sorts tracks by user play counts",
+    "sorter.by_metric",
+    description="Sorts tracks by any metric specified in config",
     input_type="tracklist",
     output_type="tracklist",
-)(create_sorter_node("by_user_plays"))
-
-node(
-    "sorter.by_spotify_popularity",
-    description="Sorts tracks by Spotify popularity",
-    input_type="tracklist",
-    output_type="tracklist",
-)(create_sorter_node("by_spotify_popularity"))
+)(create_sorter_node("by_metric"))
 
 # === SELECTOR NODES ===
 node(

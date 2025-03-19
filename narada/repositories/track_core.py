@@ -541,6 +541,56 @@ class TrackRepository(BaseRepository[DBTrack, Track]):
 
         return mappings_dict
 
+    @db_operation("get_connector_metadata")
+    async def get_connector_metadata(
+        self,
+        track_ids: list[int],
+        connector: str,
+        metadata_field: str | None = None,
+    ) -> dict[int, dict[str, Any] | Any]:
+        """Get connector metadata for tracks.
+
+        Args:
+            track_ids: List of track IDs to get metadata for
+            connector: Connector name (e.g., "spotify", "lastfm")
+            metadata_field: Optional specific field to extract from metadata
+
+        Returns:
+            If metadata_field is None: dict mapping track_id -> full metadata dict
+            If metadata_field is specified: dict mapping track_id -> specific field value
+        """
+        if not track_ids:
+            return {}
+
+        # Use the base repository pattern to build and execute the query
+        # This statement fetches track_id and raw_metadata pairs from connector tracks
+        result = await self.session.execute(
+            select(
+                DBTrackMapping.track_id,
+                DBConnectorTrack.raw_metadata,
+            )
+            .join(
+                DBConnectorTrack,
+                DBTrackMapping.connector_track_id == DBConnectorTrack.id,
+            )
+            .where(
+                DBTrackMapping.track_id.in_(track_ids),
+                DBConnectorTrack.connector_name == connector,
+                DBTrackMapping.is_deleted == False,  # noqa: E712
+                DBConnectorTrack.is_deleted == False,  # noqa: E712
+            ),
+        )
+
+        # Return either the specific field or all metadata
+        if metadata_field:
+            return {
+                track_id: metadata.get(metadata_field)
+                for track_id, metadata in result
+                if metadata and metadata_field in metadata
+            }
+        else:
+            return {track_id: metadata for track_id, metadata in result if metadata}
+
     @db_operation("get_track_metrics")
     async def get_track_metrics(
         self,
@@ -656,3 +706,84 @@ class TrackRepository(BaseRepository[DBTrack, Track]):
 
         result_track = await self.save_track(track)
         return result_track, True
+        
+    @db_operation("save_mapping_confidence_evidence")
+    async def save_mapping_confidence_evidence(
+        self, 
+        track_id: int, 
+        connector: str, 
+        connector_id: str, 
+        evidence: dict
+    ) -> bool:
+        """Save confidence evidence to the track_mapping record.
+        
+        Args:
+            track_id: Internal track ID
+            connector: The connector name (spotify, lastfm, etc.)
+            connector_id: The external track ID in the connector
+            evidence: Dictionary of confidence scoring evidence
+            
+        Returns:
+            True if mapping was found and updated, False otherwise
+        """
+        from sqlalchemy import select, update, join
+        
+        # Find the connector track ID first
+        stmt = select(DBConnectorTrack.id).where(
+            DBConnectorTrack.connector_name == connector,
+            DBConnectorTrack.connector_track_id == connector_id,
+            DBConnectorTrack.is_deleted == False,  # noqa: E712
+        )
+        
+        connector_track_id = await self.session.scalar(stmt)
+        if not connector_track_id:
+            return False
+            
+        # Now update the mapping
+        stmt = update(DBTrackMapping).where(
+            DBTrackMapping.track_id == track_id,
+            DBTrackMapping.connector_track_id == connector_track_id,
+            DBTrackMapping.is_deleted == False,  # noqa: E712
+        ).values(
+            confidence_evidence=evidence,
+            updated_at=datetime.now(UTC),
+        )
+        
+        result = await self.session.execute(stmt)
+        return result.rowcount > 0
+        
+    @db_operation("get_mapping_confidence_evidence")
+    async def get_mapping_confidence_evidence(
+        self, 
+        track_id: int, 
+        connector: str, 
+        connector_id: str
+    ) -> dict | None:
+        """Get confidence evidence from a track_mapping record.
+        
+        Args:
+            track_id: Internal track ID
+            connector: The connector name (spotify, lastfm, etc.)
+            connector_id: The external track ID in the connector
+            
+        Returns:
+            Dictionary of confidence evidence or None if not found
+        """
+        from sqlalchemy import select, join
+        
+        # Join connector_tracks to find the connector_track_id
+        stmt = select(DBTrackMapping.confidence_evidence).select_from(
+            join(
+                DBTrackMapping, 
+                DBConnectorTrack,
+                DBTrackMapping.connector_track_id == DBConnectorTrack.id
+            )
+        ).where(
+            DBTrackMapping.track_id == track_id,
+            DBConnectorTrack.connector_name == connector,
+            DBConnectorTrack.connector_track_id == connector_id,
+            DBTrackMapping.is_deleted == False,  # noqa: E712
+            DBConnectorTrack.is_deleted == False,  # noqa: E712
+        )
+        
+        return await self.session.scalar(stmt)

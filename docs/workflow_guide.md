@@ -73,13 +73,13 @@ A workflow is defined in JSON as a directed acyclic graph (DAG) of tasks:
 | `filter.by_release_date` | Filters tracks by release date | `max_age_days`: Maximum age in days<br>`min_age_days`: Minimum age in days |
 | `filter.by_tracks` | Excludes tracks from input that are present in exclusion source | `exclusion_source`: Task ID of exclusion source |
 | `filter.by_artists` | Excludes tracks whose artists appear in exclusion source | `exclusion_source`: Task ID of exclusion source<br>`exclude_all_artists`: Boolean, if true, excludes tracks if any artist is present in the exclusion source |
+| `filter.by_metric` | Filters tracks based on metric value range | `metric_name`: Metric to filter by<br>`min_value`: Minimum value (inclusive)<br>`max_value`: Maximum value (inclusive)<br>`include_missing`: Whether to include tracks without the metric |
 
 ### Sorter Nodes
 
 | Node Type | Description | Configuration |
 |----------------|-------------|--------------|
-| `sorter.by_user_plays` | Sorts tracks by user play counts | `reverse`: Boolean to reverse sort order<br>`min_confidence`: Minimum match confidence threshold |
-| `sorter.by_spotify_popularity` | Sorts tracks by Spotify popularity | `reverse`: Boolean to reverse sort order |
+| `sorter.by_metric` | Sorts tracks by any metric specified in config | `metric_name`: Name of metric to sort by (e.g., "lastfm_user_playcount", "lastfm_global_playcount", "lastfm_listeners", "spotify_popularity")<br>`reverse`: Boolean to reverse sort order |
 
 ### Selector Nodes
 
@@ -142,7 +142,7 @@ This pattern enhances tracks with external data before transformation:
   "tasks": [
     { "id": "source", "type": "source.spotify_playlist", "config": {"playlist_id": "id"} },
     { "id": "enrich", "type": "enricher.resolve_lastfm", "upstream": ["source"] },
-    { "id": "transform", "type": "sorter.by_user_plays", "config": {"reverse": true}, "upstream": ["enrich"] }
+    { "id": "transform", "type": "sorter.by_lastfm_user_playcount", "config": {"reverse": true}, "upstream": ["enrich"] }
   ]
 }
 ```
@@ -199,10 +199,10 @@ This extensibility model enables continuous evolution without increasing archite
     },
     {
       "id": "sort",
-      "type": "sorter.by_user_plays",
+      "type": "sorter.by_metric",
       "config": {
-        "reverse": true,
-        "min_confidence": 50
+        "metric_name": "lastfm_user_playcount",
+        "reverse": true
       },
       "upstream": ["resolve"]
     },
@@ -221,6 +221,86 @@ This extensibility model enables continuous evolution without increasing archite
       "config": {
         "name": "Discovery Mix (90 days)",
         "description": "Recent releases sorted by play count"
+      },
+      "upstream": ["limit"]
+    }
+  ]
+}
+
+## Example: Multi-Metric Workflow
+
+This example demonstrates using the new generic metric filter and sorter nodes:
+
+```json
+{
+  "id": "popular_gems",
+  "name": "Popular Gems with Few Listens",
+  "description": "Popular tracks that you haven't played much",
+  "version": "1.0",
+  "tasks": [
+    {
+      "id": "source",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "YOUR_PLAYLIST_ID"
+      }
+    },
+    {
+      "id": "enrich_spotify",
+      "type": "enricher.spotify",
+      "config": {},
+      "upstream": ["source"]
+    },
+    {
+      "id": "filter_popular",
+      "type": "filter.by_metric",
+      "config": {
+        "metric_name": "spotify_popularity",
+        "min_value": 70,
+        "include_missing": false
+      },
+      "upstream": ["enrich_spotify"]
+    },
+    {
+      "id": "enrich_lastfm",
+      "type": "enricher.lastfm",
+      "config": {},
+      "upstream": ["filter_popular"]
+    },
+    {
+      "id": "filter_few_plays",
+      "type": "filter.by_metric",
+      "config": {
+        "metric_name": "lastfm_user_playcount",
+        "max_value": 5,
+        "include_missing": true
+      },
+      "upstream": ["enrich_lastfm"]
+    },
+    {
+      "id": "sort_by_global",
+      "type": "sorter.by_metric",
+      "config": {
+        "metric_name": "lastfm_global_playcount",
+        "reverse": true
+      },
+      "upstream": ["filter_few_plays"]
+    },
+    {
+      "id": "limit",
+      "type": "selector.limit_tracks",
+      "config": {
+        "count": 30,
+        "method": "first"
+      },
+      "upstream": ["sort_by_global"]
+    },
+    {
+      "id": "destination",
+      "type": "destination.create_spotify_playlist",
+      "config": {
+        "name": "Popular Gems to Discover",
+        "description": "Popular tracks you haven't listened to much yet"
       },
       "upstream": ["limit"]
     }

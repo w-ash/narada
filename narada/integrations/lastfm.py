@@ -1,55 +1,168 @@
-"""Last.fm service connector with domain model conversion."""
+"""Last.fm API integration for Narada music metadata.
+
+This module provides a clean interface to the Last.fm API through the pylast library,
+converting between Last.fm track representations and domain models. It implements
+error handling, rate limiting, and functional transformation patterns.
+"""
 
 import asyncio
+from collections.abc import Callable
+import contextlib
 import os
+from typing import Any, ClassVar
 
-from attrs import define
+from attrs import define, field
 import backoff
 import pylast
 
-from narada.config import get_logger, resilient_operation
+from narada.config import get_config, get_logger, resilient_operation
 from narada.core.models import Artist, Track
+from narada.integrations.base_connector import (
+    BaseMetricResolver,
+    BatchProcessor,
+    ConnectorConfig,
+    register_metrics,
+)
 
 # Get contextual logger with service binding
 logger = get_logger(__name__).bind(service="lastfm")
 
 
-@define(frozen=True)
-class LastFmPlayCount:
-    """Value object for Last.fm play count data."""
+@define(frozen=True, slots=True)
+class LastFMTrackInfo:
+    """Complete track information from Last.fm API."""
 
-    user_play_count: int = 0
-    global_play_count: int = 0
-    track_url: str | None = None
+    # Basic track info
+    lastfm_title: str | None = field(default=None)
+    lastfm_mbid: str | None = field(default=None)
+    lastfm_url: str | None = field(default=None)
+    lastfm_duration: int | None = field(default=None)
+
+    # Artist info
+    lastfm_artist_name: str | None = field(default=None)
+    lastfm_artist_mbid: str | None = field(default=None)
+    lastfm_artist_url: str | None = field(default=None)
+
+    # Album info
+    lastfm_album_name: str | None = field(default=None)
+    lastfm_album_mbid: str | None = field(default=None)
+    lastfm_album_url: str | None = field(default=None)
+
+    # Metrics - None means "unknown/not fetched", 0 means "zero plays"
+    lastfm_user_playcount: int | None = field(default=None)
+    lastfm_global_playcount: int | None = field(default=None)
+    lastfm_listeners: int | None = field(default=None)
+    lastfm_user_loved: bool = field(default=False)
+
+    # Field extraction mapping for pylast Track objects
+    EXTRACTORS: ClassVar[dict[str, Callable]] = {
+        "lastfm_title": lambda t: t.get_title(),
+        "lastfm_mbid": lambda t: t.get_mbid(),
+        "lastfm_url": lambda t: t.get_url(),
+        "lastfm_duration": lambda t: t.get_duration(),
+        "lastfm_artist_name": lambda t: t.get_artist() and t.get_artist().get_name(),
+        "lastfm_artist_mbid": lambda t: t.get_artist() and t.get_artist().get_mbid(),
+        "lastfm_artist_url": lambda t: t.get_artist() and t.get_artist().get_url(),
+        "lastfm_album_name": lambda t: t.get_album() and t.get_album().get_name(),
+        "lastfm_album_mbid": lambda t: t.get_album() and t.get_album().get_mbid(),
+        "lastfm_album_url": lambda t: t.get_album() and t.get_album().get_url(),
+        "lastfm_user_playcount": lambda t: int(t.get_userplaycount() or 0)
+        if t.username
+        else None,
+        "lastfm_user_loved": lambda t: bool(t.get_userloved()) if t.username else False,
+        "lastfm_global_playcount": lambda t: int(t.get_playcount() or 0),
+        "lastfm_listeners": lambda t: int(t.get_listener_count() or 0),
+    }
+
+    @classmethod
+    def empty(cls) -> "LastFMTrackInfo":
+        """Create an empty track info object for tracks not found."""
+        return cls()
+
+    @classmethod
+    def from_pylast_track(cls, track: pylast.Track) -> "LastFMTrackInfo":
+        """Create LastFMTrackInfo from a pylast Track object."""
+        # Extract all fields with error handling
+        with contextlib.suppress(pylast.WSError, AttributeError, TypeError, ValueError):
+            info = {
+                field: extractor(track)
+                for field, extractor in cls.EXTRACTORS.items()
+                if extractor(track) is not None
+            }
+            return cls(**info)
+
+        # Return empty object on error
+        return cls.empty()
+
+    def to_domain_track(self) -> Track:
+        """Convert Last.fm track info to domain track model."""
+        # Create base track with essential fields
+        track = Track(
+            title=self.lastfm_title or "",
+            artists=[Artist(name=self.lastfm_artist_name)]
+            if self.lastfm_artist_name
+            else [],
+            album=self.lastfm_album_name,
+            duration_ms=self.lastfm_duration,
+        )
+
+        # Add connector IDs
+        if self.lastfm_mbid:
+            track = track.with_connector_track_id("musicbrainz", self.lastfm_mbid)
+
+        if self.lastfm_url:
+            track = track.with_connector_track_id("lastfm", self.lastfm_url)
+
+        # Add all non-None LastFM metadata
+        from attrs import asdict
+
+        lastfm_metadata = {
+            k: v
+            for k, v in asdict(self).items()
+            if k.startswith("lastfm_") and v is not None
+        }
+
+        if lastfm_metadata:
+            track = track.with_connector_metadata("lastfm", lastfm_metadata)
+
+        return track
 
 
-class LastFmConnector:
-    """Thin wrapper around pylast with domain model conversion.
+@define(slots=True)
+class LastFMConnector:
+    """Last.fm API connector with domain model conversion."""
 
-    Handles authentication and provides methods to:
-    - Fetch user and global play counts
-    - Resolve tracks via MBID or artist/title search
-    - Batch retrieve play counts for playlist optimization
+    api_key: str | None = field(default=None)
+    api_secret: str | None = field(default=None)
+    lastfm_username: str | None = field(default=None)
+    client: pylast.LastFMNetwork | None = field(default=None, init=False, repr=False)
+    batch_processor: BatchProcessor = field(init=False, repr=False)
 
-    All methods handle rate limiting via backoff decorator.
-    """
+    # Constants for API communication
+    USER_AGENT: ClassVar[str] = "Narada/0.1.0 (Music Metadata Integration)"
 
-    def __init__(
-        self,
-        api_key: str | None = None,
-        username: str | None = None,
-    ) -> None:
+    def __attrs_post_init__(self) -> None:
         """Initialize Last.fm client with API credentials."""
-        logger.debug("Initializing Last.fm connector")
-
         # Use environment variables by default, with fallback to passed parameters
-        self.api_key = api_key or os.getenv("LASTFM_KEY")
-        self.api_secret = os.getenv("LASTFM_SECRET")
-        self.username = username or os.getenv("LASTFM_USERNAME")
+        self.api_key = self.api_key or os.getenv("LASTFM_KEY")
+        self.api_secret = self.api_secret or os.getenv("LASTFM_SECRET")
+        self.lastfm_username = self.lastfm_username or os.getenv("LASTFM_USERNAME")
+
+        # Initialize the batch processor with config values
+        self.batch_processor = BatchProcessor[
+            Track,
+            tuple[int, LastFMTrackInfo | None],
+        ](
+            batch_size=get_config("LASTFM_API_BATCH_SIZE"),
+            concurrency_limit=get_config("LASTFM_API_CONCURRENCY"),
+            retry_count=get_config("LASTFM_API_RETRY_COUNT"),
+            retry_base_delay=get_config("LASTFM_API_RETRY_BASE_DELAY"),
+            retry_max_delay=get_config("LASTFM_API_RETRY_MAX_DELAY"),
+            request_delay=get_config("LASTFM_API_REQUEST_DELAY"),
+            logger_instance=logger,
+        )
 
         if not self.api_key or not self.api_secret:
-            logger.warning("Last.fm API credentials not configured")
-            self.client = None
             return
 
         self.client = pylast.LastFMNetwork(
@@ -59,378 +172,190 @@ class LastFmConnector:
 
         # Set user agent for API courtesy
         self.client.session_key = None
-        pylast.HEADERS["User-Agent"] = "Narada/0.1.0 (Music Metadata Integration)"
+        pylast.HEADERS["User-Agent"] = self.USER_AGENT
 
-    @resilient_operation("get_track_play_count")
-    @backoff.on_exception(backoff.expo, pylast.NetworkError, max_tries=3)
-    async def get_track_play_count(
+    async def _fetch_track(
         self,
-        artist_name: str,
-        track_title: str,
-        username: str | None = None,
-    ) -> LastFmPlayCount:
-        """Get play count for a track by artist and title.
-
-        Args:
-            artist_name: Artist name
-            track_title: Track title
-            username: Optional username (defaults to configured user)
-
-        Returns:
-            LastFmPlayCount with user and global counts
-        """
-        user = username or self.username
-
-        if not user:
-            logger.warning("No username provided for Last.fm play count")
-            return LastFmPlayCount()
-
+        mbid: str | None = None,
+        artist_name: str | None = None,
+        track_title: str | None = None,
+    ) -> tuple[str, str, pylast.Track]:
+        """Fetch a track from Last.fm using the most appropriate method."""
         if not self.client:
-            logger.warning("Last.fm client not initialized - missing API credentials")
-            return LastFmPlayCount()
+            raise ValueError("Last.fm client not initialized")
+
+        # Try MBID lookup first (preferred)
+        if mbid:
+            return (
+                "mbid",
+                mbid,
+                await asyncio.to_thread(self.client.get_track_by_mbid, mbid),
+            )
+
+        # Fall back to artist/title lookup
+        if artist_name and track_title:
+            return (
+                "artist/title",
+                f"{artist_name} - {track_title}",
+                await asyncio.to_thread(
+                    self.client.get_track,
+                    artist_name,
+                    track_title,
+                ),
+            )
+
+        # No valid lookup parameters
+        raise ValueError("Either mbid or (artist_name + track_title) must be provided")
+
+    @resilient_operation("get_lastfm_track_info")
+    @backoff.on_exception(
+        backoff.expo,
+        (pylast.NetworkError, pylast.MalformedResponseError, pylast.WSError),
+        max_tries=get_config("LASTFM_API_RETRY_COUNT"),
+        base=get_config("LASTFM_API_RETRY_BASE_DELAY"),
+        max_value=get_config("LASTFM_API_RETRY_MAX_DELAY"),
+        jitter=backoff.full_jitter,
+    )
+    async def get_lastfm_track_info(
+        self,
+        artist_name: str | None = None,
+        track_title: str | None = None,
+        mbid: str | None = None,
+        lastfm_username: str | None = None,
+    ) -> LastFMTrackInfo:
+        """Get comprehensive track information from Last.fm."""
+        if not self.client:
+            return LastFMTrackInfo.empty()
+
+        user = lastfm_username or self.lastfm_username
 
         try:
-            # Run in thread pool to avoid blocking
-            track = await asyncio.to_thread(
-                self.client.get_track,
-                artist_name,
-                track_title,
-            )
+            # Fetch track using appropriate method
+            _, _, track = await self._fetch_track(mbid, artist_name, track_title)
 
-            # Get user play count
+            # Set username for user-specific data
             track.username = user
-            user_playcount = await asyncio.to_thread(
-                lambda: int(track.get_userplaycount() or 0),
-            )
 
-            # Get global play count (may be unavailable)
-            try:
-                global_playcount = await asyncio.to_thread(
-                    lambda: int(track.get_playcount() or 0),
-                )
-            except (pylast.WSError, TypeError):
-                global_playcount = 0
+            # Convert to domain object
+            return await asyncio.to_thread(LastFMTrackInfo.from_pylast_track, track)
 
-            # Get track URL
-            track_url = await asyncio.to_thread(lambda: track.get_url())
-
-            return LastFmPlayCount(
-                user_play_count=user_playcount,
-                global_play_count=global_playcount,
-                track_url=track_url,
-            )
-
+        except ValueError:
+            raise
         except pylast.WSError as e:
             if "not found" in str(e).lower():
-                logger.debug(
-                    "Track not found on Last.fm",
-                    artist=artist_name,
-                    track=track_title,
-                )
-                return LastFmPlayCount()
+                return LastFMTrackInfo.empty()
             raise
-        except Exception as e:
-            logger.exception(
-                "Error getting Last.fm play count",
-                artist=artist_name,
-                track=track_title,
-                error=str(e),
-            )
-            return LastFmPlayCount()
+        except Exception:
+            return LastFMTrackInfo.empty()
 
-    @resilient_operation("get_mbid_play_count")
-    @backoff.on_exception(backoff.expo, pylast.NetworkError, max_tries=3)
-    async def get_mbid_play_count(
-        self,
-        mbid: str,
-        username: str | None = None,
-    ) -> LastFmPlayCount:
-        """Get play count for a track by MusicBrainz ID.
-
-        Args:
-            mbid: MusicBrainz track ID
-            username: Optional username (defaults to configured user)
-
-        Returns:
-            LastFmPlayCount with user and global counts
-        """
-        user = username or self.username
-
-        if not user:
-            logger.warning("No username provided for Last.fm play count")
-            return LastFmPlayCount()
-
-        if not self.client:
-            logger.warning("Last.fm client not initialized - missing API credentials")
-            return LastFmPlayCount()
-
-        try:
-            # Run in thread pool to avoid blocking
-            track = await asyncio.to_thread(self.client.get_track_by_mbid, mbid)
-
-            # Get user play count
-            track.username = user
-            user_playcount = await asyncio.to_thread(
-                lambda: int(track.get_userplaycount() or 0),
-            )
-
-            # Get global play count (may be unavailable)
-            try:
-                global_playcount = await asyncio.to_thread(
-                    lambda: int(track.get_playcount() or 0),
-                )
-            except (pylast.WSError, TypeError):
-                global_playcount = 0
-
-            # Get track URL
-            track_url = await asyncio.to_thread(lambda: track.get_url())
-
-            return LastFmPlayCount(
-                user_play_count=user_playcount,
-                global_play_count=global_playcount,
-                track_url=track_url,
-            )
-
-        except pylast.WSError as e:
-            if "not found" in str(e).lower():
-                logger.debug("Track not found on Last.fm with MBID", mbid=mbid)
-                return LastFmPlayCount()
-            raise
-        except Exception as e:
-            logger.exception(
-                "Error getting Last.fm play count by MBID",
-                mbid=mbid,
-                error=str(e),
-            )
-            return LastFmPlayCount()
-
-    @resilient_operation("batch_get_track_play_counts")
-    async def batch_get_track_play_counts(
+    @resilient_operation("batch_get_track_info")
+    async def batch_get_track_info(
         self,
         tracks: list[Track],
-        username: str | None = None,
-        batch_size: int = 50,
-        concurrency_limit: int = 5,
-    ) -> dict[int, LastFmPlayCount]:
-        """Batch retrieve play counts for multiple tracks.
+        lastfm_username: str | None = None,
+    ) -> dict[int, LastFMTrackInfo]:
+        """Batch retrieve Last.fm track information for multiple tracks."""
+        if not tracks or not self.client:
+            return {}
 
-        Optimizes API calls through parallel requests with batching and
-        prioritizes MBID resolution for better accuracy and performance.
-
-        Args:
-            tracks: List of domain Track models
-            username: Optional username (defaults to configured user)
-            batch_size: Maximum batch size (default: 50)
-            concurrency_limit: Maximum concurrent API calls (default: 5)
-
-        Returns:
-            dictionary mapping track ID to play count info
-        """
-        user = username or self.username
-        results = {}
-        logger = get_logger(__name__)
-
+        user = lastfm_username or self.lastfm_username
         if not user:
-            logger.warning("No username provided for Last.fm play count")
             return {}
 
-        if not self.client:
-            logger.warning("Last.fm client not initialized - missing API credentials")
-            return {}
-
-        # Separate tracks with MBIDs from those needing artist/title lookup
-        mbid_tracks = []  # Tracks with MusicBrainz IDs
-        search_tracks = []  # Tracks needing artist/title search
-
-        for track in tracks:
+        async def process_track(track: Track) -> tuple[int, LastFMTrackInfo | None]:
+            """Process a single track."""
             if track.id is None:
-                continue
+                return -1, None
 
-            if track.connector_track_ids.get("musicbrainz"):
-                mbid_tracks.append(track)
-            elif track.artists and track.title:
-                search_tracks.append(track)
+            # Try MusicBrainz ID first, fall back to artist/title
+            mbid = track.connector_track_ids.get("musicbrainz")
+            artist_name = track.artists[0].name if track.artists else None
 
-        logger.info(
-            f"Last.fm batch lookup: {len(mbid_tracks)} tracks with MBIDs, {len(search_tracks)} with artist/title",
-        )
-
-        # Process each group separately for better batching
-        # First process tracks with MBIDs (faster and more accurate)
-        if mbid_tracks:
-            mbid_results = await self._batch_process_tracks(
-                mbid_tracks,
-                user,
-                use_mbid=True,
-                batch_size=batch_size,
-                concurrency_limit=concurrency_limit,
-            )
-            results.update(mbid_results)
-
-        # Then process tracks needing artist/title search
-        if search_tracks:
-            search_results = await self._batch_process_tracks(
-                search_tracks,
-                user,
-                use_mbid=False,
-                batch_size=batch_size,
-                concurrency_limit=concurrency_limit,
-            )
-            results.update(search_results)
-
-        logger.info(
-            f"Last.fm batch complete: retrieved {len(results)}/{len(tracks)} play counts",
-        )
-        return results
-
-    async def _batch_process_tracks(
-        self,
-        tracks: list[Track],
-        username: str,
-        use_mbid: bool = True,
-        batch_size: int = 50,
-        concurrency_limit: int = 5,
-    ) -> dict[int, LastFmPlayCount]:
-        """Process a batch of tracks with either MBID or artist/title lookup.
-
-        Args:
-            tracks: List of tracks to process
-            username: Last.fm username
-            use_mbid: Whether to use MusicBrainz IDs (True) or artist/title (False)
-            batch_size: Maximum batch size
-            concurrency_limit: Maximum concurrent API calls
-
-        Returns:
-            Dictionary mapping track IDs to play counts
-        """
-        results = {}
-        logger = get_logger(__name__)
-
-        # Create semaphore for concurrency control
-        semaphore = asyncio.Semaphore(concurrency_limit)
-
-        async def process_track(track: Track) -> tuple[int, LastFmPlayCount]:
-            """Process a single track with rate limiting."""
-            async with semaphore:
-                try:
-                    # Ensure track.id is not None (essential fix)
-                    if track.id is None:
-                        logger.warning(f"Skipping track with None id: {track.title}")
-                        return -1, LastFmPlayCount()  # Use sentinel value for id
-
-                    # Add small delay between requests to be nice to Last.fm API
-                    await asyncio.sleep(0.2)
-
-                    if use_mbid:
-                        # Use MBID for lookup (guaranteed to exist due to filtering)
-                        mbid = track.connector_track_ids.get("musicbrainz")
-                        if mbid is not None:
-                            result = await self.get_mbid_play_count(mbid, username)
-                            logger.debug(f"MBID lookup for track {track.id}: {mbid}")
-                        else:
-                            logger.debug(f"Missing MBID for track {track.id}")
-                            result = LastFmPlayCount()
-                    else:
-                        # Use artist/title for lookup
-                        artist_name = track.artists[0].name if track.artists else ""
-                        result = await self.get_track_play_count(
-                            artist_name,
-                            track.title,
-                            username,
-                        )
-                        logger.debug(
-                            f"Artist/title lookup for track {track.id}: {artist_name} - {track.title}",
-                        )
-
-                    return track.id, result
-                except Exception as e:
-                    if track.id is None:
-                        logger.exception(f"Error processing track with None id: {e}")
-                        return -1, LastFmPlayCount()  # Use sentinel value for id
-                    else:
-                        logger.exception(f"Error processing track {track.id}: {e}")
-                        return track.id, LastFmPlayCount()
-
-        # Process tracks in batches
-        for i in range(0, len(tracks), batch_size):
-            batch = tracks[i : i + batch_size]
-
-            # Process batch concurrently
-            batch_tasks = [process_track(track) for track in batch]
-            batch_results = await asyncio.gather(*batch_tasks)
-
-            # Collect results, filtering out empty results
-            results.update({
-                track_id: play_count
-                for track_id, play_count in batch_results
-                if track_id != -1 and play_count and play_count.track_url
-            })
-            logger.info(
-                f"Processed batch {i // batch_size + 1}/{(len(tracks) + batch_size - 1) // batch_size}: "
-                f"{len(results)}/{len(tracks)} successful",
-            )
-
-        return results
-
-
-def convert_lastfm_track_to_domain(lastfm_track: pylast.Track) -> Track:
-    """Convert Last.fm track data to domain model.
-
-    Args:
-        lastfm_track: Raw track data from Last.fm API
-
-    Returns:
-        Domain Track model with available metadata
-    """
-    try:
-        # Get basic metadata
-        title = lastfm_track.get_title()
-        artist = lastfm_track.get_artist()
-        artist_name = artist.get_name() if artist else None
-
-        # Try to get album
-        try:
-            album_obj = lastfm_track.get_album()
-            album = album_obj.get_name() if album_obj else None
-        except (pylast.WSError, AttributeError):
-            album = None
-
-        # Create domain model
-        track = Track(
-            title=title or "",
-            artists=[Artist(name=artist_name or "")] if artist_name else [],
-            album=album,
-        )
-
-        # Try to get MBID
-        try:
-            mbid = lastfm_track.get_mbid()
             if mbid:
-                track = track.with_connector_track_id("musicbrainz", mbid)
-        except (pylast.WSError, AttributeError):
-            pass
+                return track.id, await self.get_lastfm_track_info(
+                    mbid=mbid,
+                    lastfm_username=user,
+                )
+            elif artist_name:
+                return track.id, await self.get_lastfm_track_info(
+                    artist_name=artist_name,
+                    track_title=track.title,
+                    lastfm_username=user,
+                )
+            else:
+                return track.id, LastFMTrackInfo.empty()
 
-        # Add Last.fm URL
-        track = track.with_connector_track_id("lastfm", lastfm_track.get_url())
+        # Use the pre-configured batch processor
+        batch_results = await self.batch_processor.process(tracks, process_track)
 
-        return track
-    except Exception as e:
-        logger.exception(f"Error converting Last.fm track: {e}")
-        raise ValueError(f"Cannot convert Last.fm track: {e}") from e
+        # Filter valid results
+        return {
+            track_id: info
+            for track_id, info in batch_results
+            if track_id != -1 and info and info.lastfm_url
+        }
 
 
-def get_connector_config():
-    """LastFM connector configuration."""
+@define(frozen=True, slots=True)
+class LastFmMetricResolver(BaseMetricResolver):
+    """Resolves LastFM metrics from persistence layer."""
+
+    # Map metric names to connector metadata fields
+    FIELD_MAP: ClassVar[dict[str, str]] = {
+        "lastfm_user_playcount": "lastfm_user_playcount",
+        "lastfm_global_playcount": "lastfm_global_playcount",
+        "lastfm_listeners": "lastfm_listeners",
+    }
+
+    # Connector name for database operations
+    CONNECTOR: ClassVar[str] = "lastfm"
+
+
+def get_connector_config() -> ConnectorConfig:
+    """Last.fm connector configuration."""
     return {
         "extractors": {
-            "user_play_count": lambda obj: obj.play_count.user_play_count
-            if hasattr(obj, "play_count")
-            else obj.get("userplaycount", 0),
-            "global_play_count": lambda obj: obj.play_count.global_play_count
-            if hasattr(obj, "play_count")
-            else obj.get("playcount", 0),
+            "lastfm_user_playcount": lambda obj: _extract_metric(
+                obj,
+                ["lastfm_user_playcount", "userplaycount"],
+            ),
+            "lastfm_global_playcount": lambda obj: _extract_metric(
+                obj,
+                ["lastfm_global_playcount", "playcount"],
+            ),
+            "lastfm_listeners": lambda obj: _extract_metric(
+                obj,
+                ["lastfm_listeners", "listeners"],
+            ),
         },
         "dependencies": ["musicbrainz"],
-        "factory": lambda params: LastFmConnector(params.get("username")),
-        "metrics": {"user_play_count": "play_count"},
+        "factory": lambda _params: LastFMConnector(),
+        "metrics": LastFmMetricResolver.FIELD_MAP,
     }
+
+
+def _extract_metric(obj: Any, field_names: list[str]) -> int | None:
+    """Extract a metric value from various object types."""
+    # First check for direct attribute access
+    for field_name in field_names:
+        if hasattr(obj, field_name) and getattr(obj, field_name) is not None:
+            return getattr(obj, field_name)
+
+    # Then check metadata dictionary access
+    if hasattr(obj, "metadata"):
+        for field_name in field_names:
+            if field_name in obj.metadata and obj.metadata[field_name] is not None:
+                return obj.metadata[field_name]
+
+    # Finally check dictionary access
+    if hasattr(obj, "get"):
+        for field_name in field_names:
+            value = obj.get(field_name)
+            if value is not None:
+                return value
+
+    return None
+
+
+# Register all metric resolvers at once
+register_metrics(LastFmMetricResolver(), LastFmMetricResolver.FIELD_MAP)

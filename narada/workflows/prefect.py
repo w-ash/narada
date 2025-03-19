@@ -260,26 +260,24 @@ async def extract_workflow_result(  # noqa: RUF029
         if isinstance(result, dict) and "tracklist" in result:
             task_metrics = result["tracklist"].metadata.get("metrics", {})
 
-            # Log detailed metrics information
-            if "spotify_popularity" in task_metrics:
-                sp_keys = list(task_metrics["spotify_popularity"].keys())
-                logger.debug(
-                    f"Spotify popularity metrics in {task_id}",
-                    key_count=len(sp_keys),
-                    key_type=str(type(sp_keys[0])) if sp_keys else "N/A",
-                    sample_keys=sp_keys[:5],
-                    sample_values=[
-                        task_metrics["spotify_popularity"].get(k) for k in sp_keys[:5]
-                    ]
-                    if sp_keys
-                    else [],
-                )
+            # Log metrics information for debugging
+            for metric_name, values in task_metrics.items():
+                if values:
+                    metric_keys = list(values.keys())
+                    logger.debug(
+                        f"Metrics found in {task_id}",
+                        metric_name=metric_name,
+                        key_count=len(metric_keys),
+                        key_type=str(type(metric_keys[0])) if metric_keys else "N/A",
+                        sample_values_count=sum(1 for v in values.values() if v != 0),
+                    )
 
-            # Add to all_metrics
+            # Add to all_metrics - make deep copy to ensure values are preserved
             for metric_name, values in task_metrics.items():
                 if metric_name not in all_metrics:
                     all_metrics[metric_name] = {}
-                all_metrics[metric_name].update(values)
+                # Ensure we're not losing any values during update
+                all_metrics[metric_name].update(values.copy())
 
     # Verify final metrics
     if "spotify_popularity" in all_metrics:

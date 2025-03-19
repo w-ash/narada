@@ -253,8 +253,9 @@
     },
     {
       "id": "sort_popularity_final",
-      "type": "sorter.by_spotify_popularity",
+      "type": "sorter.by_metric",
       "config": {
+        "metric_name": "spotify_popularity",
         "reverse": true
       },
       "upstream": [
