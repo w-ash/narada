@@ -264,16 +264,18 @@ class SpotifyConnector:
         cursor: str | None = None,
     ) -> tuple[list[Track], str | None]:
         """Fetch user's saved/liked tracks from Spotify with pagination.
-        
+
         Args:
             limit: Number of tracks to fetch per page (max 50)
             cursor: Pagination cursor from previous calls
-            
+
         Returns:
             Tuple of (list of domain tracks, next cursor or None if done)
         """
-        logger.info(f"Fetching liked tracks from Spotify, limit={limit}, cursor={cursor}")
-        
+        logger.info(
+            f"Fetching liked tracks from Spotify, limit={limit}, cursor={cursor}"
+        )
+
         try:
             # Convert cursor to offset if provided
             offset = 0
@@ -282,7 +284,7 @@ class SpotifyConnector:
                     offset = int(cursor)
                 except ValueError:
                     logger.warning(f"Invalid cursor format: {cursor}, using offset=0")
-            
+
             # Get saved tracks from Spotify API
             saved_tracks = await asyncio.to_thread(
                 self.client.current_user_saved_tracks,
@@ -290,46 +292,49 @@ class SpotifyConnector:
                 offset=offset,
                 market="US",
             )
-            
+
             if not saved_tracks or "items" not in saved_tracks:
                 logger.warning("No saved tracks found or invalid response format")
                 return [], None
-                
+
             # Extract actual track objects from the response
             # The API returns items with {added_at, track} structure
             tracks = []
             for item in saved_tracks["items"]:
                 if not item or "track" not in item:
                     continue
-                    
+
                 spotify_track = item["track"]
                 # Save the added_at timestamp in the track metadata
                 added_at = item.get("added_at")
                 track = convert_spotify_track_to_domain(spotify_track)
-                
+
                 if added_at:
                     # Add liked timestamp to connector metadata
                     try:
                         # Spotify timestamp format: "2023-09-21T15:48:56Z"
-                        liked_at = datetime.fromisoformat(added_at.replace("Z", "+00:00"))
+                        liked_at = datetime.fromisoformat(
+                            added_at.replace("Z", "+00:00")
+                        )
                         track = track.with_connector_metadata(
-                            "spotify", 
-                            {"liked_at": liked_at.isoformat()}
+                            "spotify", {"liked_at": liked_at.isoformat()}
                         )
                         # Also add the like status
                         track = track.with_like_status("spotify", True, liked_at)
                     except ValueError:
-                        logger.warning(f"Could not parse added_at timestamp: {added_at}")
-                
+                        logger.warning(
+                            f"Could not parse added_at timestamp: {added_at}"
+                        )
+
                 tracks.append(track)
-                
+
             # Determine next cursor
             next_cursor = None
             if saved_tracks.get("next") and saved_tracks["items"]:
                 next_cursor = str(offset + len(saved_tracks["items"]))
-                
+
             return tracks, next_cursor
-            
+
         except spotipy.SpotifyException as e:
             logger.error(f"Error fetching liked tracks: {e}")
             raise

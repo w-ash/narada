@@ -13,7 +13,7 @@ from attrs import define, field
 from narada.config import get_logger
 from narada.core.matcher import match_tracks
 from narada.core.models import SyncCheckpoint, Track, TrackList
-from narada.repositories.track import UnifiedTrackRepository
+from narada.repositories.track import TrackRepositories
 
 logger = get_logger(__name__)
 
@@ -36,7 +36,7 @@ class SyncStats:
 class LikeOperation:
     """Reusable component for like synchronization between services."""
 
-    track_repo: UnifiedTrackRepository
+    track_repo: TrackRepositories
     source_service: str
     target_service: str = field(default="narada")  # Narada is default target
     batch_size: int = 50
@@ -53,7 +53,7 @@ class LikeOperation:
         now = timestamp or datetime.now(UTC)
 
         for service in services:
-            await self.track_repo.save_track_like(
+            await self.track_repo.likes.save_track_like(
                 track_id=track_id,
                 service=service,
                 is_liked=is_liked,
@@ -72,7 +72,7 @@ class LikeOperation:
         Returns:
             List of track likes that need synchronization
         """
-        return await self.track_repo.get_unsynced_likes(
+        return await self.track_repo.likes.get_unsynced_likes(
             source_service=self.source_service,
             target_service=self.target_service,
             is_liked=is_liked,
@@ -107,6 +107,7 @@ class LikeOperation:
         logger.info(f"Matching {len(tracks)} tracks to {self.target_service}")
 
         # Match tracks to the target service
+        # Use batch matcher with efficient processing
         match_results = await match_tracks(track_list, self.target_service, connector)
 
         # Process each matched track
@@ -159,14 +160,14 @@ class LikeOperation:
 class CheckpointManager:
     """Manages sync checkpoints for resumable operations."""
 
-    track_repo: UnifiedTrackRepository
+    track_repo: TrackRepositories
     user_id: str
     service: str
     entity_type: Literal["likes", "plays"]
 
     async def get_or_create_checkpoint(self) -> SyncCheckpoint:
         """Get existing checkpoint or create a new one."""
-        checkpoint = await self.track_repo.get_sync_checkpoint(
+        checkpoint = await self.track_repo.checkpoints.get_sync_checkpoint(
             user_id=self.user_id,
             service=self.service,
             entity_type=self.entity_type,
@@ -197,4 +198,4 @@ class CheckpointManager:
         )
 
         # Save to database
-        return await self.track_repo.save_sync_checkpoint(updated)
+        return await self.track_repo.checkpoints.save_sync_checkpoint(updated)

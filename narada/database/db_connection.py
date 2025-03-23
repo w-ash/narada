@@ -14,6 +14,7 @@ from typing import Any
 
 from sqlalchemy import MetaData
 from sqlalchemy.ext.asyncio import (
+    AsyncAttrs,
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
@@ -39,33 +40,49 @@ convention = {
 metadata = MetaData(naming_convention=convention)
 
 
-class Base(DeclarativeBase):
-    """Base class for all SQLAlchemy ORM models."""
+class Base(AsyncAttrs, DeclarativeBase):
+    """Base class for all SQLAlchemy ORM models with async attributes support."""
 
     metadata = metadata
 
 
 def create_db_engine(connection_string: str | None = None) -> AsyncEngine:
-    """Create async SQLAlchemy engine with optimized connection pooling.
-
-    Args:
-        connection_string: Optional connection string (falls back to env var)
-
-    Returns:
-        Configured SQLAlchemy async engine
-    """
+    """Create async SQLAlchemy engine with optimized connection pooling."""
     # Use connection string from args or environment
     db_url = connection_string or os.environ.get(
         "DATABASE_URL",
         "sqlite+aiosqlite:///narada.db",
     )
 
+    # SQLite-specific connect args
+    connect_args = {}
+    if db_url.startswith("sqlite"):
+        connect_args = {
+            "check_same_thread": False,
+            # Increase SQLite timeout to help with concurrency
+            "timeout": 30.0,  # 30 seconds timeout for busy connections
+        }
+
+        # Add query parameters for SQLite pragmas
+        if "?" not in db_url:
+            db_url += "?"
+        else:
+            db_url += "&"
+        # Enhanced SQLite pragmas for better concurrency:
+        # - WAL journal mode for concurrent access
+        # - NORMAL synchronous for better performance without losing too much safety
+        # - Explicitly enable foreign keys
+        # - Increase busy_timeout to prevent "database is locked" errors
+        # - Use immediate transactions to avoid deadlocks
+        db_url += "journal_mode=WAL&synchronous=NORMAL&foreign_keys=ON&busy_timeout=10000&isolation_level=IMMEDIATE"
+
     # Configure engine with optimizations for parallel operations
     engine = create_async_engine(
         db_url,
         # Connection pool configuration for parallel operations
-        pool_size=20,
-        max_overflow=30,
+        pool_size=10,
+        max_overflow=20,
+        connect_args=connect_args,
         pool_timeout=30,
         pool_recycle=28800,
         # Validate connections before using them to avoid stale connections
@@ -146,6 +163,41 @@ async def get_session(rollback: bool = True) -> AsyncGenerator[AsyncSession]:
     except Exception:
         if rollback:
             await session.rollback()
+        raise
+    finally:
+        await session.close()
+
+
+@asynccontextmanager
+async def get_isolated_session() -> AsyncGenerator[AsyncSession]:
+    """Get a session with optimized isolation for operations that need it.
+
+    This creates a session specifically optimized for operations like metrics
+    that need better isolation to avoid database locks and conflicts.
+
+    Yields:
+        AsyncSession: Isolated database session
+    """
+    # Create a new session factory with specific settings for isolation
+    isolated_factory = async_sessionmaker(
+        bind=get_engine(),
+        expire_on_commit=False,
+        autoflush=False,  # Disable autoflush to avoid implicit I/O
+        autocommit=False,
+    )
+
+    session = isolated_factory()
+    try:
+        # Execute pragma statement to ensure immediate transaction mode
+        # This helps prevent SQLite database locks in concurrent operations
+        from sqlalchemy import text
+
+        await session.execute(text("PRAGMA busy_timeout = 10000"))
+
+        yield session
+        await session.commit()
+    except Exception:
+        await session.rollback()
         raise
     finally:
         await session.close()
@@ -273,6 +325,7 @@ __all__ = [
     "create_session_factory",
     "engine",
     "get_engine",
+    "get_isolated_session",
     "get_session",
     "get_session_factory",
     "session_factory",

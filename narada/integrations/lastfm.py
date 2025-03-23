@@ -130,13 +130,17 @@ class LastFMTrackInfo:
 
 @define(slots=True)
 class LastFMConnector:
-    """Last.fm API connector with domain model conversion."""
+    """Last.fm API connector with domain model conversion.
+
+    Implements the TrackMatcher protocol for identity resolution.
+    """
 
     api_key: str | None = field(default=None)
     api_secret: str | None = field(default=None)
     lastfm_username: str | None = field(default=None)
     client: pylast.LastFMNetwork | None = field(default=None, init=False, repr=False)
     batch_processor: BatchProcessor = field(init=False, repr=False)
+    connector_name: str = "lastfm"
 
     # Constants for API communication
     USER_AGENT: ClassVar[str] = "Narada/0.1.0 (Music Metadata Integration)"

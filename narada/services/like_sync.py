@@ -15,7 +15,7 @@ from narada.core.models import Track
 from narada.database.db_connection import get_session
 from narada.integrations.lastfm import LastFMConnector
 from narada.integrations.spotify import SpotifyConnector
-from narada.repositories.track import UnifiedTrackRepository
+from narada.repositories.track import TrackRepositories
 from narada.services.like_operations import (
     CheckpointManager,
     LikeOperation,
@@ -43,7 +43,7 @@ async def import_spotify_likes(
         SyncStats containing operation metrics
     """
     # Initialize repositories and connector
-    track_repo = UnifiedTrackRepository(session)
+    track_repo = TrackRepositories(session)
     spotify = SpotifyConnector()
 
     # Create checkpoint manager
@@ -92,16 +92,27 @@ async def import_spotify_likes(
 
             try:
                 # Save or update track in database
-                db_track = await track_repo.find_track(
-                    track_title=track.title,
-                    artist_name=track.artists[0].name if track.artists else None,
-                    connector_id=track.connector_track_ids.get("spotify"),
-                    connector_name="spotify",
-                )
-
-                # If track doesn't exist, create it
-                if not db_track:
-                    db_track = await track_repo.save_track(track)
+                # First try to find by Spotify ID using the track core repository
+                if "spotify" in track.connector_track_ids:
+                    # Use upsert directly with the core repository
+                    db_track = await track_repo.core.upsert(
+                        lookup_attrs={
+                            "spotify_id": track.connector_track_ids["spotify"]
+                        },
+                        create_attrs={
+                            "title": track.title,
+                            "artists": {
+                                "names": [artist.name for artist in track.artists]
+                            },
+                            "album": track.album,
+                            "duration_ms": track.duration_ms,
+                            "release_date": track.release_date,
+                            "isrc": track.isrc,
+                        },
+                    )
+                else:
+                    # No spotify ID available, use save_track
+                    db_track = await track_repo.core.save_track(track)
                     logger.debug(f"Created new track: {track.title}")
 
                 # Ensure track_id is not None
@@ -113,7 +124,9 @@ async def import_spotify_likes(
                         services=["spotify", "narada"],
                     )
                 else:
-                    logger.warning(f"Could not save likes for track: {track.title} - No valid track ID")
+                    logger.warning(
+                        f"Could not save likes for track: {track.title} - No valid track ID"
+                    )
 
                 stats.imported += 1
 
@@ -160,7 +173,7 @@ async def export_likes_to_lastfm(
         SyncStats containing operation metrics
     """
     # Initialize repositories and connector
-    track_repo = UnifiedTrackRepository(session)
+    track_repo = TrackRepositories(session)
     lastfm = LastFMConnector()
 
     # Create like operation helper
@@ -221,8 +234,8 @@ async def export_likes_to_lastfm(
                 break
 
             try:
-                # Get full track details
-                track = await track_repo.get_track(id=track_like.track_id)
+                # Get full track details using the core repository
+                track = await track_repo.core.get_by_id(track_like.track_id)
                 if not track or not track.artists:
                     logger.warning(
                         f"Track not found or incomplete: {track_like.track_id}"

@@ -65,6 +65,7 @@ Best Practices:
        log_startup_info()
 """
 
+from contextlib import asynccontextmanager
 import logging
 import os
 from pathlib import Path
@@ -93,44 +94,57 @@ _config: dict[str, Any] = {
     "FILE_LOG_LEVEL": os.getenv("FILE_LOG_LEVEL", "DEBUG"),
     "LOG_FILE": Path(os.getenv("LOG_FILE", "narada.log")),
     "DATA_DIR": Path(os.getenv("DATA_DIR", "data")),
-    
     # Batch processing settings
     "LASTFM_ENRICHER_BATCH_SIZE": int(os.getenv("LASTFM_ENRICHER_BATCH_SIZE", "50")),
     "LASTFM_ENRICHER_CONCURRENCY": int(os.getenv("LASTFM_ENRICHER_CONCURRENCY", "5")),
     "TRACK_BATCH_RETRY_COUNT": int(os.getenv("TRACK_BATCH_RETRY_COUNT", "3")),
     "TRACK_BATCH_RETRY_DELAY": int(os.getenv("TRACK_BATCH_RETRY_DELAY", "5")),
-    
     # Global API defaults
     "DEFAULT_API_BATCH_SIZE": int(os.getenv("DEFAULT_API_BATCH_SIZE", "50")),
     "DEFAULT_API_CONCURRENCY": int(os.getenv("DEFAULT_API_CONCURRENCY", "5")),
     "DEFAULT_API_RETRY_COUNT": int(os.getenv("DEFAULT_API_RETRY_COUNT", "3")),
-    "DEFAULT_API_RETRY_BASE_DELAY": float(os.getenv("DEFAULT_API_RETRY_BASE_DELAY", "1.0")),
-    "DEFAULT_API_RETRY_MAX_DELAY": float(os.getenv("DEFAULT_API_RETRY_MAX_DELAY", "30.0")),
+    "DEFAULT_API_RETRY_BASE_DELAY": float(
+        os.getenv("DEFAULT_API_RETRY_BASE_DELAY", "1.0")
+    ),
+    "DEFAULT_API_RETRY_MAX_DELAY": float(
+        os.getenv("DEFAULT_API_RETRY_MAX_DELAY", "30.0")
+    ),
     "DEFAULT_API_REQUEST_DELAY": float(os.getenv("DEFAULT_API_REQUEST_DELAY", "0.2")),
-    
     # LastFM API settings - conservative due to rate limits
-    "LASTFM_API_BATCH_SIZE": int(os.getenv("LASTFM_API_BATCH_SIZE", "20")), 
+    "LASTFM_API_BATCH_SIZE": int(os.getenv("LASTFM_API_BATCH_SIZE", "20")),
     "LASTFM_API_CONCURRENCY": int(os.getenv("LASTFM_API_CONCURRENCY", "3")),
     "LASTFM_API_RETRY_COUNT": int(os.getenv("LASTFM_API_RETRY_COUNT", "5")),
-    "LASTFM_API_RETRY_BASE_DELAY": float(os.getenv("LASTFM_API_RETRY_BASE_DELAY", "1.0")),
-    "LASTFM_API_RETRY_MAX_DELAY": float(os.getenv("LASTFM_API_RETRY_MAX_DELAY", "60.0")),
+    "LASTFM_API_RETRY_BASE_DELAY": float(
+        os.getenv("LASTFM_API_RETRY_BASE_DELAY", "1.0")
+    ),
+    "LASTFM_API_RETRY_MAX_DELAY": float(
+        os.getenv("LASTFM_API_RETRY_MAX_DELAY", "60.0")
+    ),
     "LASTFM_API_REQUEST_DELAY": float(os.getenv("LASTFM_API_REQUEST_DELAY", "0.25")),
-    
     # Spotify API settings
     "SPOTIFY_API_BATCH_SIZE": int(os.getenv("SPOTIFY_API_BATCH_SIZE", "50")),
     "SPOTIFY_API_CONCURRENCY": int(os.getenv("SPOTIFY_API_CONCURRENCY", "5")),
     "SPOTIFY_API_RETRY_COUNT": int(os.getenv("SPOTIFY_API_RETRY_COUNT", "3")),
-    "SPOTIFY_API_RETRY_BASE_DELAY": float(os.getenv("SPOTIFY_API_RETRY_BASE_DELAY", "0.5")),
-    "SPOTIFY_API_RETRY_MAX_DELAY": float(os.getenv("SPOTIFY_API_RETRY_MAX_DELAY", "30.0")),
+    "SPOTIFY_API_RETRY_BASE_DELAY": float(
+        os.getenv("SPOTIFY_API_RETRY_BASE_DELAY", "0.5")
+    ),
+    "SPOTIFY_API_RETRY_MAX_DELAY": float(
+        os.getenv("SPOTIFY_API_RETRY_MAX_DELAY", "30.0")
+    ),
     "SPOTIFY_API_REQUEST_DELAY": float(os.getenv("SPOTIFY_API_REQUEST_DELAY", "0.1")),
-    
     # MusicBrainz API settings
     "MUSICBRAINZ_API_BATCH_SIZE": int(os.getenv("MUSICBRAINZ_API_BATCH_SIZE", "50")),
     "MUSICBRAINZ_API_CONCURRENCY": int(os.getenv("MUSICBRAINZ_API_CONCURRENCY", "5")),
     "MUSICBRAINZ_API_RETRY_COUNT": int(os.getenv("MUSICBRAINZ_API_RETRY_COUNT", "3")),
-    "MUSICBRAINZ_API_RETRY_BASE_DELAY": float(os.getenv("MUSICBRAINZ_API_RETRY_BASE_DELAY", "1.0")),
-    "MUSICBRAINZ_API_RETRY_MAX_DELAY": float(os.getenv("MUSICBRAINZ_API_RETRY_MAX_DELAY", "30.0")),
-    "MUSICBRAINZ_API_REQUEST_DELAY": float(os.getenv("MUSICBRAINZ_API_REQUEST_DELAY", "0.2")),
+    "MUSICBRAINZ_API_RETRY_BASE_DELAY": float(
+        os.getenv("MUSICBRAINZ_API_RETRY_BASE_DELAY", "1.0")
+    ),
+    "MUSICBRAINZ_API_RETRY_MAX_DELAY": float(
+        os.getenv("MUSICBRAINZ_API_RETRY_MAX_DELAY", "30.0")
+    ),
+    "MUSICBRAINZ_API_REQUEST_DELAY": float(
+        os.getenv("MUSICBRAINZ_API_REQUEST_DELAY", "0.2")
+    ),
 }
 
 
@@ -263,6 +277,105 @@ def resilient_operation(operation_name=None):
         return wrapper
 
     return decorator
+
+
+def log_batch_operation(ctx_logger=None):
+    """Decorator for batch operations with standardized logging.
+
+    Provides consistent logging for batch operations with start/complete messages
+    and automatic calculation of success rates.
+
+    Example:
+        @log_batch_operation()
+        async def process_batches(items, batch_size=50):
+            # Implementation that processes items in batches
+            # Will automatically log start/complete for each batch
+    """
+
+    def decorator(func):
+        async def wrapper(*args, batch_size=None, connector=None, **kwargs):
+            # Use provided logger or fallback to module logger
+            log = ctx_logger or logger
+
+            # Extract operation name from function
+            operation_name = func.__name__
+
+            # Start overall timing
+            with log.contextualize(operation=operation_name, connector=connector):
+                result = await func(
+                    *args, batch_size=batch_size, connector=connector, **kwargs
+                )
+
+                # Calculate overall stats if result is a dict
+                if isinstance(result, dict):
+                    total_count = (
+                        len(args[0]) if args and hasattr(args[0], "__len__") else 0
+                    )
+                    success_count = len(result)
+                    success_rate = (
+                        f"{(success_count / total_count) * 100:.1f}%"
+                        if total_count > 0
+                        else "0%"
+                    )
+
+                    log.info(
+                        f"Completed {operation_name} with {success_count}/{total_count} successes ({success_rate})",
+                        success_count=success_count,
+                        total_count=total_count,
+                        success_rate=success_rate,
+                    )
+
+                return result
+
+        return wrapper
+
+    return decorator
+
+
+@asynccontextmanager
+async def batch_context(
+    name, items, *, batch_size=None, connector=None, ctx_logger=None
+):
+    """Context manager for batch processing with automatic logging.
+
+    Provides a convenient way to log batch operations with proper context:
+
+    Example:
+        async with batch_context("match_tracks", tracks, batch_size=50, connector="spotify") as ctx:
+            # Process tracks in batches
+            # Context automatically logs start/complete messages
+    """
+    log = ctx_logger or logger
+    total_count = len(items) if hasattr(items, "__len__") else 0
+    batch_size = batch_size or get_config("DEFAULT_API_BATCH_SIZE", 50)
+
+    # Start batch processing with context
+    with log.contextualize(
+        operation=name,
+        connector=connector,
+        batch_size=batch_size,
+        total_items=total_count,
+    ):
+        log.info(
+            f"Starting {name} for {total_count} items",
+            total_count=total_count,
+            connector=connector,
+        )
+
+        try:
+            # Yield control back to the caller
+            await (
+                yield {
+                    "logger": log,
+                    "total_count": total_count,
+                    "batch_size": batch_size,
+                    "connector": connector,
+                }
+            )
+
+        finally:
+            # Log completion regardless of success/failure
+            log.info(f"Completed {name}", total_count=total_count, connector=connector)
 
 
 def configure_prefect_logging() -> None:

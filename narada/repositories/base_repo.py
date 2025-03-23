@@ -3,49 +3,56 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+import functools
+import operator
 from typing import Any, Protocol, TypeVar, cast
 
 from attrs import define
-
-from sqlalchemy import Select, delete, select, update
+from sqlalchemy import Select, case, delete, func, insert, inspect, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute, selectinload
-from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.sql import ColumnElement
 
 from narada.config import get_logger
 
 # Import needed for relationship chains in eager loading
-from narada.database.db_models import DBPlaylistTrack, DBTrack, NaradaDBBase
+from narada.database.db_models import NaradaDBBase
 from narada.repositories.repo_decorator import db_operation
-
-# Common utility functions for repository operations
-async def safe_fetch_relationship(db_model: Any, rel_name: str) -> list[Any]:
-    """Helper to safely load relationships with fallback to async loading."""
-    try:
-        items = getattr(db_model, rel_name, [])
-
-        if (
-            not items
-            and hasattr(db_model, rel_name)
-            and hasattr(db_model, "awaitable_attrs")
-        ):
-            items = await getattr(db_model.awaitable_attrs, rel_name)
-
-        return items
-    except (AttributeError, TypeError):
-        if hasattr(db_model, "awaitable_attrs") and hasattr(
-            db_model.awaitable_attrs,
-            rel_name,
-        ):
-            return await getattr(db_model.awaitable_attrs, rel_name)
-        return []
-
-logger = get_logger(__name__)
 
 # Type variables with proper constraints
 TDBModel = TypeVar("TDBModel", bound=NaradaDBBase)
 TDomainModel = TypeVar("TDomainModel")
+TResult = TypeVar("TResult")
+
+logger = get_logger(__name__)
+
+# -------------------------------------------------------------------------
+# COMMON UTILITIES
+# -------------------------------------------------------------------------
+
+
+async def safe_fetch_relationship(db_model: Any, rel_name: str) -> list[Any]:
+    """Helper to safely load relationships using AsyncAttrs.awaitable_attrs.
+
+    This function uses a single, consistent approach for safely accessing
+    relationship attributes in async context using SQLAlchemy 2.0 best practices.
+    """
+    try:
+        # Standard SQLAlchemy 2.0 pattern: use awaitable_attrs
+        if hasattr(db_model, "awaitable_attrs"):
+            return await getattr(db_model.awaitable_attrs, rel_name)
+        # Simple fallback for non-AsyncAttrs models
+        elif hasattr(db_model, rel_name):
+            return getattr(db_model, rel_name) or []
+        return []
+    except Exception:
+        return []
+
+
+def filter_active(model_class: type[NaradaDBBase]) -> ColumnElement:
+    """Return a filter expression for active (non-deleted) entities."""
+    return model_class.is_deleted == False  # noqa: E712
 
 
 class ModelMapper[TDBModel: NaradaDBBase, TDomainModel](Protocol):
@@ -60,15 +67,27 @@ class ModelMapper[TDBModel: NaradaDBBase, TDomainModel](Protocol):
     def to_db(domain_model: TDomainModel) -> TDBModel:
         """Convert domain model to database model."""
         ...
-        
-        
+
+    @staticmethod
+    def get_default_relationships() -> list[str]:
+        """Get default relationships to load for this model."""
+        return []
+
+    @staticmethod
+    async def map_collection(
+        db_models: list[TDBModel],
+    ) -> list[TDomainModel]:
+        """Map a collection of DB models to domain models."""
+        ...
+
+
 @define(frozen=True, slots=True)
 class BaseModelMapper[TDBModel: NaradaDBBase, TDomainModel]:
     """Base implementation of ModelMapper with common functionality.
-    
+
     This provides a foundation for building domain-specific mappers
     with consistent behavior and reduced boilerplate.
-    
+
     Usage:
         @define(frozen=True, slots=True)
         class UserMapper(BaseModelMapper[DBUser, User]):
@@ -77,23 +96,56 @@ class BaseModelMapper[TDBModel: NaradaDBBase, TDomainModel]:
                 if not db_model:
                     return None
                 return User(...)
-                
+
             @staticmethod
             def to_db(domain_model: User) -> DBUser:
                 return DBUser(...)
+
+            @staticmethod
+            def get_default_relationships() -> list[str]:
+                return ["roles", "preferences"]
     """
-    
+
     @staticmethod
     async def to_domain(db_model: TDBModel) -> TDomainModel:
         """Default implementation returns None for None input."""
         if not db_model:
             return None
         raise NotImplementedError("Subclasses must implement to_domain")
-        
+
     @staticmethod
     def to_db(domain_model: TDomainModel) -> TDBModel:
         """Default implementation raises NotImplementedError."""
         raise NotImplementedError("Subclasses must implement to_db")
+
+    @staticmethod
+    def get_default_relationships() -> list[str]:
+        """Define relationships to load for this model."""
+        return ["mappings", "mappings.connector_track"]
+
+    @classmethod
+    async def map_collection(
+        cls,
+        db_models: list[TDBModel],
+    ) -> list[TDomainModel]:
+        """Map a collection of DB models to domain models.
+
+        This is a convenience method that handles None values
+        and performs the mapping operation in a consistent way.
+        
+        Uses cls.to_domain to ensure the subclass implementation is called,
+        not BaseModelMapper.to_domain directly.
+        """
+        if not db_models:
+            return []
+
+        domain_models = []
+        for db_model in db_models:
+            domain_model = await cls.to_domain(db_model)
+            if domain_model:
+                domain_models.append(domain_model)
+
+        return domain_models
 
 
 class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
@@ -124,7 +176,34 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
 
     def select_by_id(self, id_: int) -> Select[tuple[TDBModel]]:
         """Create select statement for a record by ID."""
-        return self.select().where(self.model_class.id == id_)
+        return select(self.model_class).where(
+            self.model_class.id == id_,
+            self.model_class.is_deleted == False,  # noqa: E712
+        )
+
+    def select_by_ids(self, ids: list[int]) -> Select[tuple[TDBModel]]:
+        """Create select statement for multiple records by ID."""
+        if not ids:
+            # Return empty result statement
+            return select(self.model_class).where(func.false())
+        return select(self.model_class).where(
+            self.model_class.id.in_(ids),
+            self.model_class.is_deleted == False,  # noqa: E712
+        )
+
+    def paginate(
+        self, stmt: Select[tuple[TDBModel]], page: int = 1, page_size: int = 100
+    ) -> Select[tuple[TDBModel]]:
+        """Add pagination to a select statement."""
+        offset = (page - 1) * page_size if page > 0 else 0
+        return stmt.offset(offset).limit(page_size)
+
+    def order_by(
+        self, stmt: Select[tuple[TDBModel]], field: str, ascending: bool = True
+    ) -> Select[tuple[TDBModel]]:
+        """Add ordering to a select statement."""
+        order_col = getattr(self.model_class, field)
+        return stmt.order_by(order_col if ascending else order_col.desc())
 
     def with_relationship(
         self,
@@ -140,6 +219,35 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
                 options.append(selectinload(rel))
         return stmt.options(*options)
 
+    def with_default_relationships(
+        self, stmt: Select[tuple[TDBModel]]
+    ) -> Select[tuple[TDBModel]]:
+        """Add default relationships for this model."""
+        rels = self.mapper.get_default_relationships()
+        if not rels:
+            return stmt
+        return self.with_relationship(stmt, *rels)
+
+    def count(
+        self, conditions: dict[str, Any] | list[ColumnElement] | None = None
+    ) -> Select:
+        """Create a count statement for records matching conditions."""
+        stmt = select(func.count(self.model_class.id)).where(
+            self.model_class.is_deleted == False  # noqa: E712
+        )
+
+        # Apply additional conditions
+        if conditions:
+            match conditions:
+                case dict():
+                    for field, value in conditions.items():
+                        stmt = stmt.where(getattr(self.model_class, field) == value)
+                case list():
+                    for condition in conditions:
+                        stmt = stmt.where(condition)
+
+        return stmt
+
     # -------------------------------------------------------------------------
     # DIRECT DATABASE OPERATIONS (non-decorated helpers)
     # -------------------------------------------------------------------------
@@ -149,16 +257,26 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
         stmt: Select[tuple[TDBModel]],
     ) -> list[TDBModel]:
         """Execute a query and return all results directly."""
-        result = await self.session.scalars(stmt)
-        return list(result.all())
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
 
     async def _execute_query_one(
         self,
         stmt: Select[tuple[TDBModel]],
     ) -> TDBModel | None:
         """Execute a query and return the first result directly."""
-        result = await self.session.scalars(stmt)
-        return result.first()
+        result = await self.session.execute(stmt)
+        return (
+            result.scalar_one_or_none()
+        )  # Use scalar_one_or_none for cleaner handling
+
+    async def _execute_scalar(
+        self,
+        stmt: Select,
+    ) -> Any:
+        """Execute a scalar query and return the first result."""
+        result = await self.session.scalar(stmt)
+        return result
 
     async def _flush_and_refresh(
         self,
@@ -170,15 +288,24 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
 
         if load_relationships:
             # Get relevant relationships for this model
-            relationships = [
+            relationships = self.mapper.get_default_relationships() or [
                 rel
-                for rel in ["mappings", "tracks", "playlist_tracks"]
+                for rel in [
+                    "mappings",
+                    "tracks",
+                    "playlist_tracks",
+                    "likes",
+                    "connector_tracks",
+                ]
                 if hasattr(self.model_class, rel)
             ]
 
+            # Filter out nested relationship paths which aren't supported by refresh's attribute_names
+            direct_relationships = [rel for rel in relationships if "." not in rel]
+
             # Refresh with relationship loading if needed
-            if relationships:
-                await self.session.refresh(entity, attribute_names=relationships)
+            if direct_relationships:
+                await self.session.refresh(entity, attribute_names=direct_relationships)
             else:
                 await self.session.refresh(entity)
         else:
@@ -221,6 +348,15 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
                 return await self._execute_query(stmt)
             raise
 
+    @db_operation("count_entities")
+    async def count_entities(
+        self, conditions: dict[str, Any] | list[ColumnElement] | None = None
+    ) -> int:
+        """Count entities matching the given conditions."""
+        stmt = self.count(conditions)
+        count = await self._execute_scalar(stmt)
+        return count or 0
+
     # -------------------------------------------------------------------------
     # CORE CRUD OPERATIONS
     # -------------------------------------------------------------------------
@@ -231,23 +367,55 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
         id_: int,
         load_relationships: list[str] | None = None,
     ) -> TDomainModel:
-        """Get entity by ID with optional relationship loading."""
-        # Direct implementation to avoid Pylance issues
+        """Get entity by ID with cleaner fetch pattern."""
         stmt = self.select_by_id(id_)
 
         if load_relationships:
             stmt = self.with_relationship(stmt, *load_relationships)
+        else:
+            stmt = self.with_default_relationships(stmt)
 
-        # Execute the query directly to avoid nested decorator calls
-        result = await self.session.scalars(stmt)
-        db_entity = result.first()
+        # Use session.get with identity mapping for better performance
+        db_entity = await self.session.get(
+            self.model_class,
+            id_,
+            options=[
+                selectinload(getattr(self.model_class, rel))
+                for rel in self.mapper.get_default_relationships()
+            ]
+            if not load_relationships
+            else [
+                selectinload(getattr(self.model_class, rel))
+                for rel in load_relationships
+            ],
+        )
 
-        if not db_entity:
+        if not db_entity or db_entity.is_deleted:
             raise ValueError(f"Entity with ID {id_} not found")
 
-        # Convert to domain model
-        domain_entity = await self.mapper.to_domain(db_entity)
-        return domain_entity
+        return await self.mapper.to_domain(db_entity)
+
+    @db_operation("get_by_ids")
+    async def get_by_ids(
+        self,
+        ids: list[int],
+        load_relationships: list[str] | None = None,
+    ) -> list[TDomainModel]:
+        """Get multiple entities by IDs."""
+        if not ids:
+            return []
+
+        stmt = self.select_by_ids(ids)
+
+        if load_relationships:
+            stmt = self.with_relationship(stmt, *load_relationships)
+        else:
+            stmt = self.with_default_relationships(stmt)
+
+        db_entities = await self._execute_query(stmt)
+
+        # Use the mapper's map_collection method for consistency
+        return await self.mapper.map_collection(db_entities)
 
     @db_operation("find_by")
     async def find_by(
@@ -255,10 +423,13 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
         conditions: dict[str, Any] | list[ColumnElement],
         load_relationships: list[str] | None = None,
         limit: int | None = None,
+        order_by: tuple[str, bool] | None = None,
     ) -> list[TDomainModel]:
         """Find entities matching conditions."""
-        # Build the query
-        stmt = self.select()
+        # Build the query directly with SQLAlchemy 2.0 syntax
+        stmt = select(self.model_class).where(
+            self.model_class.is_deleted == False  # noqa: E712
+        )
 
         # Apply conditions
         match conditions:
@@ -271,23 +442,34 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
 
         # Apply relationship loading
         if load_relationships:
-            stmt = self.with_relationship(stmt, *load_relationships)
+            options = [
+                selectinload(getattr(self.model_class, rel))
+                for rel in load_relationships
+            ]
+            stmt = stmt.options(*options)
+        else:
+            default_rels = self.mapper.get_default_relationships()
+            if default_rels:
+                options = [
+                    selectinload(getattr(self.model_class, rel)) for rel in default_rels
+                ]
+                stmt = stmt.options(*options)
+
+        # Apply ordering if specified
+        if order_by:
+            field, ascending = order_by
+            column = getattr(self.model_class, field)
+            stmt = stmt.order_by(column if ascending else column.desc())
 
         # Apply limit
         if limit is not None:
             stmt = stmt.limit(limit)
 
-        # Execute query directly to avoid nested decorator calls
-        result = await self.session.scalars(stmt)
-        db_entities = list(result.all())
+        # Execute query directly
+        db_entities = await self._execute_query(stmt)
 
-        # Convert to domain models
-        domain_entities = []
-        for entity in db_entities:
-            domain_entity = await self.mapper.to_domain(entity)
-            domain_entities.append(domain_entity)
-
-        return domain_entities
+        # Use the mapper's map_collection method
+        return await self.mapper.map_collection(db_entities)
 
     @db_operation("find_one_by")
     async def find_one_by(
@@ -296,8 +478,30 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
         load_relationships: list[str] | None = None,
     ) -> TDomainModel | None:
         """Find a single entity matching conditions or None if not found."""
-        # Build the query
-        stmt = self.select()
+        # For direct ID lookups, use session.get instead of query
+        if isinstance(conditions, dict) and len(conditions) == 1 and "id" in conditions:
+            # Use session.get with explicit eager loading for better performance
+            db_entity = await self.session.get(
+                self.model_class,
+                conditions["id"],
+                options=[
+                    selectinload(getattr(self.model_class, rel))
+                    for rel in (
+                        load_relationships or self.mapper.get_default_relationships()
+                    )
+                    if hasattr(self.model_class, rel)
+                ],
+            )
+
+            if not db_entity or db_entity.is_deleted:
+                return None
+
+            return await self.mapper.to_domain(db_entity)
+
+        # For other conditions, use a query
+        stmt = select(self.model_class).where(
+            self.model_class.is_deleted == False  # noqa: E712
+        )
 
         # Apply conditions
         match conditions:
@@ -308,24 +512,27 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
                 for condition in conditions:
                     stmt = stmt.where(condition)
 
-        # Apply relationship loading
-        if load_relationships:
-            stmt = self.with_relationship(stmt, *load_relationships)
+        # Load relationships
+        rel_names = load_relationships or self.mapper.get_default_relationships()
 
-        # Limit to one result
+        rel_options = [
+            selectinload(getattr(self.model_class, rel))
+            for rel in rel_names
+            if hasattr(self.model_class, rel)
+        ]
+
+        if rel_options:
+            stmt = stmt.options(*rel_options)
+
+        # Limit to one result and execute
         stmt = stmt.limit(1)
+        result = await self.session.execute(stmt)
+        db_entity = result.scalar_one_or_none()
 
-        # Execute query directly to avoid nested decorator calls
-        result = await self.session.scalars(stmt)
-        db_entity = result.first()
-
-        # Return None if no matching entity
         if not db_entity:
             return None
 
-        # Convert to domain model
-        domain_entity = await self.mapper.to_domain(db_entity)
-        return domain_entity
+        return await self.mapper.to_domain(db_entity)
 
     @db_operation("create")
     async def create(self, entity: TDomainModel) -> TDomainModel:
@@ -336,13 +543,62 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
         # Add to session
         self.session.add(db_entity)
 
-        # Flush and refresh to ensure ID is populated with proper typing
-        db_entity = await self._flush_and_refresh(db_entity)
+        # First just flush to get the ID
+        await self.session.flush()
 
         # Verify ID was generated
         if db_entity.id is None:
             logger.error(f"Failed to generate ID for entity: {entity}")
             raise ValueError("Failed to create entity: No ID was generated")
+
+        # Use get with explicit eager loading for any relationships
+        # This is safer than refresh with attribute_names for nested relationships
+        if (
+            hasattr(self.mapper, "get_default_relationships")
+            and self.mapper.get_default_relationships()
+        ):
+            options = []
+
+            # Only include direct relationships that exist on this model
+            for rel_name in self.mapper.get_default_relationships():
+                # Skip any nested relationships containing dots
+                if "." in rel_name:
+                    continue
+
+                # Only add relationships that actually exist on this model class
+                if (
+                    hasattr(self.model_class, rel_name)
+                    and rel_name in inspect(self.model_class).relationships
+                ):
+                    options.append(selectinload(getattr(self.model_class, rel_name)))
+
+            # Clear from session to avoid duplicate objects issue
+            self.session.expunge(db_entity)
+
+            # Get the entity with properly loaded relationships
+            if options:
+                refreshed_entity = await self.session.get(
+                    self.model_class, db_entity.id, options=options
+                )
+            else:
+                refreshed_entity = await self.session.get(
+                    self.model_class, db_entity.id
+                )
+
+            # Make sure we got the entity back
+            if refreshed_entity is None:
+                logger.error(
+                    f"Failed to retrieve entity with ID {db_entity.id} after creation"
+                )
+                raise ValueError(
+                    f"Entity with ID {db_entity.id} not found after creation"
+                )
+
+            # Use the refreshed entity
+            db_entity = refreshed_entity
+        else:
+            # Simple refresh if no relationships are defined
+            await self.session.refresh(db_entity)
 
         # Convert back to domain with ID
         domain_entity = await self.mapper.to_domain(db_entity)
@@ -354,102 +610,66 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
         id_: int,
         updates: dict[str, Any] | TDomainModel,
     ) -> TDomainModel:
-        """Update entity using appropriate method based on input type."""
-        # Handle dictionary updates
+        """Update entity with a unified approach."""
+        # Get values to update
         if isinstance(updates, dict):
-            # Add timestamp if not provided
             values = {**updates}
             if "updated_at" not in values:
                 values["updated_at"] = datetime.now(UTC)
-
-            # First perform the update operation
-            stmt = (
-                update(self.model_class)
-                .where(
-                    self.model_class.id == id_,
-                    self.model_class.is_deleted == False,  # noqa: E712
-                )
-                .values(**values)
-            )
-            result = await self.session.execute(stmt)
-
-            if result.rowcount == 0:
-                raise ValueError(f"Entity with ID {id_} not found or already deleted")
-
-        # Handle domain model updates
         else:
-            # Get the existing entity directly
-            stmt = self.select_by_id(id_)
-            result = await self.session.scalars(stmt)
-            existing = result.first()
-
-            if not existing:
-                raise ValueError(f"Entity with ID {id_} not found")
-
-            # Get DB representation of the update
+            # Convert domain model to db model
             update_db = self.mapper.to_db(updates)
 
-            # Copy non-null fields from update to existing
-            for key in [
-                k for k in dir(update_db) if not k.startswith("_") and k != "id"
-            ]:
-                if hasattr(update_db, key) and hasattr(existing, key):
-                    value = getattr(update_db, key)
-                    if value is not None:  # Only update non-null values
-                        setattr(existing, key, value)
+            # Get a list of column names from the model class
+            columns = [c.key for c in inspect(self.model_class).columns]
 
-            # Update timestamp
-            existing.updated_at = datetime.now(UTC)
+            # Only include attributes that are actual columns in the table
+            values = {
+                k: getattr(update_db, k)
+                for k in columns
+                if hasattr(update_db, k)
+                and getattr(update_db, k) is not None
+                and k != "id"
+            }
+            values["updated_at"] = datetime.now(UTC)
 
-            # Flag modified fields that use JSON types, which SQLAlchemy might not detect
-            flag_modified_attributes = ["connector_metadata", "metadata", "artists"]
-            for attr_name in flag_modified_attributes:
-                if hasattr(existing, attr_name):
-                    flag_modified(existing, attr_name)
-
-            # Flush changes
-            await self._flush_and_refresh(existing)
-
-        # For both update types, fetch the full entity with eager loaded relationships
-        stmt = self.select_by_id(id_)
-
-        # Add eager loading for common relationship patterns
-        if hasattr(self.model_class, "tracks"):
-            # For playlists, deeply load all relationships to prevent lazy loading issues
-            stmt = stmt.options(
-                selectinload(self.model_class.mappings),  # type: ignore
-                selectinload(self.model_class.tracks)  # type: ignore
-                .selectinload(DBPlaylistTrack.track)
-                .selectinload(DBTrack.mappings),
-            )
-        elif hasattr(self.model_class, "mappings"):
-            # For other entities with mappings
-            stmt = stmt.options(selectinload(self.model_class.mappings))  # type: ignore
-
-        # Fetch the updated entity directly
-        result = await self.session.scalars(stmt)
-        db_entity = result.first()
-
-        if not db_entity:
-            raise ValueError(f"Entity with ID {id_} not found or already deleted")
-
-        # Convert to domain model
-        domain_entity = await self.mapper.to_domain(db_entity)
-        return domain_entity
-
-    @db_operation("soft_delete")
-    async def soft_delete(self, id_: int) -> int:
-        """Soft delete entity by setting is_deleted=True. Returns affected rows."""
+        # Execute update with RETURNING
         stmt = (
             update(self.model_class)
             .where(
                 self.model_class.id == id_,
                 self.model_class.is_deleted == False,  # noqa: E712
             )
+            .values(**values)
+            .returning(self.model_class)
+        )
+
+        result = await self.session.execute(stmt)
+        updated_entity = result.scalar_one_or_none()
+
+        if not updated_entity:
+            raise ValueError(f"Entity with ID {id_} not found or already deleted")
+
+        # Return updated entity with relationships
+        await self.session.refresh(
+            updated_entity, attribute_names=self.mapper.get_default_relationships()
+        )
+        return await self.mapper.to_domain(updated_entity)
+
+    @db_operation("soft_delete")
+    async def soft_delete(self, id_: int) -> int:
+        """Soft delete with execution options."""
+        stmt = (
+            update(self.model_class)
+            .where(
+                self.model_class.id == id_,
+                filter_active(self.model_class),
+            )
             .values(
                 is_deleted=True,
                 deleted_at=datetime.now(UTC),
             )
+            .execution_options(synchronize_session=False)
         )
         result = await self.session.execute(stmt)
 
@@ -460,12 +680,14 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
 
     @db_operation("hard_delete")
     async def hard_delete(self, id_: int) -> int:
-        """Hard delete entity from database. Returns affected rows."""
+        """Hard delete with ORM-enabled DELETE."""
         stmt = (
             delete(self.model_class)
             .where(self.model_class.id == id_)
             .returning(self.model_class.id)
+            .execution_options(synchronize_session=False)
         )
+
         result = await self.session.execute(stmt)
         deleted_ids = result.scalars().all()
 
@@ -479,82 +701,109 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
     # -------------------------------------------------------------------------
 
     @db_operation("bulk_create")
-    async def bulk_create(self, entities: list[TDomainModel]) -> list[TDomainModel]:
-        """Bulk create entities using ORM approach."""
+    async def bulk_create(
+        self,
+        entities: list[TDomainModel],
+        return_models: bool = True,
+    ) -> list[TDomainModel] | int:
         if not entities:
-            return []
+            return [] if return_models else 0
 
-        # ORM approach for consistency
-        db_entities: list[TDBModel] = []
-        for entity in entities:
-            db_entity = self.mapper.to_db(entity)
-            db_entities.append(db_entity)
+        # Convert to DB models
+        db_entities = [self.mapper.to_db(entity) for entity in entities]
 
-        # Add all entities to session
-        self.session.add_all(db_entities)
-        await self.session.flush()
+        # Get column data for each entity
+        values = [
+            {
+                c.key: getattr(entity, c.key)
+                for c in inspect(self.model_class).columns
+                if hasattr(entity, c.key) and getattr(entity, c.key) is not None
+            }
+            for entity in db_entities
+        ]
 
-        # Refresh entities to ensure IDs are populated
-        for db_entity in db_entities:
-            await self._flush_and_refresh(db_entity)
+        # Single approach with conditional returning clause
+        stmt = insert(self.model_class).values(values)
 
-        # Convert back to domain models with IDs
-        domain_entities = []
-        for e in db_entities:
-            domain_entity = await self.mapper.to_domain(e)
-            domain_entities.append(domain_entity)
-
-        return domain_entities
+        if return_models:
+            stmt = stmt.returning(self.model_class)
+            result = await self.session.execute(stmt)
+            created_entities = result.scalars().all()
+            return await self.mapper.map_collection(list(created_entities))
+        else:
+            result = await self.session.execute(stmt)
+            return result.rowcount
 
     @db_operation("bulk_update")
-    async def bulk_update(self, updates: dict[int, dict[str, Any]]) -> int:
-        """Bulk update multiple entities. Returns number of updated rows."""
+    async def bulk_update(
+        self,
+        updates: dict[int, dict[str, Any]] | list[tuple[int, dict[str, Any]]],
+    ) -> int:
+        """Bulk update multiple entities using single statement with CASE expressions."""
         if not updates:
             return 0
 
-        # Process updates in batches
-        total_updated = 0
+        # Convert list format to dict format if needed
+        update_dict = updates if isinstance(updates, dict) else dict(updates)
+
+        # Early return if nothing to update
+        if not update_dict:
+            return 0
+
+        # Add updated_at timestamp to all updates
         now = datetime.now(UTC)
 
-        for entity_id, values in updates.items():
-            # Add updated_at timestamp
-            if "updated_at" not in values:
-                values["updated_at"] = now
+        # Get all IDs to update
+        ids_to_update = list(update_dict.keys())
 
-            # Run update for this entity
-            stmt = (
-                update(self.model_class)
-                .where(
-                    self.model_class.id == entity_id,
-                    self.model_class.is_deleted == False,  # noqa: E712
-                )
-                .values(**values)
-                .execution_options(synchronize_session=False)  # Optimize for bulk ops
+        # Build a single UPDATE statement with CASE expressions for each field
+        all_fields = {
+            k for entity_updates in update_dict.values() for k in entity_updates
+        }
+
+        # Build value expressions for each field using CASE
+        values_dict = {}
+        for field in all_fields:
+            # Use SQLAlchemy's case() function to create per-entity field updates
+            values_dict[field] = case(
+                *(
+                    (self.model_class.id == entity_id, value.get(field))
+                    for entity_id, value in update_dict.items()
+                    if field in value
+                ),
+                else_=getattr(self.model_class, field),
             )
-            result = await self.session.execute(stmt)
-            total_updated += result.rowcount
 
-        return total_updated
+        # Add updated_at field
+        values_dict["updated_at"] = now
+
+        # Execute single update statement
+        stmt = (
+            update(self.model_class)
+            .where(
+                self.model_class.id.in_(ids_to_update),
+                self.model_class.is_deleted == False,  # noqa: E712
+            )
+            .values(**values_dict)
+            .execution_options(synchronize_session=False)
+        )
+
+        result = await self.session.execute(stmt)
+        return result.rowcount
 
     @db_operation("bulk_delete")
     async def bulk_delete(self, ids: list[int], hard_delete: bool = False) -> int:
-        """Bulk delete multiple entities. Returns number of affected rows."""
+        """Bulk delete with execution options for better performance."""
         if not ids:
             return 0
 
         if hard_delete:
-            # Use Core DELETE with RETURNING
             stmt = (
                 delete(self.model_class)
                 .where(self.model_class.id.in_(ids))
-                .returning(self.model_class.id)
                 .execution_options(synchronize_session=False)
             )
-            result = await self.session.execute(stmt)
-            deleted_ids = result.scalars().all()
-            return len(deleted_ids)
         else:
-            # Use Core UPDATE for soft delete
             stmt = (
                 update(self.model_class)
                 .where(
@@ -565,12 +814,11 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
                     is_deleted=True,
                     deleted_at=datetime.now(UTC),
                 )
-                .returning(self.model_class.id)
                 .execution_options(synchronize_session=False)
             )
-            result = await self.session.execute(stmt)
-            updated_ids = result.scalars().all()
-            return len(updated_ids)
+
+        result = await self.session.execute(stmt)
+        return result.rowcount
 
     # -------------------------------------------------------------------------
     # TRANSACTION MANAGEMENT
@@ -598,51 +846,252 @@ class BaseRepository[TDBModel: NaradaDBBase, TDomainModel]:
             # If it's not a coroutine, it must be T directly
             return cast("T", result)
 
+    async def in_transaction[T](
+        self,
+        operations: list[Callable[[], Awaitable[T]]],
+    ) -> list[T]:
+        """Execute multiple operations within a single transaction.
+
+        Args:
+            operations: List of async callables to execute
+
+        Returns:
+            List of results from each operation
+        """
+        results: list[T] = []
+
+        async with self.session.begin_nested():
+            for operation in operations:
+                result = await operation()
+                results.append(result)
+
+        return results
+
     # -------------------------------------------------------------------------
     # GET OR CREATE PATTERN
     # -------------------------------------------------------------------------
 
-    @db_operation("get_or_create")
-    async def get_or_create(
+    @db_operation("upsert")
+    async def upsert(
         self,
         lookup_attrs: dict[str, Any],
-        _create_attrs: dict[str, Any] | None = None,
-    ) -> tuple[TDomainModel, bool]:
-        """Find an entity by attributes or create it if it doesn't exist.
+        create_attrs: dict[str, Any] | None = None,
+    ) -> TDomainModel:
+        """Upsert an entity using a two-phase approach to avoid implicit IO and greenlet issues.
 
-        This method provides a base implementation that should be overridden
-        by concrete repository classes with entity-specific creation logic.
+        This implementation follows SQLAlchemy 2.0 best practices for async by:
+        1. Using a two-phase approach to avoid complex lazy loading chains
+        2. Using explicit eager loading with selectinload for relationships
+        3. Using session.get with options for fetching entities with relationships
+        4. Never relying on implicit lazy loading of relationships
+        """
+        # Combine lookup and create attributes for the insert operation
+        insert_values = {**lookup_attrs}
+        if create_attrs:
+            insert_values.update(create_attrs)
+
+        # Add timestamps
+        now = datetime.now(UTC)
+        if "created_at" not in insert_values:
+            insert_values["created_at"] = now
+        if "updated_at" not in insert_values:
+            insert_values["updated_at"] = now
+
+        try:
+            # Phase 1: Try to find existing entity with lookup attributes
+            # This avoids the complex lazy loading chains that cause greenlet issues
+            lookup_query = select(self.model_class.id).where(
+                self.model_class.is_deleted == False  # noqa: E712
+            )
+
+            # Add lookup conditions
+            for field, value in lookup_attrs.items():
+                lookup_query = lookup_query.where(
+                    getattr(self.model_class, field) == value
+                )
+
+            # Execute query to get ID only
+            result = await self.session.execute(lookup_query)
+            existing_id = result.scalar_one_or_none()
+
+            if existing_id:
+                # Entity exists, update it by ID
+                update_values = {
+                    k: v
+                    for k, v in insert_values.items()
+                    if k != "created_at" and k not in lookup_attrs
+                }
+                update_values["updated_at"] = now  # Always update timestamp
+
+                # Execute update
+                await self.session.execute(
+                    update(self.model_class)
+                    .where(self.model_class.id == existing_id)
+                    .values(**update_values)
+                )
+
+                # Fetch updated entity with basic eager loading of direct relationships only
+                options = []
+
+                # Only include direct relationships that exist on this model
+                for rel_name in self.mapper.get_default_relationships():
+                    # Skip any nested relationships containing dots
+                    if "." in rel_name:
+                        continue
+
+                    # Only add relationships that actually exist on this model class
+                    if (
+                        hasattr(self.model_class, rel_name)
+                        and rel_name in inspect(self.model_class).relationships
+                    ):
+                        options.append(
+                            selectinload(getattr(self.model_class, rel_name))
+                        )
+
+                # Use session.get with eager loading - this is the recommended pattern
+                # for safely loading entities in an async context
+                db_entity = await self.session.get(
+                    self.model_class, existing_id, options=options
+                )
+
+                # Convert to domain model
+                if db_entity is None:
+                    raise ValueError("Failed to retrieve entity after update")
+                return await self.mapper.to_domain(db_entity)
+            else:
+                # Phase 2: Entity doesn't exist, create it
+                # Use simple insert instead of complex on_conflict_do_update
+                stmt = (
+                    insert(self.model_class)
+                    .values(**insert_values)
+                    .returning(self.model_class.id)
+                )
+                result = await self.session.execute(stmt)
+                new_id = result.scalar_one()
+
+                # Fetch newly created entity with basic eager loading of direct relationships only
+                options = []
+
+                # Only include direct relationships that exist on this model
+                for rel_name in self.mapper.get_default_relationships():
+                    # Skip any nested relationships containing dots
+                    if "." in rel_name:
+                        continue
+
+                    # Only add relationships that actually exist on this model class
+                    if (
+                        hasattr(self.model_class, rel_name)
+                        and rel_name in inspect(self.model_class).relationships
+                    ):
+                        options.append(
+                            selectinload(getattr(self.model_class, rel_name))
+                        )
+
+                # Use session.get with eager loading for all needed relationships
+                db_entity = await self.session.get(
+                    self.model_class, new_id, options=options
+                )
+
+                # Convert to domain model
+                if db_entity is None:
+                    raise ValueError("Failed to retrieve entity after create")
+                return await self.mapper.to_domain(db_entity)
+
+        except Exception as e:
+            logger.error(f"Upsert error: {e}")
+            raise
+
+    @db_operation("bulk_upsert")
+    async def bulk_upsert(
+        self,
+        entities: list[dict[str, Any]],
+        lookup_keys: list[str],
+        return_models: bool = True,
+    ) -> list[TDomainModel] | int:
+        """Perform bulk upsert optimized for SQLite.
 
         Args:
-            lookup_attrs: Dictionary of attribute name/value pairs to search for
-            create_attrs: Additional attributes to use when creating (if needed)
+            entities: List of dictionaries with entity attributes
+            lookup_keys: Keys to use for looking up existing entities
+            return_models: Whether to return domain models or count
 
         Returns:
-            tuple: (entity, created) where:
-                - entity: The found or created domain entity
-                - created: True if entity was created, False if found
+            List of domain models or count of affected rows
         """
-        # Build query directly
-        stmt = self.select()
+        if not entities:
+            return [] if return_models else 0
 
-        # Apply lookup conditions
-        for field, value in lookup_attrs.items():
-            if hasattr(self.model_class, field):
-                stmt = stmt.where(getattr(self.model_class, field) == value)
+        # Add timestamps to all entities
+        now = datetime.now(UTC)
+        for entity in entities:
+            if "created_at" not in entity:
+                entity["created_at"] = now
+            if "updated_at" not in entity:
+                entity["updated_at"] = now
 
-        stmt = stmt.limit(1)
+        try:
+            # SQLite-specific bulk upsert
+            stmt = sqlite_insert(self.model_class).values(entities)
 
-        # Execute query directly
-        result = await self.session.scalars(stmt)
-        db_entity = result.first()
+            # Determine which columns to update (exclude lookup keys and id)
+            all_keys = set(
+                functools.reduce(
+                    operator.iadd, [list(entity.keys()) for entity in entities], []
+                )
+            )
+            update_keys = all_keys - set(lookup_keys) - {"id"}
 
-        if db_entity:
-            domain_entity = await self.mapper.to_domain(db_entity)
-            return domain_entity, False
+            # Create update_dict using the excluded values
+            update_dict = {
+                key: getattr(stmt.excluded, key)
+                for key in update_keys
+                if hasattr(stmt.excluded, key)
+            }
 
-        # Concrete repositories should override this method with entity-specific
-        # creation logic. This implementation just shows the common pattern.
-        raise NotImplementedError(
-            f"get_or_create not implemented for {self.model_class.__name__}. "
-            "Repository implementations must override this method.",
-        )
+            # Add the ON CONFLICT clause
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[getattr(self.model_class, k) for k in lookup_keys],
+                set_=update_dict,
+            )
+
+            # Add RETURNING clause if needed
+            if return_models:
+                stmt = stmt.returning(self.model_class)
+
+            # Execute the statement
+            result = await self.session.execute(stmt)
+
+            if return_models:
+                db_entities = result.scalars().all()
+
+                # Refresh all entities to load relationships
+                for db_entity in db_entities:
+                    for rel in self.mapper.get_default_relationships():
+                        await self.session.refresh(db_entity, [rel])
+
+                return await self.mapper.map_collection(list(db_entities))
+            else:
+                return len(entities)
+
+        except Exception as e:
+            logger.debug(f"SQLite bulk upsert failed, using individual upserts: {e}")
+
+            # Fall back to individual upserts
+            results = []
+            count = 0
+
+            for entity_dict in entities:
+                lookup_dict = {
+                    k: entity_dict[k] for k in lookup_keys if k in entity_dict
+                }
+                create_dict = {
+                    k: v for k, v in entity_dict.items() if k not in lookup_keys
+                }
+
+                entity = await self.upsert(lookup_dict, create_dict)
+                count += 1
+
+                if return_models:
+                    results.append(entity)
+
+            return results if return_models else count

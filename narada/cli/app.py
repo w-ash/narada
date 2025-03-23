@@ -5,11 +5,16 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
 
+import click
 from rich.console import Console
 import typer
 
 from narada.cli.command_registry import register_all_commands
-from narada.cli.ui import display_welcome_banner, run_interactive_shell
+from narada.cli.ui import (
+    display_welcome_banner,
+    get_command_suggestions,
+    run_interactive_shell,
+)
 from narada.config import get_logger, log_startup_info, setup_loguru_logger
 
 VERSION = version("narada")
@@ -26,34 +31,20 @@ app = typer.Typer(
     add_completion=False,
 )
 
-# Define command groups
-setup_app = typer.Typer(
-    help="Configure API keys and service connections",
-    rich_help_panel="Setup",
-)
-ops_app = typer.Typer(
-    help="Manage playlists and track operations",
-    rich_help_panel="Operations",
-)
-util_app = typer.Typer(
-    help="View status and perform maintenance",
-    rich_help_panel="Utilities",
-)
-
 # Register all commands to main app
 register_all_commands(app)
-
-# Subcommand groups - add after registering main commands
-app.add_typer(setup_app, name="setup")
-app.add_typer(ops_app, name="ops")
-app.add_typer(util_app, name="util")
 
 
 def get_commands_for_display() -> list[dict[str, str]]:
     """Extract commands from the Typer app for display purposes."""
-    # The core issue is we need to register commands before the CLI is fully initialized
-    # Here we register our commands directly to show in welcome banner
-    commands = [
+    # Use registered commands from command_registry if available
+    from narada.cli.command_registry import REGISTERED_COMMANDS, get_registered_commands
+
+    if REGISTERED_COMMANDS:
+        return get_registered_commands()
+
+    # Fallback to hardcoded list if commands haven't been registered yet
+    return [
         {
             "name": "status",
             "help": "Check connection status of music services",
@@ -85,8 +76,6 @@ def get_commands_for_display() -> list[dict[str, str]]:
             "category": "Operations",
         },
     ]
-
-    return commands
 
 
 @app.callback(invoke_without_command=True)
@@ -164,8 +153,37 @@ def main() -> int:
             command_list = get_commands_for_display()
             return run_interactive_shell(app, VERSION, command_list)
         else:
-            # Run in normal command mode
-            return app(standalone_mode=False) or 0
+            # Run in normal command mode with better error handling
+            try:
+                return app(standalone_mode=False) or 0
+            except typer.Exit as e:
+                return e.exit_code
+            except typer.Abort:
+                console.print("[yellow]Operation aborted[/yellow]")
+                return 1
+            except click.exceptions.UsageError as e:
+                # Handle usage errors gracefully with suggestions
+                cmd_name = (
+                    str(e).split("'")[1]
+                    if "'" in str(e) and "No such command" in str(e)
+                    else None
+                )
+                if cmd_name:
+                    console.print(
+                        f"[yellow]Unknown command: [bold]{cmd_name}[/bold][/yellow]"
+                    )
+
+                    # Get command suggestions
+                    suggestions = get_command_suggestions(
+                        cmd_name, get_commands_for_display()
+                    )
+                    if suggestions:
+                        console.print("[dim]Did you mean:[/dim]")
+                        for suggestion in suggestions[:3]:
+                            console.print(f"  [cyan]{suggestion}[/cyan]")
+                else:
+                    console.print(f"[yellow]Usage error: {e}[/yellow]")
+                return 1
     except typer.Exit as e:
         return e.exit_code
     except Exception:

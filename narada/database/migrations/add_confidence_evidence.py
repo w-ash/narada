@@ -9,11 +9,12 @@ Usage:
 
 from typing import Any
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
-# Target table 
+from alembic import op
+
+# Target table
 target_table = "track_mappings"
 new_column = "confidence_evidence"
 

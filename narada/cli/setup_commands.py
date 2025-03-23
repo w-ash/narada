@@ -9,6 +9,7 @@ from rich.panel import Panel
 from rich.table import Table
 import typer
 
+from narada.cli.command_registry import register_command
 from narada.config import get_config, get_logger
 from narada.database.db_models import init_db
 
@@ -19,8 +20,21 @@ logger = get_logger(__name__)
 
 def register_setup_commands(app: typer.Typer) -> None:
     """Register setup commands with the Typer app."""
-    app.command()(setup)
-    app.command(name="init-db")(initialize_database)
+    register_command(
+        app=app,
+        name="setup",
+        help_text="Configure your music service connections",
+        category="Setup",
+        examples=["setup", "setup --force"],
+    )(setup)
+
+    register_command(
+        app=app,
+        name="init-db",
+        help_text="Initialize the database schema",
+        category="Setup",
+        examples=["init-db"],
+    )(initialize_database)
 
 
 def setup(

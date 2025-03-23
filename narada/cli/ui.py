@@ -26,13 +26,7 @@ logger = get_logger(__name__)
 def display_welcome_banner(
     version: str, commands: list[dict[str, Any]], is_repl: bool = False
 ) -> None:
-    """Display an elegant welcome banner using Rich.
-
-    Args:
-        version: The application version
-        commands: List of command dictionaries with metadata
-        is_repl: Whether this is for the REPL (interactive) mode
-    """
+    """Display an elegant welcome banner using Rich."""
     console.print("\n")
     console.print(
         Text("🎵 NARADA", style="bold rgb(255,140,0)"),
@@ -59,17 +53,24 @@ def display_welcome_banner(
     panel_content = ["[bold green]Welcome to Narada![/bold green]\n"]
 
     if is_repl:
-        panel_content.append("[dim]Available commands:[/dim]")
+        panel_content.append("[dim]Shell commands:[/dim]")
         panel_content.append("[yellow]help[/yellow] - Show this menu")
         panel_content.append("[yellow]exit[/yellow] - Exit the shell")
         panel_content.append("[yellow]<tab>[/yellow] - Press to complete commands")
+        panel_content.append("[yellow]?[/yellow] - Show this help screen")
 
-    for group, cmds in command_groups.items():
+    # Organize commands by category for better presentation
+    for group, cmds in sorted(command_groups.items()):
         if cmds:
             panel_content.append(f"\n[yellow]{group}:[/yellow]")
-            panel_content.extend(
-                f"• [cyan]{cmd['name']}[/cyan] - {cmd['help']}" for cmd in cmds
-            )
+            for cmd in sorted(cmds, key=lambda c: c["name"]):
+                # Add examples if available
+                examples = cmd.get("examples", [])
+                example_text = f" [dim](e.g. {examples[0]})[/dim]" if examples else ""
+
+                panel_content.append(
+                    f"• [cyan]{cmd['name']}[/cyan] - {cmd['help']}{example_text}"
+                )
 
     if not is_repl:
         panel_content.append(
@@ -270,16 +271,14 @@ def display_error(error: Exception, operation: str) -> None:
 def run_interactive_shell(
     app: typer.Typer, version: str, commands: list[dict[str, Any]]
 ) -> int:
-    """Run an interactive REPL for the application.
-
-    Args:
-        app: The Typer application
-        version: The application version
-        commands: List of commands with their metadata
-
-    Returns:
-        Exit code (0 for success)
-    """
+    """Run an interactive REPL for the application."""
+    # Import click exceptions here to handle command errors gracefully
+    from click.exceptions import (
+        BadParameter,
+        MissingParameter,
+        NoSuchOption,
+        UsageError,
+    )
 
     # Display welcome banner
     display_welcome_banner(version, commands, is_repl=True)
@@ -326,6 +325,28 @@ def run_interactive_shell(
             # Execute the command (synchronously)
             try:
                 app(args, standalone_mode=False)
+            except (BadParameter, MissingParameter, NoSuchOption) as e:
+                # Handle parameter errors gracefully
+                console.print(f"[yellow]Command parameter error: {e}[/yellow]")
+                console.print(f"[dim]Try '{args[0]} --help' for more information[/dim]")
+            except UsageError as e:
+                # Handle unknown commands and usage errors gracefully
+                if "No such command" in str(e):
+                    cmd_name = str(e).split("'")[1] if "'" in str(e) else "unknown"
+                    console.print(
+                        f"[yellow]Unknown command: [bold]{cmd_name}[/bold][/yellow]"
+                    )
+
+                    # Get command suggestions
+                    suggestions = get_command_suggestions(cmd_name, commands)
+                    if suggestions:
+                        console.print("[dim]Did you mean:[/dim]")
+                        for suggestion in suggestions[:3]:  # Limit to top 3 suggestions
+                            console.print(f"  [cyan]{suggestion}[/cyan]")
+
+                    console.print("[dim]Type 'help' to see available commands[/dim]")
+                else:
+                    console.print(f"[yellow]Usage error: {e}[/yellow]")
             except typer.Exit as e:
                 if e.exit_code != 0:
                     console.print(
@@ -334,7 +355,9 @@ def run_interactive_shell(
             except typer.Abort:
                 console.print("[yellow]Command aborted[/yellow]")
             except Exception as e:
-                display_error(e, f"command execution: {command_str}")
+                # Only log the exception, show a clean error to the user
+                logger.exception(f"Error during command execution: {command_str}")
+                console.print(f"[red]Error: {e!s}[/red]")
 
         except KeyboardInterrupt:
             console.print(
@@ -345,3 +368,41 @@ def run_interactive_shell(
             running = False
 
     return 0
+
+
+def get_command_suggestions(
+    input_cmd: str, commands: list[dict[str, str]]
+) -> list[str]:
+    """Get command suggestions based on partial input.
+
+    Uses fuzzy matching to suggest commands that are similar to what was typed.
+
+    Args:
+        input_cmd: Partial command that was typed
+        commands: List of available commands
+
+    Returns:
+        List of suggested command names
+    """
+    if not input_cmd:
+        return []
+
+    # Simple fuzzy matching - could be enhanced with a proper fuzzy search library
+    input_lower = input_cmd.lower()
+
+    # Check for exact matches first
+    exact_matches = [
+        cmd["name"] for cmd in commands if cmd["name"].lower() == input_lower
+    ]
+    if exact_matches:
+        return exact_matches
+
+    # Then check for commands that start with the input
+    prefix_matches = [
+        cmd["name"] for cmd in commands if cmd["name"].lower().startswith(input_lower)
+    ]
+    if prefix_matches:
+        return prefix_matches
+
+    # Then check for commands that contain the input
+    return [cmd["name"] for cmd in commands if input_lower in cmd["name"].lower()]

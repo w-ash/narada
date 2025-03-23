@@ -6,8 +6,7 @@ from narada.config import get_logger
 from narada.core.models import TrackList
 from narada.database.db_connection import get_session
 from narada.integrations.spotify import SpotifyConnector
-from narada.repositories.playlist import PlaylistRepository
-from narada.repositories.track import UnifiedTrackRepository
+from narada.repositories.playlist_repo import PlaylistRepository
 
 logger = get_logger(__name__)
 
@@ -65,8 +64,7 @@ async def spotify_playlist_source(_context: dict, config: dict) -> dict[str, Any
 
     # Save playlist and tracks to database
     async with get_session() as session:
-        # Create repository instances
-        track_repo = UnifiedTrackRepository(session)
+        # Create repository instance with shared session
         playlist_repo = PlaylistRepository(session)
 
         # First, try to get by connector ID
@@ -86,15 +84,11 @@ async def spotify_playlist_source(_context: dict, config: dict) -> dict[str, Any
                 updated_playlist = await playlist_repo.update_playlist(
                     existing_playlist.id,
                     playlist,
-                    track_repo,
                 )
             else:
                 # Handle case where ID is None
                 logger.warning("Existing playlist has no ID, creating new instead")
-                updated_playlist = await playlist_repo.save_playlist(
-                    playlist,
-                    track_repo,
-                )
+                updated_playlist = await playlist_repo.save_playlist(playlist)
 
             logger.info(
                 f"Updated playlist {updated_playlist.id} with {len(updated_playlist.tracks)} tracks",
@@ -103,19 +97,23 @@ async def spotify_playlist_source(_context: dict, config: dict) -> dict[str, Any
         else:
             # Not found, create new playlist
             logger.info("Creating new playlist in database")
-            saved_playlist = await playlist_repo.save_playlist(playlist, track_repo)
+            saved_playlist = await playlist_repo.save_playlist(playlist)
             logger.info(f"Created playlist with ID {saved_playlist.id}")
 
         # Create tracklist for downstream nodes
         tracklist = TrackList.from_playlist(saved_playlist)
-        
+
         # Verify all tracks have IDs - this should now be guaranteed by our repository pattern
         missing_ids = [i for i, t in enumerate(tracklist.tracks) if t.id is None]
         if missing_ids:
-            logger.error(f"Found {len(missing_ids)} tracks without IDs after playlist persistence")
+            logger.error(
+                f"Found {len(missing_ids)} tracks without IDs after playlist persistence"
+            )
             for i in missing_ids[:5]:  # Log details for up to 5 missing IDs
                 track = tracklist.tracks[i]
-                logger.error(f"Track missing ID: {track.title} by {[a.name for a in track.artists]}")
+                logger.error(
+                    f"Track missing ID: {track.title} by {[a.name for a in track.artists]}"
+                )
             raise ValueError(
                 f"Critical error: {len(missing_ids)}/{len(tracklist.tracks)} tracks missing IDs. "
                 "Check repository implementation and eager loading configuration.",

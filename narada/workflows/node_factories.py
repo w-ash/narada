@@ -174,9 +174,9 @@ def create_enricher_node(config: dict) -> NodeFn:
 
                 try:
                     # Extract value using the appropriate method based on the attribute
-                    if attr in result.metadata:
-                        # Direct access from metadata if available there
-                        value = result.metadata.get(attr)
+                    if attr in result.service_data:
+                        # Direct access from service_data if available there
+                        value = result.service_data.get(attr)
                     else:
                         # Use configured extractor for standard attributes
                         value = extractor(result)

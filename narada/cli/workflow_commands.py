@@ -17,6 +17,7 @@ from rich.progress import (
 from rich.table import Table
 import typer
 
+from narada.cli.command_registry import register_command
 from narada.cli.ui import display_error, display_workflow_result
 from narada.config import get_config, get_logger
 from narada.workflows.prefect import (
@@ -31,7 +32,17 @@ logger = get_logger(__name__)
 
 def register_workflow_commands(app: typer.Typer) -> None:
     """Register workflow commands with the Typer app."""
-    app.command(name="workflow")(run_workflow)
+    register_command(
+        app=app,
+        name="workflow",
+        help_text="Run a workflow from available definitions",
+        category="Operations",
+        examples=[
+            "workflow",
+            "workflow spotify-to-lastfm",
+            "workflow --no-results my-workflow",
+        ],
+    )(run_workflow)
 
 
 def initialize_workflow_system() -> tuple[bool, str]:
@@ -84,6 +95,22 @@ def workflow_progress_callback(event_type: str, event_data: dict[str, Any]) -> N
                     f"[green]✓ Completed:[/green] [bold]{task_name}[/bold] [dim]({task_type})[/dim]",
                 )
 
+        case "workflow_started":
+            workflow_name = event_data.get("workflow_name", "Unknown workflow")
+            console.print(
+                f"[bold blue]▶ Starting workflow:[/bold blue] [bold]{workflow_name}[/bold]"
+            )
+
+        case "workflow_completed":
+            workflow_name = event_data.get("workflow_name", "Unknown workflow")
+            console.print(
+                f"[bold green]✓ Workflow completed:[/bold green] [bold]{workflow_name}[/bold]"
+            )
+
+        case _:
+            # Handle any other event types
+            logger.debug(f"Unhandled event type: {event_type}", event_data=event_data)
+
 
 async def list_workflows() -> list[dict[str, Any]]:  # noqa: RUF029
     """Get available workflows."""
@@ -99,7 +126,7 @@ async def list_workflows() -> list[dict[str, Any]]:  # noqa: RUF029
     available_workflows = []
     for file_path in workflows_dir.glob("*.json"):
         try:
-            with open(file_path) as f:
+            with open(file_path) as f:  # noqa: ASYNC230
                 workflow_def = json.load(f)
                 wf_id = workflow_def.get("id")
                 if wf_id:
@@ -233,7 +260,7 @@ async def run_workflow_async(
 
         try:
             # Load workflow definition
-            with open(workflow_info["path"]) as f:
+            with open(workflow_info["path"]) as f:  # noqa: ASYNC230
                 workflow_def = json.load(f)
 
             # Execute workflow

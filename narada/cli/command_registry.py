@@ -1,25 +1,66 @@
-"""Command registry for Narada CLI.
+"""Command registry for Narada CLI."""
 
-This module provides a central place to register commands
-with the CLI app, making it easy to organize commands into
-separate modules without losing track of them.
-"""
+from collections.abc import Callable, Sequence
+from typing import Any
 
 import typer
 
 # Define service names as constants
 SERVICES = ["Spotify", "Last.fm", "MusicBrainz"]
 
+# Track registered commands with rich metadata
+# Update the type annotation to properly reflect the structure
+REGISTERED_COMMANDS: dict[str, dict[str, str | list[str] | Sequence[str]]] = {}
 
-def register_all_commands(app: typer.Typer) -> None:
-    """Register all commands with the Typer app.
 
-    This is the main entry point for commands registration,
-    importing each command group and registering its commands.
+def register_command(
+    app: typer.Typer,
+    name: str,
+    help_text: str,
+    category: str,
+    aliases: Sequence[str] | None = None,
+    examples: Sequence[str] | None = None,
+) -> Callable:
+    """Decorator to register a command with rich metadata.
 
     Args:
-        app: The Typer app to register commands with
+        app: Typer app to register with
+        name: Command name
+        help_text: Help text for command
+        category: Command category for grouping in displays
+        aliases: Optional alternative names for the command
+        examples: Optional usage examples
     """
+
+    def decorator(func: Callable) -> Callable:
+        # Register with Typer
+        typer_command = app.command(
+            name=name,
+            help=help_text,
+        )(func)
+
+        # Track command metadata
+        REGISTERED_COMMANDS[name] = {
+            "name": name,
+            "help": help_text,
+            "category": category,
+            "aliases": aliases or [],
+            "examples": examples or [],
+            "callback": func.__name__,
+        }
+
+        return typer_command
+
+    return decorator
+
+
+def get_registered_commands() -> list[dict[str, Any]]:
+    """Get list of all registered commands with metadata."""
+    return list(REGISTERED_COMMANDS.values())
+
+
+def register_all_commands(app: typer.Typer) -> None:
+    """Register all commands with the Typer app."""
     from narada.cli.setup_commands import register_setup_commands
     from narada.cli.status_commands import register_status_commands
     from narada.cli.sync_commands import register_sync_commands

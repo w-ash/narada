@@ -97,6 +97,16 @@ class DBTrack(NaradaDBBase):
         passive_deletes=True,
     )
 
+    # Add table constraints including UNIQUE constraints
+    __table_args__ = (
+        # Add UNIQUE constraints for fields used in upsert operations
+        UniqueConstraint("isrc", name="uq_tracks_isrc"),
+        UniqueConstraint("spotify_id", name="uq_tracks_spotify_id"),
+        UniqueConstraint("mbid", name="uq_tracks_mbid"),
+        # Create composite indexes for performance
+        Index("ix_tracks_title_artists", "title"),
+    )
+
 
 class DBConnectorTrack(NaradaDBBase):
     """External track representation from a specific music service."""
@@ -154,6 +164,7 @@ class DBTrackMapping(NaradaDBBase):
     )
 
     __table_args__ = (
+        UniqueConstraint("track_id", "connector_track_id", name="uq_track_mappings_track_connector"),
         Index("ix_track_mappings_lookup", "track_id", "connector_track_id"),
     )
 
@@ -163,6 +174,9 @@ class DBTrackMetric(NaradaDBBase):
 
     __tablename__ = "track_metrics"
     __table_args__ = (
+        # Create a unique constraint to prevent duplicate metrics
+        UniqueConstraint("track_id", "connector_name", "metric_type", name="uq_track_metrics_unique"),
+        # Keep the lookup index for query performance
         Index("ix_track_metrics_lookup", "track_id", "connector_name", "metric_type"),
     )
 

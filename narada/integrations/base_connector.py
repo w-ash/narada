@@ -25,7 +25,6 @@ import backoff
 from narada.config import get_logger
 from narada.core.protocols import get_metric_freshness, register_metric_resolver
 from narada.database.db_connection import get_session
-from narada.repositories.track import UnifiedTrackRepository
 
 # Get contextual logger
 logger = get_logger(__name__).bind(service="connectors")
@@ -56,6 +55,8 @@ class ConnectorConfig(TypedDict, total=False):
 class MetricResolverProtocol(Protocol):
     """Protocol defining the interface for metric resolvers."""
 
+    CONNECTOR: ClassVar[str]
+
     async def resolve(self, track_ids: list[int], metric_name: str) -> dict[int, Any]:
         """Fetch stored service metrics from the database.
 
@@ -80,119 +81,89 @@ class BaseMetricResolver:
     CONNECTOR: ClassVar[str] = ""
 
     async def resolve(self, track_ids: list[int], metric_name: str) -> dict[int, Any]:
-        """Fetch stored service metrics from the database.
+        """Resolve a metric for multiple tracks.
 
         This implementation:
-        1. Retrieves the metadata field name from FIELD_MAP
-        2. Gets metadata from connector_tracks table
-        3. Saves to track_metrics table for future retrieval
-        4. Returns standardized metric values
-
-        Args:
-            track_ids: List of internal track IDs
-            metric_name: Metric to resolve
-
-        Returns:
-            Dictionary mapping track_id integers to metric values
+        1. Checks for cached values using TrackMetricsRepository
+        2. For missing values, fetches from connector_metadata
+        3. Saves any new values found back to the track_metrics table
+        4. Returns all values
         """
+        from narada.config import get_logger
+        from narada.repositories.track.connector import TrackConnectorRepository
+        from narada.repositories.track.metrics import TrackMetricsRepository
+
+        logger = get_logger(__name__).bind(
+            service="connectors",
+            module="narada.integrations.base_connector",
+            connector=self.CONNECTOR,
+            metric_name=metric_name,
+        )
+
         if not track_ids:
             return {}
 
-        # Get the connector field name
-        field = self.FIELD_MAP.get(metric_name)
-        if not field:
-            return {}
+        # Get current value to respect TTL
+        max_age = get_metric_freshness(metric_name)
 
-        # Get metrics from connector metadata and store in track_metrics
         async with get_session() as session:
-            track_repo = UnifiedTrackRepository(session)
-
-            # Get metadata from connector tracks
-            metadata = await track_repo.get_connector_metadata(
-                track_ids=track_ids,
-                connector=self.CONNECTOR,
-                metadata_field=field,
-            )
-
-            # Debug log the retrieved metadata with more details
-            non_zero_values = {k: v for k, v in metadata.items() if v != 0}
-            logger.info(
-                f"Retrieved {self.CONNECTOR} metadata for {field}",
-                total_values=len(metadata),
-                non_zero_values=len(non_zero_values),
-                sample_values=list(non_zero_values.items())[:5]
-                if non_zero_values
-                else [],
-                zero_sample=[
-                    item for item in list(metadata.items())[:5] if item[1] == 0
-                ],
-                connector=self.CONNECTOR,
-                metric_name=metric_name,
-            )
-
-            # Save metrics to database - store all numeric values including zeros
-            metrics_to_save = [
-                (track_id, self.CONNECTOR, metric_name, float(value))
-                for track_id, value in metadata.items()
-                if value is not None and isinstance(value, int | float)
-            ]
-
-            if metrics_to_save:
-                await track_repo.save_track_metrics(metrics_to_save)
-                # Get metric-specific freshness requirement
-                max_age_hours = get_metric_freshness(metric_name)
-
-                logger.info(
-                    f"Saved {self.CONNECTOR} {field} metrics",
-                    count=len(metrics_to_save),
-                    metric_name=metric_name,
-                    freshness_hours=max_age_hours,
-                )
-            elif metadata:
-                # Log when we have metadata but no valid metrics to save
-                logger.warning(
-                    f"No valid {self.CONNECTOR} {field} metrics to save",
-                    metric_name=metric_name,
-                    metadata_count=len(metadata),
-                    has_none_values=any(value is None for value in metadata.values()),
-                    has_zero_values=any(
-                        value == 0 for value in metadata.values() if value is not None
-                    ),
-                )
-
-            # Get metric-specific freshness requirement for database query
-            max_age_hours = get_metric_freshness(metric_name)
-
-            # Get updated metrics from track_metrics table with appropriate freshness
-            metrics_dict = await track_repo.get_track_metrics(
-                track_ids=track_ids,
+            metrics_repo = TrackMetricsRepository(session)
+            # Get cached metrics that aren't stale
+            cached_values = await metrics_repo.get_track_metrics(
+                track_ids,
                 metric_type=metric_name,
                 connector=self.CONNECTOR,
-                max_age_hours=max_age_hours,
+                max_age_hours=max_age,
             )
 
-            # Identify tracks with missing metrics
-            missing_tracks = [
-                track_id for track_id in track_ids if track_id not in metrics_dict
-            ]
+            # Find IDs with missing metrics
+            missing_ids = [tid for tid in track_ids if tid not in cached_values]
 
-            if missing_tracks:
+            if missing_ids:
                 logger.info(
-                    f"Found {len(missing_tracks)} tracks with missing {metric_name} data",
-                    connector=self.CONNECTOR,
-                    metric_name=metric_name,
+                    f"Found {len(missing_ids)} tracks with missing {metric_name} data",
                     track_count=len(track_ids),
-                    missing_count=len(missing_tracks),
-                    missing_sample=missing_tracks[:5],
+                    missing_count=len(missing_ids),
+                    missing_sample=missing_ids[:5],
                 )
 
-            # Return with integer keys with None for missing values (not 0)
-            # This ensures the system can distinguish between "0 plays" and "unknown plays"
-            # Important: Return integer keys to maintain consistent ID representation
-            return {
-                int(track_id): metrics_dict.get(track_id, None)
-                for track_id in track_ids
-            }
+                # Get the source field from mapping
+                field_name = self.FIELD_MAP.get(metric_name)
+                if not field_name:
+                    logger.warning(f"No field mapping for {metric_name}")
+                    return cached_values
+
+                # Retrieve metadata for missing tracks
+                connector_repo = TrackConnectorRepository(session)
+                metadata = await connector_repo.get_connector_metadata(
+                    missing_ids, self.CONNECTOR, field_name
+                )
+
+                # Save new metrics
+                metrics_to_save = []
+                for track_id, value in metadata.items():
+                    if value is not None and not isinstance(value, dict):
+                        try:
+                            float_value = float(value)
+                            metrics_to_save.append((
+                                track_id,
+                                self.CONNECTOR,
+                                metric_name,
+                                float_value,
+                            ))
+                            cached_values[track_id] = value
+                        except (ValueError, TypeError):
+                            logger.warning(
+                                f"Cannot convert {value} to float for {metric_name}"
+                            )
+
+                # Batch save all metrics
+                if metrics_to_save:
+                    saved_count = await metrics_repo.save_track_metrics(metrics_to_save)
+                    await session.commit()  # Important: commit the changes
+                    logger.info(f"Saved {saved_count} new metrics for {metric_name}")
+
+        return cached_values
 
 
 @define(frozen=True, slots=True)

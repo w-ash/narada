@@ -18,8 +18,8 @@ from narada.config import get_logger
 from narada.core.models import Playlist, Track, TrackList
 from narada.database.db_connection import get_session
 from narada.integrations.spotify import SpotifyConnector
-from narada.repositories.playlist import PlaylistRepository
-from narada.repositories.track import UnifiedTrackRepository
+from narada.repositories.playlist_repo import PlaylistRepository
+from narada.repositories.track import TrackRepositories
 
 logger = get_logger(__name__)
 
@@ -39,13 +39,13 @@ async def persist_tracks(tracklist: TrackList) -> tuple[list[Track], dict]:
     stats = {"new_tracks": 0, "updated_tracks": 0}
 
     async with get_session() as session:
-        track_repo = UnifiedTrackRepository(session)
+        track_repos = TrackRepositories(session)
         db_tracks = []
 
         for track in tracklist.tracks:
             try:
                 original_id = track.id
-                saved_track = await track_repo.save_track(track)
+                saved_track = await track_repos.core.save_track(track)
 
                 if original_id != saved_track.id:
                     if original_id is None:
@@ -77,7 +77,6 @@ async def handle_internal_destination(
     # Create playlist
     async with get_session() as session:
         playlist_repo = PlaylistRepository(session)
-        track_repo = UnifiedTrackRepository(session)
 
         playlist = Playlist(
             name=name,
@@ -85,7 +84,7 @@ async def handle_internal_destination(
             tracks=db_tracks,
         )
 
-        saved_playlist = await playlist_repo.save_playlist(playlist, track_repo)
+        saved_playlist = await playlist_repo.save_playlist(playlist)
         await session.commit()
 
     # Preserve original metadata in result
@@ -119,7 +118,6 @@ async def handle_spotify_destination(
 
     async with get_session() as session:
         playlist_repo = PlaylistRepository(session)
-        track_repo = UnifiedTrackRepository(session)
 
         # Create playlist with Spotify ID
         playlist = Playlist(
@@ -129,7 +127,7 @@ async def handle_spotify_destination(
             connector_playlist_ids={"spotify": spotify_id},
         )
 
-        saved_playlist = await playlist_repo.save_playlist(playlist, track_repo)
+        saved_playlist = await playlist_repo.save_playlist(playlist)
         await session.commit()
 
     # Preserve original metadata in result
@@ -163,19 +161,20 @@ async def handle_update_spotify_destination(
 
     # Update playlist in database and Spotify
     async with get_session() as session:
-        track_repo = UnifiedTrackRepository(session)
         playlist_repo = PlaylistRepository(session)
 
         # Get existing playlist by connector ID
         existing = await playlist_repo.get_playlist_by_connector(
-            "spotify", 
+            "spotify",
             spotify_id,
             raise_if_not_found=False,
         )
-        
+
         if not existing:
-            raise ValueError(f"Playlist with Spotify ID {spotify_id} not found in database")
-            
+            raise ValueError(
+                f"Playlist with Spotify ID {spotify_id} not found in database"
+            )
+
         # Update tracks based on append mode
         updated_tracks = existing.tracks + db_tracks if append else db_tracks
         updated = existing.with_tracks(updated_tracks)
@@ -187,11 +186,10 @@ async def handle_update_spotify_destination(
         # Then update database
         if existing.id is None:
             raise ValueError("Existing playlist has no ID")
-            
+
         updated_playlist = await playlist_repo.update_playlist(
             existing.id,
             updated,
-            track_repo,
         )
         await session.commit()
 
