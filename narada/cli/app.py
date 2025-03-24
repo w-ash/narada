@@ -28,7 +28,7 @@ app = typer.Typer(
     help="Narada - Your personal music integration platform",
     no_args_is_help=True,
     rich_markup_mode="rich",
-    add_completion=False,
+    add_completion=True,  # Changed from False to True
 )
 
 # Register all commands to main app
