@@ -1,30 +1,32 @@
 """Base connector module providing shared functionality for music service connectors.
 
 This module defines common abstractions and utilities for music service connectors
-including standardized metric resolution, connector configuration, and error handling.
+including standardized metric resolution, batch processing, and error handling.
 
 Key Components:
--------------
-MetricResolverProtocol: Protocol defining the interface for metric resolvers
-ConnectorConfig: TypedDict for standardized connector configuration
-BaseMetricResolver: Abstract base class for resolving service-specific metrics
-BatchProcessor: Utility for batch processing with concurrency control
-register_metrics: Utility function to register metric resolvers
+- BaseMetricResolver: Abstract base class for resolving service-specific metrics
+- BatchProcessor: Generic utility for batch processing with concurrency control
+- register_metrics: Function to register metric resolvers with the global registry
 
-This module is designed to minimize code duplication across connector implementations
-while enforcing consistent patterns for metric resolution and error handling.
+These components establish a consistent foundation for all connector implementations,
+reducing code duplication while enforcing standardized patterns for metric resolution,
+error handling, and batch processing operations.
 """
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any, ClassVar, Protocol, TypedDict, TypeVar, runtime_checkable
+from typing import Any, ClassVar, TypeVar
 
 from attrs import define, field
 import backoff
 
 from narada.config import get_logger
-from narada.core.protocols import get_metric_freshness, register_metric_resolver
 from narada.database.db_connection import get_session
+from narada.integrations.metrics_registry import (
+    MetricResolverProtocol,
+    get_metric_freshness,
+    register_metric_resolver,
+)
 
 # Get contextual logger
 logger = get_logger(__name__).bind(service="connectors")
@@ -34,45 +36,22 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 
-class ConnectorConfig(TypedDict, total=False):
-    """Type definition for connector configuration.
-
-    Fields:
-    -------
-    extractors: Mapping of metric names to extractor functions
-    dependencies: List of connector dependencies
-    factory: Factory function to create connector instance
-    metrics: Mapping of metric names to connector metadata fields
-    """
-
-    extractors: dict[str, Callable[[Any], Any]]
-    dependencies: list[str]
-    factory: Callable[[dict[str, Any]], Any]
-    metrics: dict[str, str]
-
-
-@runtime_checkable
-class MetricResolverProtocol(Protocol):
-    """Protocol defining the interface for metric resolvers."""
-
-    CONNECTOR: ClassVar[str]
-
-    async def resolve(self, track_ids: list[int], metric_name: str) -> dict[int, Any]:
-        """Fetch stored service metrics from the database.
-
-        Args:
-            track_ids: List of internal track IDs
-            metric_name: Metric to resolve (used to determine field name)
-
-        Returns:
-            Dictionary mapping track_id integers to metric values
-        """
-        ...
+# ConnectorPlaylistItem is now imported from narada.core.models where needed
 
 
 @define(frozen=True, slots=True)
 class BaseMetricResolver:
-    """Base class for resolving service metrics from persistence layer."""
+    """Base class for resolving service metrics from persistence layer.
+
+    This abstract base class provides a standard implementation for resolving
+    service-specific metrics from the persistence layer with caching awareness.
+    Subclasses define connector-specific field mappings and override the
+    CONNECTOR class variable.
+
+    Attributes:
+        FIELD_MAP: Mapping of metric names to connector metadata fields
+        CONNECTOR: Identifier for the connector (overridden by subclasses)
+    """
 
     # To be defined by subclasses - maps metric names to connector metadata fields
     FIELD_MAP: ClassVar[dict[str, str]] = {}
@@ -83,11 +62,18 @@ class BaseMetricResolver:
     async def resolve(self, track_ids: list[int], metric_name: str) -> dict[int, Any]:
         """Resolve a metric for multiple tracks.
 
-        This implementation:
+        Implements a caching strategy that:
         1. Checks for cached values using TrackMetricsRepository
         2. For missing values, fetches from connector_metadata
-        3. Saves any new values found back to the track_metrics table
-        4. Returns all values
+        3. Saves new values back to the track_metrics table
+        4. Returns all values with appropriate type conversion
+
+        Args:
+            track_ids: List of internal track IDs to resolve metrics for
+            metric_name: Name of the metric to resolve
+
+        Returns:
+            Dictionary mapping track IDs to their metric values
         """
         from narada.config import get_logger
         from narada.repositories.track.connector import TrackConnectorRepository
@@ -173,6 +159,15 @@ class BatchProcessor[T, R]:
     This utility simplifies batch processing operations across all connectors,
     standardizing concurrency control, batching logic and error handling.
     Uses configuration values from config.py.
+
+    Attributes:
+        batch_size: Maximum number of items to process in a single batch
+        concurrency_limit: Maximum number of concurrent processing tasks
+        retry_count: Maximum number of retry attempts on failure
+        retry_base_delay: Base delay between retries (seconds)
+        retry_max_delay: Maximum delay between retries (seconds)
+        request_delay: Delay between individual requests (seconds)
+        logger_instance: Logger for recording processing events
     """
 
     batch_size: int

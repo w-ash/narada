@@ -10,6 +10,7 @@ from rich.table import Table
 import typer
 
 from narada.cli.command_registry import register_command
+from narada.cli.ui import command_error_handler
 from narada.config import get_config, get_logger
 from narada.database.db_models import init_db
 
@@ -37,6 +38,7 @@ def register_setup_commands(app: typer.Typer) -> None:
     )(initialize_database)
 
 
+@command_error_handler
 def setup(
     force: Annotated[
         bool,
@@ -73,14 +75,6 @@ def setup(
         ),
     )
 
-    # Show current configuration
-    console.print("\n[bold cyan]Current Configuration:[/bold cyan]")
-
-    config_table = Table(show_header=True)
-    config_table.add_column("Service", style="cyan")
-    config_table.add_column("Setting", style="green")
-    config_table.add_column("Status", style="yellow")
-
     # Configuration metadata for checking
     config_keys = [
         ("Spotify", "Client ID", "SPOTIFY_CLIENT_ID"),
@@ -89,6 +83,13 @@ def setup(
         ("Last.fm", "API Secret", "LASTFM_API_SECRET"),
         ("Last.fm", "Username", "LASTFM_USERNAME"),
     ]
+
+    # Show current configuration
+    console.print("\n[bold cyan]Current Configuration:[/bold cyan]")
+    config_table = Table(show_header=True)
+    config_table.add_column("Service", style="cyan")
+    config_table.add_column("Setting", style="green")
+    config_table.add_column("Status", style="yellow")
 
     # Display configuration status
     for service, key, config_key in config_keys:
@@ -112,6 +113,7 @@ def setup(
     console.print("\n")
 
 
+@command_error_handler
 def initialize_database() -> None:
     """Initialize the database schema based on current models.
 
@@ -119,28 +121,21 @@ def initialize_database() -> None:
     Existing tables are left untouched.
     """
     with console.status("[bold blue]Initializing database schema...") as status:
-        try:
-            # Run the initialization
-            asyncio.run(init_db())
+        # Run the initialization
+        asyncio.run(init_db())
 
-            # Display success message
-            status.update("[bold green]Database initialization complete!")
-            console.print(
-                "\n[bold green]✓ Database schema initialized successfully[/bold green]",
-            )
+        # Display success message
+        status.update("[bold green]Database initialization complete!")
+        console.print(
+            "\n[bold green]✓ Database schema initialized successfully[/bold green]",
+        )
 
-            # Show next steps
-            console.print("\nNext steps:")
-            console.print(
-                "  • Run [cyan]narada status[/cyan] to check service connections",
-            )
-            console.print("  • Run [cyan]narada setup[/cyan] to configure API keys")
-            console.print("  • Run [cyan]narada workflow[/cyan] to execute a workflow")
+        # Show next steps
+        console.print("\nNext steps:")
+        console.print(
+            "  • Run [cyan]narada status[/cyan] to check service connections",
+        )
+        console.print("  • Run [cyan]narada setup[/cyan] to configure API keys")
+        console.print("  • Run [cyan]narada workflow[/cyan] to execute a workflow")
 
-            logger.info("Database initialization completed successfully")
-
-        except Exception as e:
-            status.update("[bold red]Database initialization failed!")
-            console.print(f"\n[bold red]✗ Error initializing database:[/bold red] {e}")
-            logger.exception("Database initialization failed")
-            raise typer.Exit(1) from e
+        logger.info("Database initialization completed successfully")

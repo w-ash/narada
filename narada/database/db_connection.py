@@ -47,7 +47,7 @@ class Base(AsyncAttrs, DeclarativeBase):
 
 
 def create_db_engine(connection_string: str | None = None) -> AsyncEngine:
-    """Create async SQLAlchemy engine with optimized connection pooling."""
+    """Create async SQLAlchemy engine with optimized connection pooling for SQLite."""
     # Use connection string from args or environment
     db_url = connection_string or os.environ.get(
         "DATABASE_URL",
@@ -60,7 +60,7 @@ def create_db_engine(connection_string: str | None = None) -> AsyncEngine:
         connect_args = {
             "check_same_thread": False,
             # Increase SQLite timeout to help with concurrency
-            "timeout": 30.0,  # 30 seconds timeout for busy connections
+            "timeout": 120.0,  # 120 seconds timeout for busy connections (increased from 30)
         }
 
         # Add query parameters for SQLite pragmas
@@ -68,31 +68,51 @@ def create_db_engine(connection_string: str | None = None) -> AsyncEngine:
             db_url += "?"
         else:
             db_url += "&"
-        # Enhanced SQLite pragmas for better concurrency:
-        # - WAL journal mode for concurrent access
-        # - NORMAL synchronous for better performance without losing too much safety
+        # Enhanced SQLite pragmas:
+        # - WAL journal mode provides concurrent access
+        # - NORMAL synchronous for better performance without losing safety
         # - Explicitly enable foreign keys
-        # - Increase busy_timeout to prevent "database is locked" errors
-        # - Use immediate transactions to avoid deadlocks
-        db_url += "journal_mode=WAL&synchronous=NORMAL&foreign_keys=ON&busy_timeout=10000&isolation_level=IMMEDIATE"
+        # - Increase busy_timeout to 30000ms (30s) for handling locks
+        # - Don't set isolation_level here, we'll use event listeners for transaction control
+        db_url += (
+            "journal_mode=WAL&synchronous=NORMAL&foreign_keys=ON&busy_timeout=30000"
+        )
 
-    # Configure engine with optimizations for parallel operations
+    # Import needed classes
+    from sqlalchemy import event
+
+    # Configure engine with optimizations for SQLite
+    # Using AsyncAdaptedQueuePool with reduced size for better lock management
     engine = create_async_engine(
         db_url,
-        # Connection pool configuration for parallel operations
-        pool_size=10,
-        max_overflow=20,
+        # AsyncAdaptedQueuePool with small pool size to avoid lock contention
+        pool_size=1,  # Smaller pool avoids concurrent writes to SQLite
+        max_overflow=2,  # Allow only a few overflow connections
+        pool_timeout=60,  # Wait longer for connections
+        pool_recycle=3600,  # Recycle connections hourly
         connect_args=connect_args,
-        pool_timeout=30,
-        pool_recycle=28800,
-        # Validate connections before using them to avoid stale connections
+        # Validate connections before using them
         pool_pre_ping=True,
         # Echo SQL for debugging (disable in production)
         echo=False,
     )
 
-    # Log engine creation
-    logger.info("Created database engine with connection pool")
+    # Configure event listeners on the sync engine to manage SQLite connection behavior
+    if db_url.startswith("sqlite"):
+        # Ignoring unused function warning, this is used by SQLAlchemy event system
+        @event.listens_for(engine.sync_engine, "connect")  # type: ignore
+        def _set_sqlite_pragma(dbapi_connection, _):  # type: ignore # pragma: no cover
+            """Set SQLite PRAGMAs on connection creation."""
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA busy_timeout = 30000")  # 30 second timeout
+            cursor.execute("PRAGMA journal_mode = WAL")  # Write-ahead logging
+            cursor.execute("PRAGMA synchronous = NORMAL")  # Balanced safety/performance
+            cursor.execute("PRAGMA foreign_keys = ON")  # Enforce foreign keys
+            cursor.execute("PRAGMA temp_store = MEMORY")  # Store temp tables in memory
+            cursor.close()
+
+    # Only log once engine is fully configured
+    logger.info("Created database engine with SQLite optimizations")
     return engine
 
 
@@ -147,17 +167,22 @@ def get_session_factory() -> async_sessionmaker:
 
 @asynccontextmanager
 async def get_session(rollback: bool = True) -> AsyncGenerator[AsyncSession]:
-    """Get an asynchronous database session with transaction management.
+    """Get an asynchronous database session with automatic transaction management.
+
+    SQLAlchemy will automatically begin a transaction when the session is used
+    and commit it when the context manager exits without an exception.
 
     Args:
         rollback: If True (default), automatically rolls back on exception.
-                If False, allows manual transaction management.
 
     Yields:
         AsyncSession: Managed database session
     """
     session = session_factory()
     try:
+        # Just touch the connection to ensure engine event listeners run
+        await session.connection()
+
         yield session
         await session.commit()
     except Exception:
@@ -188,11 +213,8 @@ async def get_isolated_session() -> AsyncGenerator[AsyncSession]:
 
     session = isolated_factory()
     try:
-        # Execute pragma statement to ensure immediate transaction mode
-        # This helps prevent SQLite database locks in concurrent operations
-        from sqlalchemy import text
-
-        await session.execute(text("PRAGMA busy_timeout = 10000"))
+        # Just touch the connection to ensure engine event listeners run
+        await session.connection()
 
         yield session
         await session.commit()
@@ -205,12 +227,10 @@ async def get_isolated_session() -> AsyncGenerator[AsyncSession]:
 
 @asynccontextmanager
 async def transaction(session: AsyncSession) -> AsyncGenerator[AsyncSession]:
-    """Create a transaction context that automatically handles commit/rollback.
+    """Create a nested transaction context for finer-grained commit/rollback control.
 
-    This context manager ensures proper transaction handling:
-    - Automatically commits if no exceptions occur
-    - Automatically rolls back on exceptions
-    - Properly nests within parent transactions
+    This context manager creates a savepoint that can be committed or rolled back
+    independently of the main transaction.
 
     Args:
         session: SQLAlchemy async session
@@ -221,18 +241,18 @@ async def transaction(session: AsyncSession) -> AsyncGenerator[AsyncSession]:
     Example:
         ```python
         async with get_session() as session:
+            # Main transaction already started automatically
+
+            # Create a savepoint for operations that might fail
             async with transaction(session):
                 await session.execute(stmt1)
                 await session.execute(stmt2)
-                # Auto-commits if no exceptions
+                # Auto-commits savepoint if no exceptions
         ```
     """
-    try:
+    # Use begin_nested() for savepoint transaction management
+    async with session.begin_nested():
         yield session
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        raise
 
 
 async def soft_delete_record(session: AsyncSession, record: Any) -> None:

@@ -16,11 +16,14 @@ Narada is a music playlist integration platform that connects multiple music ser
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/narada.git
+git clone https://github.com/w-ash/narada.git
 cd narada
 
-# Install dependencies
-pip install -e .
+# Install dependencies with Poetry
+poetry install
+
+# Activate virtual environment
+source $(poetry env info --path)/bin/activate
 ```
 
 ### Setup
@@ -141,6 +144,16 @@ Run this workflow with:
 narada workflow discovery_mix
 ```
 
+## Architecture
+
+Narada follows clean architecture principles with:
+
+- **Immutable Domain Models**: Core entities using attrs with frozen=True for data integrity
+- **Repository Pattern**: Abstracts data access with batch-first design
+- **Functional Transformations**: Pure functions with no side effects using toolz
+- **Async Operations**: SQLAlchemy 2.0 with async/await for database operations
+- **Type Safety**: Comprehensive typing with Pyright and modern Python 3.13+ features
+
 ## Development
 
 ### Project Structure
@@ -149,20 +162,54 @@ narada workflow discovery_mix
 narada/
 ├── narada/
 │   ├── cli/             # Command line interface
-│   ├── core/            # Core domain models and logic
-│   ├── data/            # Database and persistence
-│   ├── integrations/    # Music service connectors
-│   └── workflows/       # Workflow system
-├── docs/                # Documentation
-└── README.md            # This file
+│   ├── core/            # Core domain models and protocols
+│   ├── database/        # Database models and migrations
+│   ├── integrations/    # Music service connectors (Spotify, Last.fm, MusicBrainz)
+│   ├── repositories/    # Data access layer with repository pattern
+│   ├── services/        # Business logic services
+│   └── workflows/       # Workflow system with Prefect
+├── docs/                # Documentation and guides
+├── tests/               # Test suite
+└── scripts/             # Utility scripts
 ```
+
+### Development Commands
+
+```bash
+# Run tests
+pytest
+
+# Run tests with coverage
+pytest --cov=narada
+
+# Lint and format code
+ruff check --fix .
+ruff format .
+
+# Type checking
+poetry run pyright narada/
+
+# Run integration tests only
+pytest -m integration
+```
+
+### Code Style
+
+- Python 3.13+ with modern typing features
+- Line length: 88 characters (enforced by Ruff)
+- Immutable domain models using attrs
+- Repository pattern for all data access
+- Batch-first design for all operations
+- UTC timezone for all datetime objects
 
 ### Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Add your changes
-4. Submit a pull request
+3. Follow the coding standards in CLAUDE.md
+4. Add comprehensive tests
+5. Run linting and type checking
+6. Submit a pull request
 
 ## License
 

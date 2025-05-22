@@ -1,14 +1,14 @@
 """Service status commands for Narada CLI."""
 
 import asyncio
-from typing import Annotated, Any
+from typing import Annotated
 
 from rich.console import Console
 from rich.table import Table
 import typer
 
-from narada.cli.command_registry import SERVICES
-from narada.cli.ui import display_error
+from narada.cli.command_registry import SERVICES, register_command
+from narada.cli.ui import command_error_handler
 from narada.config import get_logger, resilient_operation
 
 # Initialize console and logger
@@ -18,7 +18,13 @@ logger = get_logger(__name__)
 
 def register_status_commands(app: typer.Typer) -> None:
     """Register status commands with the Typer app."""
-    app.command()(status)
+    register_command(
+        app=app,
+        name="status",
+        help_text="Check connection status of music services",
+        category="Utilities",
+        examples=["status", "status --verbose"],
+    )(status)
 
 
 @resilient_operation("spotify_check")
@@ -90,81 +96,76 @@ async def _check_connections() -> list[tuple[str, bool, str]]:
     Returns:
         list[tuple[str, bool, str]]: List of (service_name, is_connected, details)
     """
-    with logger.contextualize(operation="service_check"):
-        # Define service checks with their coroutines
-        service_checks = [
-            _check_spotify(),
-            _check_lastfm(),
-            _check_musicbrainz(),
-        ]
+    # Define service checks with their coroutines
+    service_checks = [
+        _check_spotify(),
+        _check_lastfm(),
+        _check_musicbrainz(),
+    ]
 
-        # Gather results concurrently
-        results = await asyncio.gather(*service_checks, return_exceptions=True)
+    # Gather results concurrently
+    results = await asyncio.gather(*service_checks, return_exceptions=True)
 
-        # Process results with pattern matching
-        def process_result(service: str, result: Any) -> tuple[str, bool, str]:
-            match result:
-                case Exception() as e:
-                    return service, False, f"Error: {e!s}"
-                case (is_connected, details):
-                    return service, is_connected, details
-                case _:
-                    return service, False, "Invalid response format"
+    # Process results with pattern matching
+    def process_result(service: str, result: object) -> tuple[str, bool, str]:
+        match result:
+            case Exception() as e:
+                return service, False, f"Error: {e!s}"
+            case (is_connected, details):
+                return service, is_connected, details
+            case _:
+                return service, False, "Invalid response format"
 
-        return [
-            process_result(service, result)
-            for service, result in zip(SERVICES, results, strict=False)
-        ]
+    return [
+        process_result(service, result)
+        for service, result in zip(SERVICES, results, strict=False)
+    ]
 
 
+@command_error_handler
 def status(
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
     """Check connection status of music services."""
     with logger.contextualize(operation="status", verbose=verbose):
-        try:
-            # Create status table
-            table = Table(title="Narada Service Status")
-            table.add_column("Service", style="cyan")
-            table.add_column("Status", style="bold")
-            table.add_column("Details", style="dim")
+        # Create status table
+        table = Table(title="Narada Service Status")
+        table.add_column("Service", style="cyan")
+        table.add_column("Status", style="bold")
+        table.add_column("Details", style="dim")
 
-            # Get service status with progress bar
-            with typer.progressbar(
-                length=len(SERVICES),
-                label="Checking service connections",
-            ) as progress:
-                results = asyncio.run(_check_connections())
-                progress.update(len(SERVICES))  # Complete the progress bar
+        # Get service status with progress bar
+        with typer.progressbar(
+            length=len(SERVICES),
+            label="Checking service connections",
+        ) as progress:
+            results = asyncio.run(_check_connections())
+            progress.update(len(SERVICES))  # Complete the progress bar
 
-            # Add results to table with emojis
-            for service, connected, details in results:
-                status_text = (
-                    "[green]✓ Connected[/green]"
-                    if connected
-                    else "[red]✗ Not Connected[/red]"
-                )
-                table.add_row(service, status_text, details)
-
-            # Print status summary
-            console.print("\n")
-            console.print(table)
-            console.print("\n")
-
-            # Show command help if issues found
-            if not all(connected for _, connected, _ in results):
-                console.print(
-                    "[yellow]Some services not connected. "
-                    "Run [bold]narada setup[/bold] to configure.[/yellow]",
-                )
-                console.print("\n")
-
-            logger.success(
-                "Service status check completed",
-                connected=sum(1 for _, connected, _ in results if connected),
-                total=len(SERVICES),
+        # Add results to table with emojis
+        for service, connected, details in results:
+            status_text = (
+                "[green]✓ Connected[/green]"
+                if connected
+                else "[red]✗ Not Connected[/red]"
             )
+            table.add_row(service, status_text, details)
 
-        except Exception as e:
-            display_error(e, "status check")
-            raise typer.Exit(1) from e
+        # Print status summary
+        console.print("\n")
+        console.print(table)
+        console.print("\n")
+
+        # Show command help if issues found
+        if not all(connected for _, connected, _ in results):
+            console.print(
+                "[yellow]Some services not connected. "
+                "Run [bold]narada setup[/bold] to configure.[/yellow]",
+            )
+            console.print("\n")
+
+        logger.success(
+            "Service status check completed",
+            connected=sum(1 for _, connected, _ in results if connected),
+            total=len(SERVICES),
+        )

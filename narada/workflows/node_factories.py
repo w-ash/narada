@@ -6,6 +6,7 @@ that minimizes code surface area while maintaining maximum flexibility.
 """
 
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from narada.config import get_logger
 from narada.core.matcher import batch_match_tracks
@@ -15,6 +16,9 @@ from narada.workflows.destination_nodes import DESTINATION_HANDLERS
 from narada.workflows.node_context import NodeContext
 from narada.workflows.source_nodes import spotify_playlist_source
 from narada.workflows.transform_registry import TRANSFORM_REGISTRY
+
+if TYPE_CHECKING:
+    from narada.integrations.protocols import ConnectorConfig
 
 logger = get_logger(__name__)
 
@@ -141,7 +145,7 @@ def create_enricher_node(config: dict) -> NodeFn:
         raise ValueError(f"Unsupported connector: {enricher_type}")
 
     # Retrieve connector configuration once at creation time
-    enricher_config = CONNECTORS[enricher_type]
+    enricher_config: ConnectorConfig = CONNECTORS[enricher_type]
 
     async def node_impl(context: dict, node_config: dict) -> dict:
         ctx = NodeContext(context)
@@ -266,7 +270,7 @@ def create_sorter_node(sorter_type: str, operation_name: str | None = None) -> N
             # Check if metrics need resolution
             if needed_metric not in metrics or not metrics[needed_metric]:
                 # We're already in async context, so we can await directly
-                from narada.core.protocols import metric_resolvers
+                from narada.integrations.metrics_registry import metric_resolvers
 
                 if needed_metric in metric_resolvers:
                     track_ids = [t.id for t in tracklist.tracks if t.id]

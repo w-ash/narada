@@ -1,10 +1,27 @@
-"""Spotify service connector with domain model conversion."""
+"""Spotify service connector with domain model conversion.
+
+This module provides a connector for the Spotify API using the spotipy library
+(https://spotipy.readthedocs.io/) to handle authentication, rate limiting, and
+conversion between Spotify objects and domain models.
+
+Key components:
+- SpotifyConnector: OAuth-authenticated client with playlist and track operations
+- SpotifyMetricResolver: Resolver for Spotify-specific track metrics
+- Conversion utilities: Transform Spotify API responses to domain models
+
+The module supports:
+- Fetching and creating playlists with detailed track information
+- Searching tracks by ISRC or artist/title combinations
+- Retrieving user's liked/saved tracks with pagination
+- Resolving popularity metrics for ranking operations
+"""
 
 import asyncio
 from datetime import UTC, datetime
 import os
 from typing import Any, ClassVar
 
+import attrs
 from attrs import define, field
 import backoff
 from dotenv import load_dotenv
@@ -12,12 +29,19 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
 from narada.config import get_logger, resilient_operation
-from narada.core.models import Artist, Playlist, Track
+from narada.core.models import (
+    Artist,
+    ConnectorPlaylist,
+    ConnectorPlaylistItem,
+    ConnectorTrack,
+    Playlist,
+    Track,
+)
 from narada.integrations.base_connector import (
     BaseMetricResolver,
-    ConnectorConfig,
     register_metrics,
 )
+from narada.integrations.protocols import ConnectorConfig
 
 # Get contextual logger with service binding
 logger = get_logger(__name__).bind(service="spotify")
@@ -59,6 +83,40 @@ class SpotifyConnector:
                 cache_handler=spotipy.CacheFileHandler(cache_path=".spotify_cache"),
             ),
         )
+
+    @resilient_operation("get_spotify_tracks_by_ids")
+    @backoff.on_exception(backoff.expo, spotipy.SpotifyException, max_tries=3)
+    async def get_tracks_by_ids(
+        self, track_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Fetch multiple tracks from Spotify in bulk (up to 50 per request).
+
+        Args:
+            track_ids: List of Spotify track IDs
+
+        Returns:
+            Dictionary mapping track IDs to their data
+        """
+        if not track_ids:
+            return {}
+
+        results = {}
+        # Process in batches of 50 (Spotify API limit)
+        for i in range(0, len(track_ids), 50):
+            batch = track_ids[i : i + 50]
+            logger.debug(f"Fetching batch of {len(batch)} tracks from Spotify")
+
+            tracks_response = await asyncio.to_thread(
+                self.client.tracks, batch, market="US"
+            )
+
+            if tracks_response and "tracks" in tracks_response:
+                for track in tracks_response["tracks"]:
+                    if track and "id" in track:
+                        results[track["id"]] = track
+
+        logger.info(f"Retrieved {len(results)}/{len(track_ids)} tracks in bulk")
+        return results
 
     @resilient_operation("search_spotify_by_isrc")
     @backoff.on_exception(backoff.expo, spotipy.SpotifyException, max_tries=3)
@@ -110,18 +168,24 @@ class SpotifyConnector:
 
     @resilient_operation("get_spotify_playlist")
     @backoff.on_exception(backoff.expo, spotipy.SpotifyException, max_tries=3)
-    async def get_spotify_playlist(self, spotify_playlist_id: str) -> Playlist:
-        """Fetch a Spotify playlist asynchronously with full pagination."""
+    async def get_spotify_playlist(self, playlist_id: str) -> ConnectorPlaylist:
+        """Fetch a Spotify playlist with its tracks.
+
+        Args:
+            playlist_id: Spotify playlist ID to fetch
+
+        Returns:
+            ConnectorPlaylist containing playlist metadata and track items
+        """
         # Get initial playlist data
         raw_playlist = await asyncio.to_thread(
             self.client.playlist,
-            spotify_playlist_id,
+            playlist_id,
             market="US",
-            # Remove the additional_types parameter or use an empty list
         )
 
         if not isinstance(raw_playlist, dict):
-            raise ValueError(f"Invalid playlist response for ID {spotify_playlist_id}")
+            raise ValueError(f"Invalid playlist response for ID {playlist_id}")
 
         # Handle pagination to get all tracks
         tracks = raw_playlist["tracks"]
@@ -136,10 +200,39 @@ class SpotifyConnector:
                 logger.warning("Received invalid tracks data during pagination")
                 break
 
-        # Replace the items with our complete list
-        raw_playlist["tracks"]["items"] = all_items
+        # Convert basic playlist metadata
+        connector_playlist = convert_spotify_playlist_to_connector(raw_playlist)
 
-        return convert_spotify_playlist_to_domain(raw_playlist)
+        # Process each track item with its metadata
+        playlist_items = []
+        for idx, item in enumerate(all_items):
+            if item.get("track") is not None:
+                track = item["track"]
+                # Get the added_at timestamp
+                added_at = item.get("added_at")
+
+                # Create ConnectorPlaylistItem with track ID and metadata
+                playlist_item = ConnectorPlaylistItem(
+                    connector_track_id=track["id"],
+                    position=idx,
+                    added_at=added_at,
+                    added_by_id=item.get("added_by", {}).get("id"),
+                    extras={
+                        "is_local": item.get("is_local", False),
+                        "track_name": track.get(
+                            "name"
+                        ),  # Include minimal track info for reference
+                        "artist_names": [a["name"] for a in track.get("artists", [])],
+                        # Store the added_at in extras too for easy access
+                        "added_at": added_at,
+                    },
+                )
+                playlist_items.append(playlist_item)
+
+        # Use evolve to add items to the playlist
+        connector_playlist = attrs.evolve(connector_playlist, items=playlist_items)
+
+        return connector_playlist
 
     @resilient_operation("create_spotify_playlist")
     @backoff.on_exception(backoff.expo, spotipy.SpotifyException, max_tries=3)
@@ -256,13 +349,13 @@ class SpotifyConnector:
             logger.error(f"Spotify API error: {e}")
             raise
 
-    @resilient_operation("get_spotify_liked_tracks")
+    @resilient_operation("get_liked_tracks")
     @backoff.on_exception(backoff.expo, spotipy.SpotifyException, max_tries=3)
     async def get_liked_tracks(
         self,
         limit: int = 50,
         cursor: str | None = None,
-    ) -> tuple[list[Track], str | None]:
+    ) -> tuple[list[ConnectorTrack], str | None]:
         """Fetch user's saved/liked tracks from Spotify with pagination.
 
         Args:
@@ -270,7 +363,7 @@ class SpotifyConnector:
             cursor: Pagination cursor from previous calls
 
         Returns:
-            Tuple of (list of domain tracks, next cursor or None if done)
+            Tuple of (list of ConnectorTrack models, next cursor or None if done)
         """
         logger.info(
             f"Fetching liked tracks from Spotify, limit={limit}, cursor={cursor}"
@@ -299,7 +392,8 @@ class SpotifyConnector:
 
             # Extract actual track objects from the response
             # The API returns items with {added_at, track} structure
-            tracks = []
+            connector_tracks = []
+
             for item in saved_tracks["items"]:
                 if not item or "track" not in item:
                     continue
@@ -307,7 +401,9 @@ class SpotifyConnector:
                 spotify_track = item["track"]
                 # Save the added_at timestamp in the track metadata
                 added_at = item.get("added_at")
-                track = convert_spotify_track_to_domain(spotify_track)
+
+                # Create connector track
+                connector_track = convert_spotify_track_to_connector(spotify_track)
 
                 if added_at:
                     # Add liked timestamp to connector metadata
@@ -316,24 +412,24 @@ class SpotifyConnector:
                         liked_at = datetime.fromisoformat(
                             added_at.replace("Z", "+00:00")
                         )
-                        track = track.with_connector_metadata(
-                            "spotify", {"liked_at": liked_at.isoformat()}
-                        )
-                        # Also add the like status
-                        track = track.with_like_status("spotify", True, liked_at)
+
+                        # Update raw metadata with liked information
+                        connector_track.raw_metadata["liked_at"] = liked_at.isoformat()
+                        connector_track.raw_metadata["is_liked"] = True
+
                     except ValueError:
                         logger.warning(
                             f"Could not parse added_at timestamp: {added_at}"
                         )
 
-                tracks.append(track)
+                connector_tracks.append(connector_track)
 
             # Determine next cursor
             next_cursor = None
             if saved_tracks.get("next") and saved_tracks["items"]:
                 next_cursor = str(offset + len(saved_tracks["items"]))
 
-            return tracks, next_cursor
+            return connector_tracks, next_cursor
 
         except spotipy.SpotifyException as e:
             logger.error(f"Error fetching liked tracks: {e}")
@@ -343,8 +439,8 @@ class SpotifyConnector:
             raise
 
 
-def convert_spotify_track_to_domain(spotify_track: dict[str, Any]) -> Track:
-    """Convert Spotify track data to domain model."""
+def convert_spotify_track_to_connector(spotify_track: dict[str, Any]) -> ConnectorTrack:
+    """Convert Spotify track data to ConnectorTrack domain model."""
     artists = [Artist(name=artist["name"]) for artist in spotify_track["artists"]]
 
     # Parse release date based on precision
@@ -365,51 +461,70 @@ def convert_spotify_track_to_domain(spotify_track: dict[str, Any]) -> Track:
         except ValueError as e:
             logger.warning(f"Failed to parse release date '{date_str}': {e}")
 
-    track = Track(
+    # Prepare raw metadata with essential information
+    raw_metadata = {
+        "popularity": spotify_track.get("popularity", 0),
+        "album_id": spotify_track["album"].get("id"),
+        "explicit": spotify_track.get("explicit", False),
+    }
+
+    return ConnectorTrack(
+        connector_name="spotify",
+        connector_track_id=spotify_track["id"],
         title=spotify_track["name"],
         artists=artists,
         album=spotify_track["album"]["name"],
         duration_ms=spotify_track["duration_ms"],
         release_date=release_date,
         isrc=spotify_track.get("external_ids", {}).get("isrc"),
+        raw_metadata=raw_metadata,
+        last_updated=datetime.now(UTC),
     )
 
-    # Store Spotify-specific metadata
-    track = track.with_connector_metadata(
-        "spotify",
-        {
-            "popularity": spotify_track.get("popularity", 0),
-            "album_id": spotify_track["album"].get("id"),
-            "explicit": spotify_track.get("explicit", False),
-        },
-    )
 
-    # Store connector ID
-    return track.with_connector_track_id("spotify", spotify_track["id"])
+# Removed convert_spotify_track_to_domain in favor of repository layer mapping
 
 
-def convert_spotify_playlist_to_domain(spotify_playlist: dict[str, Any]) -> Playlist:
-    """Convert Spotify playlist data to domain model.
+def convert_spotify_playlist_to_connector(
+    spotify_playlist: dict[str, Any],
+) -> ConnectorPlaylist:
+    """Convert Spotify playlist data to ConnectorPlaylist domain model.
 
     Args:
         spotify_playlist: Raw playlist data from Spotify API
 
     Returns:
-        Domain Playlist model with all tracks converted
+        ConnectorPlaylist model representing the external service playlist
     """
-    domain_tracks = [
-        convert_spotify_track_to_domain(item["track"])
-        for item in spotify_playlist["tracks"]["items"]
-        if item["track"] is not None  # Handle potentially null tracks
-    ]
+    # Extract owner information
+    owner = spotify_playlist.get("owner", {}).get(
+        "display_name"
+    ) or spotify_playlist.get("owner", {}).get("id")
 
-    playlist = Playlist(
+    owner_id = spotify_playlist.get("owner", {}).get("id")
+    collaborative = spotify_playlist.get("collaborative", False)
+
+    # Prepare raw metadata with essential information
+    raw_metadata = {
+        "snapshot_id": spotify_playlist.get("snapshot_id"),
+        "tracks_href": spotify_playlist.get("tracks", {}).get("href"),
+        "images": spotify_playlist.get("images", []),
+        "total_tracks": spotify_playlist.get("tracks", {}).get("total", 0),
+    }
+
+    return ConnectorPlaylist(
+        connector_name="spotify",
+        connector_playlist_id=spotify_playlist["id"],
         name=spotify_playlist["name"],
         description=spotify_playlist.get("description"),
-        tracks=domain_tracks,
+        owner=owner,
+        owner_id=owner_id,
+        is_public=spotify_playlist.get("public", False),
+        collaborative=collaborative,
+        follower_count=spotify_playlist.get("followers", {}).get("total"),
+        raw_metadata=raw_metadata,
+        last_updated=datetime.now(UTC),
     )
-
-    return playlist.with_connector_playlist_id("spotify", spotify_playlist["id"])
 
 
 def get_connector_config() -> ConnectorConfig:

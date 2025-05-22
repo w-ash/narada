@@ -3,10 +3,8 @@
 import importlib
 import pkgutil
 import sys
-from typing import Any
 
 from narada.config import get_logger
-from narada.core.protocols import ConnectorConfig
 
 # Import main connector classes for re-export
 from narada.integrations.lastfm import (
@@ -15,10 +13,11 @@ from narada.integrations.lastfm import (
     LastFMTrackInfo,
 )
 from narada.integrations.musicbrainz import MusicBrainzConnector
+from narada.integrations.protocols import ConnectorConfig
 from narada.integrations.spotify import (
     SpotifyConnector,
-    convert_spotify_playlist_to_domain,
-    convert_spotify_track_to_domain,
+    convert_spotify_playlist_to_connector,
+    convert_spotify_track_to_connector,
 )
 
 logger = get_logger(__name__)
@@ -35,7 +34,7 @@ def discover_connectors() -> dict[str, ConnectorConfig]:
     clean extension point for new connectors without factory code changes.
 
     Returns:
-        Dictionary mapping connector names to their configurations
+        dict[str, ConnectorConfig]: Dictionary mapping connector names to their configurations
     """
     global _CONNECTORS
 
@@ -91,7 +90,7 @@ __all__ = [
     "LastFmMetricResolver",
     "MusicBrainzConnector",
     "SpotifyConnector",
-    "convert_spotify_playlist_to_domain",
-    "convert_spotify_track_to_domain",
+    "convert_spotify_playlist_to_connector",
+    "convert_spotify_track_to_connector",
     "discover_connectors",
 ]

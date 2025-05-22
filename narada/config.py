@@ -111,7 +111,7 @@ _config: dict[str, Any] = {
     ),
     "DEFAULT_API_REQUEST_DELAY": float(os.getenv("DEFAULT_API_REQUEST_DELAY", "0.2")),
     # LastFM API settings - conservative due to rate limits
-    "LASTFM_API_BATCH_SIZE": int(os.getenv("LASTFM_API_BATCH_SIZE", "20")),
+    "LASTFM_API_BATCH_SIZE": int(os.getenv("LASTFM_API_BATCH_SIZE", "50")),
     "LASTFM_API_CONCURRENCY": int(os.getenv("LASTFM_API_CONCURRENCY", "3")),
     "LASTFM_API_RETRY_COUNT": int(os.getenv("LASTFM_API_RETRY_COUNT", "5")),
     "LASTFM_API_RETRY_BASE_DELAY": float(

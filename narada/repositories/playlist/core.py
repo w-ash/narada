@@ -1,15 +1,14 @@
-"""Playlist repository implementation for database operations."""
+"""Core playlist repository implementation."""
 
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
-from attrs import define
 from sqlalchemy import Select, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from narada.config import get_logger
-from narada.core.models import Artist, Playlist, Track, ensure_utc
+from narada.core.models import Playlist, Track
 from narada.database.db_models import (
     DBPlaylist,
     DBPlaylistMapping,
@@ -17,139 +16,13 @@ from narada.database.db_models import (
     DBTrack,
     DBTrackMapping,
 )
-from narada.repositories.base_repo import BaseModelMapper, BaseRepository
+from narada.repositories.base_repo import BaseRepository
+from narada.repositories.playlist.mapper import PlaylistMapper
 from narada.repositories.repo_decorator import db_operation
 from narada.repositories.track import TrackRepositories
 
+# Create module logger
 logger = get_logger(__name__)
-
-
-@define(frozen=True, slots=True)
-class PlaylistMapper(BaseModelMapper[DBPlaylist, Playlist]):
-    """Bidirectional mapper between domain and persistence models."""
-
-    @staticmethod
-    def get_default_relationships() -> list[str]:
-        """Get default relationships to load for this model."""
-        return ["mappings", "tracks"]
-
-    @staticmethod
-    async def to_domain(db_model: DBPlaylist) -> Playlist:
-        """Convert persistence model to domain entity using a consistent async-safe approach."""
-        if not db_model:
-            return None
-
-        # Process tracks - consistently use awaitable_attrs pattern
-        domain_tracks = []
-
-        # Get playlist tracks using awaitable_attrs
-        playlist_tracks = []
-        try:
-            if hasattr(db_model, "awaitable_attrs"):
-                playlist_tracks = await db_model.awaitable_attrs.tracks
-            elif hasattr(db_model, "tracks"):
-                playlist_tracks = db_model.tracks or []
-        except Exception as e:
-            logger.debug(f"Error getting playlist tracks: {e}")
-            playlist_tracks = []
-
-        # Filter and sort active tracks
-        active_tracks = sorted(
-            [pt for pt in playlist_tracks if not pt.is_deleted],
-            key=lambda pt: pt.sort_key if hasattr(pt, "sort_key") else 0,
-        )
-
-        # Process each playlist track
-        for pt in active_tracks:
-            # Get track consistently using awaitable_attrs
-            track = None
-            try:
-                if hasattr(pt, "awaitable_attrs"):
-                    track = await pt.awaitable_attrs.track
-                elif hasattr(pt, "track"):
-                    track = pt.track
-            except Exception:
-                track = None
-
-            if not track:
-                continue
-
-            # Get track mappings using awaitable_attrs consistently
-            track_mappings = []
-            try:
-                if hasattr(track, "awaitable_attrs"):
-                    track_mappings = await track.awaitable_attrs.mappings
-                elif hasattr(track, "mappings"):
-                    track_mappings = track.mappings or []
-            except Exception:
-                track_mappings = []
-
-            # Build connector_track_ids from mappings
-            connector_track_ids = {}
-
-            # Process non-deleted track mappings efficiently
-            for m in [m for m in track_mappings if not m.is_deleted]:
-                # Get connector_track using awaitable_attrs consistently
-                connector_track = None
-                try:
-                    if hasattr(m, "awaitable_attrs"):
-                        connector_track = await m.awaitable_attrs.connector_track
-                    elif hasattr(m, "connector_track"):
-                        connector_track = m.connector_track
-                except Exception:
-                    connector_track = None
-
-                if connector_track and not connector_track.is_deleted:
-                    connector_track_ids[connector_track.connector_name] = (
-                        connector_track.connector_track_id
-                    )
-
-            # Create the track domain object
-            domain_tracks.append(
-                Track(
-                    id=track.id,
-                    title=track.title,
-                    artists=[Artist(name=name) for name in track.artists["names"]],
-                    album=track.album,
-                    duration_ms=track.duration_ms,
-                    release_date=ensure_utc(track.release_date),
-                    isrc=track.isrc,
-                    connector_track_ids=connector_track_ids,
-                ),
-            )
-
-        # Get playlist mappings using awaitable_attrs consistently
-        connector_playlist_ids = {}
-        playlist_mappings = []
-
-        try:
-            if hasattr(db_model, "awaitable_attrs"):
-                playlist_mappings = await db_model.awaitable_attrs.mappings
-            elif hasattr(db_model, "mappings"):
-                playlist_mappings = db_model.mappings or []
-        except Exception:
-            playlist_mappings = []
-
-        # Process non-deleted playlist mappings efficiently
-        for m in [m for m in playlist_mappings if not m.is_deleted]:
-            connector_playlist_ids[m.connector_name] = m.connector_playlist_id
-
-        return Playlist(
-            id=db_model.id,
-            name=db_model.name,
-            description=db_model.description,
-            tracks=domain_tracks,
-            connector_playlist_ids=connector_playlist_ids,
-        )
-
-    @staticmethod
-    def to_db(domain_model: Playlist) -> DBPlaylist:
-        """Convert domain entity to persistence values."""
-        playlist = DBPlaylist()
-        playlist.name = domain_model.name
-        playlist.description = domain_model.description
-        playlist.track_count = len(domain_model.tracks) if domain_model.tracks else 0
-        return playlist
 
 
 class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
@@ -261,184 +134,206 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
 
         return updated_tracks
 
-    async def _create_playlist_tracks(
+    async def _manage_playlist_tracks(
         self,
         playlist_id: int,
         tracks: list[Track],
+        operation: str = "create",
     ) -> None:
-        """Create playlist track associations."""
+        """Manage playlist track associations with optimized database operations.
+
+        A unified helper method for creating, updating, or modifying playlist tracks.
+        """
         if not tracks:
             return
 
-        # Bulk insert tracks with sort keys
-        values = [
-            {
-                "playlist_id": playlist_id,
-                "track_id": track.id,
-                "sort_key": self._generate_sort_key(idx),
-                "created_at": datetime.now(UTC),
-                "updated_at": datetime.now(UTC),
-            }
-            for idx, track in enumerate(tracks)
-            if track.id is not None
-        ]
-
-        if values:
-            await self.session.execute(insert(DBPlaylistTrack).values(values))
-            await self.session.flush()
-
-    async def _create_playlist_mappings(
-        self,
-        playlist_id: int,
-        connector_ids: dict[str, str],
-    ) -> None:
-        """Create playlist connector mappings in batch."""
-        if not connector_ids:
-            return
-
-        values = [
-            {
-                "playlist_id": playlist_id,
-                "connector_name": connector,
-                "connector_playlist_id": external_id,
-                "created_at": datetime.now(UTC),
-                "updated_at": datetime.now(UTC),
-            }
-            for connector, external_id in connector_ids.items()
-        ]
-
-        if values:
-            await self.session.execute(insert(DBPlaylistMapping).values(values))
-            await self.session.flush()
-
-    async def _update_playlist_tracks(
-        self,
-        playlist_id: int,
-        tracks: list[Track],
-    ) -> None:
-        """Update playlist tracks with optimized database operations."""
-        if not tracks:
-            return
-
-        # Step 1: Get existing playlist tracks
-        stmt = select(DBPlaylistTrack).where(
-            DBPlaylistTrack.playlist_id == playlist_id,
-            DBPlaylistTrack.is_deleted == False,  # noqa: E712
-        )
-        result = await self.session.scalars(stmt)
-        existing_tracks = {pt.track_id: pt for pt in result.all()}
-
-        # Step 2: Process current track list
-        current_track_ids = set()
         now = datetime.now(UTC)
-        updates = []
-        new_tracks = []
 
-        for idx, track in enumerate(tracks):
-            if not track.id:
-                continue
+        if operation == "create":
+            # Bulk insert tracks with sort keys and added_at timestamps from connector data if available
+            values = []
+            for idx, track in enumerate(tracks):
+                if track.id is None:
+                    continue
 
-            current_track_ids.add(track.id)
-            sort_key = self._generate_sort_key(idx)
+                # Get added_at timestamp from connector metadata if available
+                added_at = None
+                for metadata in track.connector_metadata.values():
+                    if metadata.get("added_at"):
+                        try:
+                            added_at = datetime.fromisoformat(
+                                metadata["added_at"].replace("Z", "+00:00")
+                            )
+                            break
+                        except (ValueError, TypeError):
+                            pass
 
-            if track.id in existing_tracks:
-                # Update existing track's position
-                pt = existing_tracks[track.id]
-                # Safe attribute access to avoid lazy loading
-                current_sort_key = getattr(pt, "sort_key", None)
-                if current_sort_key != sort_key:
-                    updates.append((pt.id, sort_key))
-            else:
-                # Add new track to playlist
-                new_tracks.append({
+                values.append({
                     "playlist_id": playlist_id,
                     "track_id": track.id,
-                    "sort_key": sort_key,
+                    "sort_key": self._generate_sort_key(idx),
+                    "added_at": added_at,
                     "created_at": now,
                     "updated_at": now,
                 })
 
-        # Step 3: Execute database operations in batch
+            if values:
+                await self.session.execute(insert(DBPlaylistTrack).values(values))
+                await self.session.flush()
 
-        # Handle updates
-        if updates:
-            for pt_id, sort_key in updates:
+        elif operation == "update":
+            # Get existing playlist tracks
+            stmt = select(DBPlaylistTrack).where(
+                DBPlaylistTrack.playlist_id == playlist_id,
+                DBPlaylistTrack.is_deleted == False,  # noqa: E712
+            )
+            result = await self.session.scalars(stmt)
+            existing_tracks = {pt.track_id: pt for pt in result.all()}
+
+            # Track current IDs, updates and new additions
+            current_track_ids = set()
+            updates = []
+            new_tracks = []
+
+            # Process each track in the list
+            for idx, track in enumerate(tracks):
+                if not track.id:
+                    continue
+
+                current_track_ids.add(track.id)
+                sort_key = self._generate_sort_key(idx)
+
+                if track.id in existing_tracks:
+                    # Update existing track's position if needed
+                    pt = existing_tracks[track.id]
+                    current_sort_key = getattr(pt, "sort_key", None)
+                    if current_sort_key != sort_key:
+                        updates.append((pt.id, sort_key))
+                else:
+                    # Add new track to playlist with added_at from connector metadata if available
+                    added_at = None
+                    for metadata in track.connector_metadata.values():
+                        if metadata.get("added_at"):
+                            try:
+                                added_at = datetime.fromisoformat(
+                                    metadata["added_at"].replace("Z", "+00:00")
+                                )
+                                break
+                            except (ValueError, TypeError):
+                                pass
+
+                    new_tracks.append({
+                        "playlist_id": playlist_id,
+                        "track_id": track.id,
+                        "sort_key": sort_key,
+                        "added_at": added_at,
+                        "created_at": now,
+                        "updated_at": now,
+                    })
+
+            # Execute updates in batch
+            if updates:
+                for pt_id, sort_key in updates:
+                    await self.session.execute(
+                        update(DBPlaylistTrack)
+                        .where(DBPlaylistTrack.id == pt_id)
+                        .values(sort_key=sort_key, updated_at=now),
+                    )
+
+            # Handle new tracks in batch
+            if new_tracks:
+                await self.session.execute(insert(DBPlaylistTrack).values(new_tracks))
+
+            # Soft delete tracks no longer in the playlist
+            tracks_to_remove = set(existing_tracks.keys()) - current_track_ids
+            if tracks_to_remove:
                 await self.session.execute(
                     update(DBPlaylistTrack)
-                    .where(DBPlaylistTrack.id == pt_id)
-                    .values(sort_key=sort_key, updated_at=now),
+                    .where(
+                        DBPlaylistTrack.playlist_id == playlist_id,
+                        DBPlaylistTrack.track_id.in_(tracks_to_remove),
+                        DBPlaylistTrack.is_deleted == False,  # noqa: E712
+                    )
+                    .values(is_deleted=True, deleted_at=now),
                 )
 
-        # Handle inserts
-        if new_tracks:
-            await self.session.execute(insert(DBPlaylistTrack).values(new_tracks))
+            await self.session.flush()
 
-        # Handle removals - soft delete tracks no longer in the playlist
-        tracks_to_remove = set(existing_tracks.keys()) - current_track_ids
-        if tracks_to_remove:
-            await self.session.execute(
-                update(DBPlaylistTrack)
-                .where(
-                    DBPlaylistTrack.playlist_id == playlist_id,
-                    DBPlaylistTrack.track_id.in_(tracks_to_remove),
-                    DBPlaylistTrack.is_deleted == False,  # noqa: E712
-                )
-                .values(is_deleted=True, deleted_at=now),
-            )
-
-        await self.session.flush()
-
-    async def _update_connector_mappings(
+    async def _manage_connector_mappings(
         self,
         playlist_id: int,
         connector_ids: dict[str, str],
+        operation: str = "create",
     ) -> None:
-        """Update connector mappings with minimal database operations."""
+        """Manage connector mappings with optimized database operations.
+
+        A unified helper method for creating or updating connector mappings.
+        """
         if not connector_ids:
             return
 
-        # Get existing mappings
-        stmt = select(DBPlaylistMapping).where(
-            DBPlaylistMapping.playlist_id == playlist_id,
-            DBPlaylistMapping.is_deleted == False,  # noqa: E712
-        )
-        result = await self.session.scalars(stmt)
-        existing = {m.connector_name: m for m in result.all()}
-
         now = datetime.now(UTC)
 
-        # Process batch of mappings
-        new_mappings = []
-        update_mappings = []
-
-        # Identify new and updated mappings
-        for connector, connector_id in connector_ids.items():
-            if connector in existing:
-                # Track updates
-                mapping = existing[connector]
-                if mapping.connector_playlist_id != connector_id:
-                    mapping.connector_playlist_id = connector_id
-                    mapping.updated_at = now
-                    update_mappings.append(mapping)
-            else:
-                # Track new mappings for bulk insert
-                new_mappings.append({
+        if operation == "create":
+            # Bulk create all mappings
+            values = [
+                {
                     "playlist_id": playlist_id,
                     "connector_name": connector,
-                    "connector_playlist_id": connector_id,
+                    "connector_playlist_id": external_id,
                     "created_at": now,
                     "updated_at": now,
-                })
+                }
+                for connector, external_id in connector_ids.items()
+            ]
 
-        # Bulk add updates
-        if update_mappings:
-            self.session.add_all(update_mappings)
+            if values:
+                await self.session.execute(insert(DBPlaylistMapping).values(values))
+                await self.session.flush()
 
-        # Bulk add new mappings
-        if new_mappings:
-            await self.session.execute(insert(DBPlaylistMapping).values(new_mappings))
+        elif operation == "update":
+            # Get existing mappings
+            stmt = select(DBPlaylistMapping).where(
+                DBPlaylistMapping.playlist_id == playlist_id,
+                DBPlaylistMapping.is_deleted == False,  # noqa: E712
+            )
+            result = await self.session.scalars(stmt)
+            existing = {m.connector_name: m for m in result.all()}
 
-        await self.session.flush()
+            # Track updates and new additions
+            new_mappings = []
+            update_mappings = []
+
+            # Process each mapping
+            for connector, connector_id in connector_ids.items():
+                if connector in existing:
+                    # Update if connector ID changed
+                    mapping = existing[connector]
+                    if mapping.connector_playlist_id != connector_id:
+                        mapping.connector_playlist_id = connector_id
+                        mapping.updated_at = now
+                        update_mappings.append(mapping)
+                else:
+                    # Add new mapping
+                    new_mappings.append({
+                        "playlist_id": playlist_id,
+                        "connector_name": connector,
+                        "connector_playlist_id": connector_id,
+                        "created_at": now,
+                        "updated_at": now,
+                    })
+
+            # Execute updates
+            if update_mappings:
+                self.session.add_all(update_mappings)
+
+            # Execute inserts
+            if new_mappings:
+                await self.session.execute(
+                    insert(DBPlaylistMapping).values(new_mappings)
+                )
+
+            await self.session.flush()
 
     # -------------------------------------------------------------------------
     # UTILITY METHODS
@@ -448,6 +343,14 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
     def _generate_sort_key(position: int) -> str:
         """Generate lexicographically sortable key."""
         return f"a{position:08d}"
+
+    @staticmethod
+    def _determine_source_connector(connector_ids: dict[str, str]) -> str | None:
+        """Determine the source connector from a set of connector IDs."""
+        for connector in ["spotify", "lastfm", "musicbrainz"]:
+            if connector in connector_ids:
+                return connector
+        return None
 
     # -------------------------------------------------------------------------
     # PUBLIC API METHODS (decorated)
@@ -513,11 +416,9 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
     async def _save_playlist_impl(self, playlist: Playlist) -> Playlist:
         """Implementation to create a new playlist with tracks."""
         # Determine source connector if available
-        source_connector = None
-        for possible_connector in ["spotify", "lastfm", "musicbrainz"]:
-            if possible_connector in playlist.connector_playlist_ids:
-                source_connector = possible_connector
-                break
+        source_connector = self._determine_source_connector(
+            playlist.connector_playlist_ids
+        )
 
         # Save tracks first with source connector for proper mappings
         updated_tracks = await self._save_new_tracks(
@@ -536,11 +437,16 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
             raise ValueError("Failed to create playlist: no ID was generated")
 
         # Add mappings and tracks with batch operations
-        await self._create_playlist_mappings(
+        await self._manage_connector_mappings(
             db_playlist.id,
             playlist.connector_playlist_ids,
+            operation="create",
         )
-        await self._create_playlist_tracks(db_playlist.id, updated_tracks)
+        await self._manage_playlist_tracks(
+            db_playlist.id,
+            updated_tracks,
+            operation="create",
+        )
 
         # Return a fresh copy with all relationships eager-loaded
         return await self.get_playlist_by_id(db_playlist.id)
@@ -585,11 +491,9 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
         )
 
         # Determine source connector if available
-        source_connector = None
-        for possible_connector in ["spotify", "lastfm", "musicbrainz"]:
-            if possible_connector in playlist.connector_playlist_ids:
-                source_connector = possible_connector
-                break
+        source_connector = self._determine_source_connector(
+            playlist.connector_playlist_ids
+        )
 
         # Process tracks and mappings in parallel
         if playlist.tracks:
@@ -597,12 +501,17 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
                 playlist.tracks,
                 connector=source_connector,
             )
-            await self._update_playlist_tracks(playlist_id, updated_tracks)
+            await self._manage_playlist_tracks(
+                playlist_id,
+                updated_tracks,
+                operation="update",
+            )
 
         # Update connector mappings
-        await self._update_connector_mappings(
+        await self._manage_connector_mappings(
             playlist_id,
             playlist.connector_playlist_ids,
+            operation="update",
         )
 
         # Return the updated playlist with all relationships
@@ -652,9 +561,10 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
 
             # Add connector mappings if present
             if playlist.connector_playlist_ids and created_playlist.id is not None:
-                await self._create_playlist_mappings(
+                await self._manage_connector_mappings(
                     created_playlist.id,
                     playlist.connector_playlist_ids,
+                    operation="create",
                 )
                 # Refresh to include mappings
                 return await self.get_playlist_by_id(created_playlist.id), True

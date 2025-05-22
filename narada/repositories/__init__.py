@@ -7,10 +7,12 @@ from narada.repositories.base_repo import (
     ModelMapper,
     filter_active,
 )
-from narada.repositories.playlist_repo import PlaylistMapper, PlaylistRepository
+from narada.repositories.playlist import PlaylistRepositories
+from narada.repositories.playlist.core import PlaylistRepository
+from narada.repositories.playlist.mapper import PlaylistMapper
 from narada.repositories.repo_decorator import db_operation
+from narada.repositories.sync import SyncCheckpointRepository
 from narada.repositories.track import (
-    SyncCheckpointRepository,
     TrackConnectorRepository,
     TrackLikeRepository,
     TrackMetricsRepository,
@@ -25,6 +27,7 @@ __all__ = [
     "BaseRepository",
     "ModelMapper",
     "PlaylistMapper",
+    "PlaylistRepositories",
     "PlaylistRepository",
     "SyncCheckpointRepository",
     "TrackConnectorRepository",

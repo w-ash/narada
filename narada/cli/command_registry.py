@@ -1,4 +1,9 @@
-"""Command registry for Narada CLI."""
+"""Command registry for Narada CLI.
+
+This module manages the registration and tracking of CLI commands with their
+metadata. It provides a centralized way to register commands with additional
+information like descriptions, categories, and examples.
+"""
 
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -8,9 +13,8 @@ import typer
 # Define service names as constants
 SERVICES = ["Spotify", "Last.fm", "MusicBrainz"]
 
-# Track registered commands with rich metadata
-# Update the type annotation to properly reflect the structure
-REGISTERED_COMMANDS: dict[str, dict[str, str | list[str] | Sequence[str]]] = {}
+# Command metadata dict to track richer information than Typer provides
+COMMAND_METADATA: dict[str, dict[str, Any]] = {}
 
 
 def register_command(
@@ -18,7 +22,6 @@ def register_command(
     name: str,
     help_text: str,
     category: str,
-    aliases: Sequence[str] | None = None,
     examples: Sequence[str] | None = None,
 ) -> Callable:
     """Decorator to register a command with rich metadata.
@@ -28,7 +31,6 @@ def register_command(
         name: Command name
         help_text: Help text for command
         category: Command category for grouping in displays
-        aliases: Optional alternative names for the command
         examples: Optional usage examples
     """
 
@@ -40,11 +42,10 @@ def register_command(
         )(func)
 
         # Track command metadata
-        REGISTERED_COMMANDS[name] = {
+        COMMAND_METADATA[name] = {
             "name": name,
             "help": help_text,
             "category": category,
-            "aliases": aliases or [],
             "examples": examples or [],
             "callback": func.__name__,
         }
@@ -54,9 +55,31 @@ def register_command(
     return decorator
 
 
-def get_registered_commands() -> list[dict[str, Any]]:
-    """Get list of all registered commands with metadata."""
-    return list(REGISTERED_COMMANDS.values())
+def get_all_commands(app: typer.Typer) -> list[dict[str, Any]]:
+    """Get list of all commands with metadata.
+
+    This function combines Typer's command info with our richer metadata.
+    """
+    commands = []
+
+    # Get all commands registered with Typer
+    for command in app.registered_commands:
+        command_name = command.name
+
+        # Start with Typer's basic info
+        command_info = {
+            "name": command_name,
+            "help": command.help or "",
+            "category": "Utilities",  # Default category
+        }
+
+        # Enhance with our richer metadata if available
+        if command_name in COMMAND_METADATA:
+            command_info.update(COMMAND_METADATA[command_name])
+
+        commands.append(command_info)
+
+    return commands
 
 
 def register_all_commands(app: typer.Typer) -> None:

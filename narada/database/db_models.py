@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    MetaData,
     Select,
     String,
     UniqueConstraint,
@@ -26,13 +27,26 @@ from narada.config import get_logger
 # Create module logger
 logger = get_logger(__name__)
 
+# Define naming convention for constraints
+convention = {
+    "ix": "ix_%(table_name)s_%(column_0_name)s",  # Index
+    "uq": "uq_%(table_name)s_%(column_0_label)s",  # Unique constraint
+    "ck": "ck_%(table_name)s_%(constraint_name)s",  # Check constraint
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",  # Foreign key
+    "pk": "pk_%(table_name)s",  # Primary key
+}
+
+# Create metadata with naming convention
+metadata = MetaData(naming_convention=convention)
+
 
 class NaradaDBBase(AsyncAttrs, DeclarativeBase):
     """Base class for all database models with timestamps and soft delete."""
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    # Use the metadata with naming convention
+    metadata = metadata
+
+    id: Mapped[int] = mapped_column(primary_key=True)  # Remove _position_in_table
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
@@ -44,6 +58,8 @@ class NaradaDBBase(AsyncAttrs, DeclarativeBase):
         onupdate=lambda: datetime.now(UTC),
         nullable=False,
     )
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
 
     def mark_soft_deleted(self) -> None:
         """Mark record as logically deleted (soft delete)."""
@@ -97,14 +113,12 @@ class DBTrack(NaradaDBBase):
         passive_deletes=True,
     )
 
-    # Add table constraints including UNIQUE constraints
+    # Add table constraints - simplified to rely on naming convention
     __table_args__ = (
-        # Add UNIQUE constraints for fields used in upsert operations
-        UniqueConstraint("isrc", name="uq_tracks_isrc"),
-        UniqueConstraint("spotify_id", name="uq_tracks_spotify_id"),
-        UniqueConstraint("mbid", name="uq_tracks_mbid"),
-        # Create composite indexes for performance
-        Index("ix_tracks_title_artists", "title"),
+        UniqueConstraint("isrc"),
+        UniqueConstraint("spotify_id"),
+        UniqueConstraint("mbid"),
+        Index(None, "title"),  # Let naming convention handle the name
     )
 
 
@@ -113,7 +127,7 @@ class DBConnectorTrack(NaradaDBBase):
 
     __tablename__ = "connector_tracks"
 
-    connector_name: Mapped[str] = mapped_column(String(32), index=True)
+    connector_name: Mapped[str] = mapped_column(String(32))
     connector_track_id: Mapped[str] = mapped_column(String(64))
     title: Mapped[str] = mapped_column(String(255))
     artists: Mapped[dict[str, Any]] = mapped_column(JSON)
@@ -136,7 +150,7 @@ class DBConnectorTrack(NaradaDBBase):
 
     __table_args__ = (
         UniqueConstraint("connector_name", "connector_track_id"),
-        Index("ix_connector_tracks_lookup", "connector_name", "isrc"),
+        Index(None, "connector_name", "isrc"),
     )
 
 
@@ -164,8 +178,8 @@ class DBTrackMapping(NaradaDBBase):
     )
 
     __table_args__ = (
-        UniqueConstraint("track_id", "connector_track_id", name="uq_track_mappings_track_connector"),
-        Index("ix_track_mappings_lookup", "track_id", "connector_track_id"),
+        UniqueConstraint("track_id", "connector_track_id"),
+        Index(None, "track_id", "connector_track_id"),
     )
 
 
@@ -174,10 +188,10 @@ class DBTrackMetric(NaradaDBBase):
 
     __tablename__ = "track_metrics"
     __table_args__ = (
-        # Create a unique constraint to prevent duplicate metrics
-        UniqueConstraint("track_id", "connector_name", "metric_type", name="uq_track_metrics_unique"),
-        # Keep the lookup index for query performance
-        Index("ix_track_metrics_lookup", "track_id", "connector_name", "metric_type"),
+        # Create a unique constraint - let naming convention handle the name
+        UniqueConstraint("track_id", "connector_name", "metric_type"),
+        # Keep the lookup index
+        Index(None, "track_id", "connector_name", "metric_type"),
     )
 
     track_id: Mapped[int] = mapped_column(ForeignKey("tracks.id", ondelete="CASCADE"))
@@ -202,7 +216,7 @@ class DBTrackLike(NaradaDBBase):
     __tablename__ = "track_likes"
     __table_args__ = (
         UniqueConstraint("track_id", "service"),
-        Index("ix_track_likes_lookup", "service", "is_liked"),
+        Index(None, "service", "is_liked"),
     )
 
     # Core fields
@@ -224,8 +238,8 @@ class DBTrackPlay(NaradaDBBase):
 
     __tablename__ = "track_plays"
     __table_args__ = (
-        Index("ix_track_plays_service", "service"),
-        Index("ix_track_plays_timeline", "played_at"),  # For chronological queries
+        Index(None, "service"),
+        Index(None, "played_at"),  # For chronological queries
     )
 
     # Core fields
@@ -267,6 +281,28 @@ class DBPlaylist(NaradaDBBase):
     )
 
 
+class DBConnectorPlaylist(NaradaDBBase):
+    """External service-specific playlist representation."""
+
+    __tablename__ = "connector_playlists"
+
+    connector_name: Mapped[str]
+    connector_playlist_id: Mapped[str]
+    name: Mapped[str]
+    description: Mapped[str | None]
+    owner: Mapped[str | None]
+    owner_id: Mapped[str | None]
+    is_public: Mapped[bool]
+    collaborative: Mapped[bool] = mapped_column(default=False)
+    follower_count: Mapped[int | None]
+    items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    raw_metadata: Mapped[dict[str, Any]] = mapped_column(JSON)
+    # Add JSON field to store track positional information
+    last_updated: Mapped[datetime]
+
+    __table_args__ = (UniqueConstraint("connector_name", "connector_playlist_id"),)
+
+
 class DBPlaylistMapping(NaradaDBBase):
     """External service playlist mappings."""
 
@@ -294,13 +330,18 @@ class DBPlaylistTrack(NaradaDBBase):
     """Playlist track ordering and metadata."""
 
     __tablename__ = "playlist_tracks"
-    __table_args__ = (Index("ix_playlist_tracks_order", "playlist_id", "sort_key"),)
+    __table_args__ = (Index(None, "playlist_id", "sort_key"),)
 
     playlist_id: Mapped[int] = mapped_column(
         ForeignKey("playlists.id", ondelete="CASCADE"),
     )
     track_id: Mapped[int] = mapped_column(ForeignKey("tracks.id", ondelete="CASCADE"))
     sort_key: Mapped[str] = mapped_column(String(32))
+    added_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=True,  # Allow NULL for historical imports where exact time is unknown
+    )
 
     # Relationships
     playlist: Mapped[DBPlaylist] = relationship(

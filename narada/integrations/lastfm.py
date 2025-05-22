@@ -1,8 +1,21 @@
 """Last.fm API integration for Narada music metadata.
 
-This module provides a clean interface to the Last.fm API through the pylast library,
-converting between Last.fm track representations and domain models. It implements
-error handling, rate limiting, and functional transformation patterns.
+This module provides a clean interface to the Last.fm API through the pylast library
+(https://github.com/pylast/pylast), converting between Last.fm track representations
+and domain models. It implements rate limiting, error handling, and batch processing
+for efficient data retrieval.
+
+Key components:
+- LastFMConnector: Main client with track info retrieval and love operations
+- LastFMTrackInfo: Immutable container for Last.fm track metadata
+- LastFmMetricResolver: Resolves Last.fm-specific track metrics
+- Batch processing utilities: Efficient retrieval of track info for multiple tracks
+
+The module supports:
+- Track information retrieval by MBID or artist/title
+- User-specific playcount and loved status
+- Global playcount and listener metrics
+- Loving tracks on Last.fm
 """
 
 import asyncio
@@ -20,9 +33,9 @@ from narada.core.models import Artist, Track
 from narada.integrations.base_connector import (
     BaseMetricResolver,
     BatchProcessor,
-    ConnectorConfig,
     register_metrics,
 )
+from narada.integrations.protocols import ConnectorConfig
 
 # Get contextual logger with service binding
 logger = get_logger(__name__).bind(service="lastfm")
@@ -30,7 +43,27 @@ logger = get_logger(__name__).bind(service="lastfm")
 
 @define(frozen=True, slots=True)
 class LastFMTrackInfo:
-    """Complete track information from Last.fm API."""
+    """Complete track information from Last.fm API.
+
+    Immutable container for all track-related data from Last.fm,
+    including metadata, artist information, and user-specific metrics.
+
+    Attributes:
+        lastfm_title: Track title as known by Last.fm
+        lastfm_mbid: MusicBrainz ID for the track if available
+        lastfm_url: Last.fm URL for the track
+        lastfm_duration: Track duration in milliseconds
+        lastfm_artist_name: Artist name as known by Last.fm
+        lastfm_artist_mbid: MusicBrainz ID for the artist if available
+        lastfm_artist_url: Last.fm URL for the artist
+        lastfm_album_name: Album name as known by Last.fm
+        lastfm_album_mbid: MusicBrainz ID for the album if available
+        lastfm_album_url: Last.fm URL for the album
+        lastfm_user_playcount: Number of times the user has played this track
+        lastfm_global_playcount: Total play count across all Last.fm users
+        lastfm_listeners: Number of unique listeners on Last.fm
+        lastfm_user_loved: Whether the user has "loved" this track on Last.fm
+    """
 
     # Basic track info
     lastfm_title: str | None = field(default=None)

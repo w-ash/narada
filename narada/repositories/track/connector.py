@@ -1,14 +1,14 @@
 """Track connector repository for mapping tracks to external services."""
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar, cast
 
 from attrs import define
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from narada.config import get_logger
-from narada.core.models import Artist, Track
+from narada.core.models import Artist, ConnectorTrack, Track
 from narada.database.db_models import DBConnectorTrack, DBTrackMapping
 from narada.repositories.base_repo import BaseModelMapper, BaseRepository
 from narada.repositories.repo_decorator import db_operation
@@ -16,6 +16,7 @@ from narada.repositories.track.core import TrackRepository
 from narada.repositories.track.mapper import TrackMapper
 
 logger = get_logger(__name__)
+T = TypeVar("T")
 
 
 @define(frozen=True, slots=True)
@@ -26,7 +27,7 @@ class ConnectorTrackMapper(BaseModelMapper[DBConnectorTrack, dict[str, Any]]):
     async def to_domain(db_model: DBConnectorTrack) -> dict[str, Any]:
         """Convert DB connector track to dictionary."""
         if not db_model:
-            return None
+            return {}
 
         return {
             "id": db_model.id,
@@ -60,10 +61,7 @@ class ConnectorTrackMapper(BaseModelMapper[DBConnectorTrack, dict[str, Any]]):
 
     @staticmethod
     def get_default_relationships() -> list[str]:
-        """Get default relationships to load for connector tracks.
-
-        Note: ConnectorTrack only has 'mappings' relationship.
-        """
+        """Get default relationships to load for connector tracks."""
         return ["mappings"]
 
 
@@ -75,7 +73,7 @@ class TrackMappingMapper(BaseModelMapper[DBTrackMapping, dict[str, Any]]):
     async def to_domain(db_model: DBTrackMapping) -> dict[str, Any]:
         """Convert DB mapping to dictionary."""
         if not db_model:
-            return None
+            return {}
 
         return {
             "id": db_model.id,
@@ -99,10 +97,7 @@ class TrackMappingMapper(BaseModelMapper[DBTrackMapping, dict[str, Any]]):
 
     @staticmethod
     def get_default_relationships() -> list[str]:
-        """Get default relationships to load for track mappings.
-
-        Note: TrackMapping doesn't have a 'mappings' relationship.
-        """
+        """Get default relationships to load for track mappings."""
         return ["track", "connector_track"]
 
 
@@ -131,7 +126,12 @@ class TrackMappingRepository(BaseRepository[DBTrackMapping, dict[str, Any]]):
 
 
 class TrackConnectorRepository:
-    """Repository for track connector operations."""
+    """Repository for track connector operations.
+
+    Implements batch-first repository operations for connecting tracks
+    to external music services. All single-item operations are implemented
+    as degenerate cases of their bulk counterparts.
+    """
 
     def __init__(self, session: AsyncSession) -> None:
         """Initialize repository with session."""
@@ -141,30 +141,239 @@ class TrackConnectorRepository:
         self.mapping_repo = TrackMappingRepository(session)
         self.track_repo = TrackRepository(session)
 
+    @db_operation("find_tracks_by_connectors")
+    async def find_tracks_by_connectors(
+        self, connections: list[tuple[str, str]]
+    ) -> dict[tuple[str, str], Track]:
+        """Find tracks by connector name and ID in bulk.
+
+        Args:
+            connections: List of (connector, connector_id) tuples
+
+        Returns:
+            Dictionary mapping (connector, connector_id) tuples to Track objects
+        """
+        if not connections:
+            return {}
+
+        # Group by connector for efficiency
+        by_connector = {}
+        for connector, connector_id in connections:
+            by_connector.setdefault(connector, []).append(connector_id)
+
+        # Process each connector group
+        results = {}
+        for connector, connector_ids in by_connector.items():
+            # Find connector tracks
+            connector_tracks = await self.connector_repo.find_by([
+                self.connector_repo.model_class.connector_name == connector,
+                self.connector_repo.model_class.connector_track_id.in_(connector_ids),
+            ])
+
+            if not connector_tracks:
+                continue
+
+            # Create useful lookups
+            ct_id_to_external_id = {
+                ct["id"]: ct["connector_track_id"] for ct in connector_tracks
+            }
+            ct_ids = [ct["id"] for ct in connector_tracks]
+
+            # Find mappings
+            mappings = await self.mapping_repo.find_by([
+                self.mapping_repo.model_class.connector_track_id.in_(ct_ids),
+            ])
+
+            # Create mapping from connector_track_id to track_id
+            track_ids = [m["track_id"] for m in mappings]
+
+            # Get unique track IDs and fetch tracks
+            if track_ids:
+                tracks_dict = await self.track_repo.find_tracks_by_ids(track_ids)
+
+                # Build the result mapping with O(1) lookups
+                for mapping in mappings:
+                    ct_id = mapping["connector_track_id"]
+                    track_id = mapping["track_id"]
+
+                    # Use dictionary lookups for efficient access
+                    if ct_id in ct_id_to_external_id and track_id in tracks_dict:
+                        conn_id = ct_id_to_external_id[ct_id]
+                        results[connector, conn_id] = tracks_dict[track_id]
+
+        return results
+
     @db_operation("find_track_by_connector")
     async def find_track_by_connector(
         self, connector: str, connector_id: str
     ) -> Track | None:
-        """Find a track by connector name and ID."""
-        # Find the connector track first
-        connector_track = await self.connector_repo.find_one_by({
-            "connector_name": connector,
-            "connector_track_id": connector_id,
-        })
+        """Find a track by connector name and ID (degenerate case of bulk method)."""
+        results = await self.find_tracks_by_connectors([(connector, connector_id)])
+        return results.get((connector, connector_id))
 
-        if not connector_track:
-            return None
+    @db_operation("map_tracks_to_connectors")
+    async def map_tracks_to_connectors(
+        self,
+        mappings: list[tuple[Track, str, str, str, int, dict | None, dict | None]],
+    ) -> list[Track]:
+        """Map multiple tracks to connectors in a single bulk operation.
 
-        # Find mapping using the connector track ID
-        mapping = await self.mapping_repo.find_one_by({
-            "connector_track_id": connector_track["id"],
-        })
+        Args:
+            mappings: List of tuples with (track, connector, connector_id, match_method,
+                    confidence, metadata, confidence_evidence)
 
-        if not mapping:
-            return None
+        Returns:
+            List of updated Track objects
+        """
+        if not mappings:
+            return []
 
-        # Get the track using the track_id from the mapping
-        return await self.track_repo.get_by_id(mapping["track_id"])
+        # Collect all connector tracks for bulk insert
+        connector_tracks_data = []
+        connector_track_keys = set()
+        mapping_data = []
+        updated_tracks = []
+        track_metadata_map = {}
+
+        # Prepare all necessary data
+        for (
+            track,
+            connector,
+            connector_id,
+            _,
+            _,
+            metadata,
+            _,
+        ) in mappings:
+            if track.id is None:
+                continue
+
+            # Prepare connector track data
+            connector_track_key = (connector, connector_id)
+            if connector_track_key not in connector_track_keys:
+                connector_tracks_data.append({
+                    "connector_name": connector,
+                    "connector_track_id": connector_id,
+                    "title": track.title,
+                    "artists": {"names": [a.name for a in track.artists]}
+                    if track.artists
+                    else {"names": []},
+                    "album": track.album,
+                    "duration_ms": track.duration_ms,
+                    "release_date": track.release_date,
+                    "isrc": track.isrc,
+                    "raw_metadata": metadata or {},
+                    "last_updated": datetime.now(UTC),
+                })
+                connector_track_keys.add(connector_track_key)
+
+            # Create updated track object
+            updated_track = track.with_connector_track_id(connector, connector_id)
+            if metadata:
+                updated_track = updated_track.with_connector_metadata(
+                    connector, metadata
+                )
+                track_metadata_map.setdefault(track.id, {})[connector] = metadata
+
+            updated_tracks.append(updated_track)
+
+        # Bulk upsert connector tracks
+        connector_tracks_result = await self.connector_repo.bulk_upsert(
+            connector_tracks_data,
+            lookup_keys=["connector_name", "connector_track_id"],
+            return_models=True,  # Add this parameter to ensure we get models back
+        )
+
+        # Handle the case where bulk_upsert returns an integer count instead of models
+        if isinstance(connector_tracks_result, int):
+            # If we got an integer result, we need to fetch the tracks explicitly
+            connector_name_ids = [
+                (data["connector_name"], data["connector_track_id"])
+                for data in connector_tracks_data
+            ]
+
+            # Build query to find all connector tracks by name and ID pairs
+            stmt = select(self.connector_repo.model_class).where(
+                self.connector_repo.model_class.connector_name.in_([
+                    c[0] for c in connector_name_ids
+                ]),
+                self.connector_repo.model_class.connector_track_id.in_([
+                    c[1] for c in connector_name_ids
+                ]),
+            )
+
+            # Fetch the connector tracks
+            result = await self.session.execute(stmt)
+            connector_tracks = []
+            for row in result.scalars().all():
+                domain_model = await self.connector_repo.mapper.to_domain(row)
+                if domain_model:
+                    connector_tracks.append(domain_model)
+        else:
+            # Use the returned models directly
+            connector_tracks = cast("list[dict[str, Any]]", connector_tracks_result)
+
+        # Create connector ID to DB ID mapping
+        connector_id_map = {
+            (ct["connector_name"], ct["connector_track_id"]): ct["id"]
+            for ct in connector_tracks
+        }
+
+        # Prepare mapping data
+        for _i, (
+            track,
+            connector,
+            connector_id,
+            match_method,
+            confidence,
+            _,
+            confidence_evidence,
+        ) in enumerate(mappings):
+            if track.id is None or (connector, connector_id) not in connector_id_map:
+                continue
+
+            connector_track_id = connector_id_map[connector, connector_id]
+            mapping_data.append({
+                "track_id": track.id,
+                "connector_track_id": connector_track_id,
+                "match_method": match_method,
+                "confidence": confidence,
+                "confidence_evidence": confidence_evidence,
+            })
+
+        # Bulk upsert mappings
+        if mapping_data:
+            await self.mapping_repo.bulk_upsert(
+                mapping_data,
+                lookup_keys=["track_id", "connector_track_id"],
+                return_models=False,
+            )
+
+        # Process metrics in bulk
+        if updated_tracks:
+            from narada.repositories.track.metrics import process_metrics_for_track
+
+            # Create track/connector/metadata combinations for processing
+            metric_tasks = []
+            for track in updated_tracks:
+                if track.id is not None and track.id in track_metadata_map:
+                    for connector, metadata in track_metadata_map[track.id].items():
+                        metric_tasks.append((track.id, connector, {track.id: metadata}))
+
+            # Process each task with error handling
+            for track_id, connector, track_metadata in metric_tasks:
+                try:
+                    await process_metrics_for_track(
+                        self.session, track_id, connector, track_metadata
+                    )
+                except Exception:
+                    logger.warning(
+                        f"Error processing metrics for track {track_id}",
+                        connector=connector,
+                        exc_info=True,
+                    )
+
+        return updated_tracks
 
     @db_operation("map_track_to_connector")
     async def map_track_to_connector(
@@ -177,98 +386,180 @@ class TrackConnectorRepository:
         metadata: dict | None = None,
         confidence_evidence: dict | None = None,
     ) -> Track:
-        """Map an existing track to a connector."""
+        """Map an existing track to a connector (degenerate case of bulk method)."""
         if track.id is None:
             raise ValueError("Cannot map track with no ID")
 
-        # DEBUG: Log what metadata we're getting
-        logger.debug(
-            f"Mapping track {track.id} to {connector}:{connector_id}",
-            metadata_param=metadata is not None,
-            connector_metadata=track.connector_metadata.get(connector, {})
-            if hasattr(track, "connector_metadata")
-            else None,
-        )
-
-        # Ensure the track exists in the database
+        # Ensure the track exists
         try:
             await self.track_repo.get_by_id(track.id)
         except ValueError as err:
             raise ValueError(f"Track with ID {track.id} not found") from err
 
-        # Create or get the connector track
-        connector_track = await self.connector_repo.find_one_by({
-            "connector_name": connector,
-            "connector_track_id": connector_id,
-        })
+        results = await self.map_tracks_to_connectors([
+            (
+                track,
+                connector,
+                connector_id,
+                match_method,
+                confidence,
+                metadata,
+                confidence_evidence,
+            )
+        ])
 
-        if not connector_track:
-            metadata_to_save = metadata or {}
+        return results[0] if results else track
 
-            connector_track = await self.connector_repo.create({
+    @db_operation("ingest_external_tracks_bulk")
+    async def ingest_external_tracks_bulk(
+        self,
+        connector: str,
+        tracks: list[ConnectorTrack],
+    ) -> list[Track]:
+        """Bulk ingest multiple tracks from external connector.
+
+        This is the primary method for track ingestion, optimized for bulk operations.
+        Single-track operations are implemented as a special case of this method.
+
+        Args:
+            connector: Connector name (e.g., "spotify")
+            tracks: List of connector tracks to ingest
+
+        Returns:
+            List of domain Track models
+        """
+        if not tracks:
+            return []
+
+        # 1. Bulk upsert all connector tracks
+        connector_track_data = [
+            {
                 "connector_name": connector,
-                "connector_track_id": connector_id,
+                "connector_track_id": track.connector_track_id,
                 "title": track.title,
                 "artists": {"names": [a.name for a in track.artists]}
                 if track.artists
-                else None,
+                else {"names": []},
                 "album": track.album,
                 "duration_ms": track.duration_ms,
                 "release_date": track.release_date,
                 "isrc": track.isrc,
-                "raw_metadata": metadata_to_save,  # Always save metadata here
+                "raw_metadata": track.raw_metadata or {},
                 "last_updated": datetime.now(UTC),
-            })
+            }
+            for track in tracks
+        ]
 
-            # Simple log to confirm metadata was stored
-            logger.debug(
-                "Created connector track with raw_metadata fields",
-                metadata_keys=list(metadata_to_save.keys()) if metadata_to_save else [],
-                has_metadata=bool(metadata_to_save),
-            )
-
-        # Create or update the mapping
-        await self.mapping_repo.upsert(
-            lookup_attrs={
-                "track_id": track.id,
-                "connector_track_id": connector_track["id"],
-            },
-            create_attrs={
-                "match_method": match_method,
-                "confidence": confidence,
-                "confidence_evidence": confidence_evidence,
-            },
+        connector_tracks = await self.connector_repo.bulk_upsert(
+            connector_track_data,
+            lookup_keys=["connector_name", "connector_track_id"],
         )
 
-        # Return updated track with connector ID
-        updated_track = track.with_connector_track_id(connector, connector_id)
-        if metadata:
-            updated_track = updated_track.with_connector_metadata(connector, metadata)
+        # 2. Create a lookup dict for connector tracks
+        connector_track_lookup: dict[str, dict[str, Any]] = {}
+        if isinstance(connector_tracks, list):
+            for ct in connector_tracks:
+                connector_track_lookup[ct["connector_track_id"]] = ct
 
-        # Process metrics within the same transaction
-        if track.id is not None and metadata:
-            # Import the in-transaction metrics processor
-            from narada.repositories.track.metrics import process_metrics_for_track
-            
-            # Get track ID for type checking
-            track_id = track.id
-            
-            # Process metrics within this transaction using the same session
-            # This avoids creating a new transaction that could cause locks
-            try:
-                # Create metadata in the format expected by process_metrics_for_track
-                track_metadata = {track_id: metadata}
-                await process_metrics_for_track(self.session, track_id, connector, track_metadata)
-                logger.debug(f"Processed metrics for track {track_id} in existing transaction")
-            except Exception as e:
-                # Log but allow the operation to continue
-                logger.warning(
-                    f"Non-critical error processing metrics for track {track_id}: {e}",
-                    connector=connector,
-                    exc_info=True,
+        # 3. Create or find domain tracks
+        domain_tracks = []
+        track_mappings_data = []
+        metrics_data = []
+
+        for track in tracks:
+            # Try to find existing mapping first
+            connector_track_id = connector_track_lookup[track.connector_track_id]["id"]
+
+            mapping = await self.mapping_repo.find_one_by({
+                "connector_track_id": connector_track_id,
+                "is_deleted": False,
+            })
+
+            if mapping:
+                # Track exists, retrieve it
+                domain_track = await self.track_repo.get_by_id(mapping["track_id"])
+                logger.debug(
+                    f"Found existing track {mapping['track_id']} for "
+                    f"{connector}:{track.connector_track_id}"
+                )
+                domain_tracks.append(domain_track)
+
+                # Update mapping confidence if needed
+                if mapping["confidence"] < 100:
+                    await self.mapping_repo.update(mapping["id"], {"confidence": 100})
+            else:
+                # Create new track
+                artists = (
+                    [Artist(name=a.name) for a in track.artists]
+                    if track.artists
+                    else []
+                )
+                track_obj = Track(
+                    title=track.title,
+                    artists=artists,
+                    album=track.album,
+                    duration_ms=track.duration_ms,
+                    release_date=track.release_date,
+                    isrc=track.isrc,
                 )
 
-        return updated_track
+                # Add connector ID and metadata
+                track_obj = track_obj.with_connector_track_id(
+                    connector, track.connector_track_id
+                )
+                track_obj = track_obj.with_connector_metadata(
+                    connector, track.raw_metadata or {}
+                )
+
+                # Save track and get ID
+                domain_track = await self.track_repo.save_track(track_obj)
+                domain_tracks.append(domain_track)
+
+                # Prepare mapping data for bulk insert
+                if domain_track.id is not None:
+                    track_mappings_data.append({
+                        "track_id": domain_track.id,
+                        "connector_track_id": connector_track_id,
+                        "match_method": "direct",
+                        "confidence": 100,
+                    })
+
+                    # Prepare metrics data
+                    if track.raw_metadata:
+                        metrics_data.append((domain_track.id, track.raw_metadata))
+
+        # 5. Bulk create mappings if any
+        if track_mappings_data:
+            await self.mapping_repo.bulk_upsert(
+                track_mappings_data,
+                lookup_keys=["track_id", "connector_track_id"],
+                return_models=False,
+            )
+
+        # 6. Process metrics in bulk
+        if metrics_data:
+            from narada.repositories.track.metrics import process_metrics_for_track
+
+            # Prepare all metrics data for batch processing
+            metric_tasks = [
+                (track_id, connector, {track_id: metadata})
+                for track_id, metadata in metrics_data
+            ]
+
+            # Process each task with error handling
+            for track_id, connector_name, track_metadata in metric_tasks:
+                try:
+                    await process_metrics_for_track(
+                        self.session, track_id, connector_name, track_metadata
+                    )
+                except Exception:
+                    logger.warning(
+                        f"Error processing metrics for track {track_id}",
+                        connector=connector_name,
+                        exc_info=True,
+                    )
+
+        return domain_tracks
 
     @db_operation("ingest_external_track")
     async def ingest_external_track(
@@ -282,147 +573,80 @@ class TrackConnectorRepository:
         duration_ms: int | None = None,
         release_date: datetime | None = None,
         isrc: str | None = None,
-    ) -> Track:
-        """Ingest track data from external source.
-        
-        This method follows a data-first approach:
-        1. First saves connector_track with raw metadata
-        2. Then creates/finds core track
-        3. Finally handles mappings and metrics
-        
-        Uses explicit repository operations to avoid async issues.
+        added_at: str | None = None,
+    ) -> Track | None:
+        """Ingest a single track from external source.
+
+        This is implemented as a special case of ingest_external_tracks_bulk
+        for DRY purposes. All the logic is in the bulk method.
+
+        Args:
+            connector: Connector name (e.g., "spotify")
+            connector_id: ID of the track in the external service
+            metadata: Raw metadata from the external service
+            title: Track title
+            artists: List of artist names
+            album: Album name
+            duration_ms: Duration in milliseconds
+            release_date: Release date of the track
+            isrc: ISRC code for the track
+            added_at: Timestamp when the track was added to a playlist
+
+        Returns:
+            Domain Track model
         """
-        # Step 1: Find or create connector track
-        connector_track = await self.connector_repo.find_one_by({
-            "connector_name": connector,
-            "connector_track_id": connector_id,
-        })
-        
-        artists_dict = {"names": artists} if artists else {"names": []}
-        
-        if not connector_track:
-            # Create new connector track 
-            connector_track = await self.connector_repo.create({
-                "connector_name": connector,
-                "connector_track_id": connector_id,
-                "title": title,
-                "artists": artists_dict,
-                "album": album,
-                "duration_ms": duration_ms,
-                "release_date": release_date,
-                "isrc": isrc,
-                "raw_metadata": metadata or {},
-                "last_updated": datetime.now(UTC),
-            })
-            
-            logger.debug(
-                f"Created connector track for {connector}:{connector_id}",
-                connector_track_id=connector_track["id"],
-                metadata_keys=list(metadata.keys()) if metadata else [],
-            )
-        else:
-            # Update existing connector track
-            await self.connector_repo.update(
-                connector_track["id"], 
-                {
-                    "title": title,
-                    "artists": artists_dict,
-                    "album": album,
-                    "duration_ms": duration_ms,
-                    "release_date": release_date,
-                    "isrc": isrc,
-                    "raw_metadata": metadata or {},
-                    "last_updated": datetime.now(UTC),
-                }
-            )
-        
-        # Step 2: Check if there's a mapping to an existing track
-        mapping = await self.mapping_repo.find_one_by({
-            "connector_track_id": connector_track["id"],
-            "is_deleted": False,
-        })
-        
-        track = None
-        if mapping:
-            # Track exists, retrieve it
-            track = await self.track_repo.get_by_id(mapping["track_id"])
-            logger.debug(
-                f"Found existing track {mapping['track_id']} for {connector}:{connector_id}"
-            )
-        else:
-            # Create a new track from the connector data
-            track_obj = Track(
-                title=title,
-                artists=[Artist(name=name) for name in artists],
-                album=album,
-                duration_ms=duration_ms,
-                release_date=release_date,
-                isrc=isrc,
-            )
-            
-            # Add connector ID and metadata
-            track_obj = track_obj.with_connector_track_id(connector, connector_id)
-            if metadata:
-                track_obj = track_obj.with_connector_metadata(connector, metadata)
-            
-            # Save to database
-            track = await self.track_repo.save_track(track_obj)
-            
-            # Create the mapping
-            if track and track.id is not None:
-                await self.mapping_repo.create({
-                    "track_id": track.id,
-                    "connector_track_id": connector_track["id"],
-                    "match_method": "direct",
-                    "confidence": 100,
-                })
-                logger.debug(
-                    f"Created new track {track.id} for {connector}:{connector_id}"
-                )
-        
-        # Step 3: Process metrics within the same transaction as the rest of the data
-        if track and track.id is not None and metadata:
-            # Import the in-transaction metrics processor
-            from narada.repositories.track.metrics import process_metrics_for_track
-            
-            # Get track ID for type checking
-            track_id = track.id
-            
-            # Process metrics within this transaction using the same session
-            # This avoids creating a new transaction and prevents database locks
-            try:
-                # Create metadata in the format expected by process_metrics_for_track
-                track_metadata = {track_id: metadata}
-                await process_metrics_for_track(self.session, track_id, connector, track_metadata)
-                logger.debug(f"Processed metrics for track {track_id} in existing transaction")
-            except Exception as e:
-                # Log but allow the operation to continue
-                logger.warning(
-                    f"Non-critical error processing metrics for track {track_id}: {e}",
-                    connector=connector,
-                    exc_info=True,
-                )
-        
-        return track
+        # Ensure we have a metadata dictionary
+        actual_metadata = metadata or {}
+
+        # Add the added_at timestamp to metadata if provided
+        if added_at and "added_at" not in actual_metadata:
+            actual_metadata["added_at"] = added_at
+
+        # Convert parameters to a ConnectorTrack
+        connector_track = ConnectorTrack(
+            connector_name=connector,
+            connector_track_id=connector_id,
+            title=title,
+            artists=[Artist(name=name) for name in artists] if artists else [],
+            album=album,
+            duration_ms=duration_ms,
+            release_date=release_date,
+            isrc=isrc,
+            raw_metadata=actual_metadata,
+        )
+
+        # Call the bulk method with a list of one item
+        tracks = await self.ingest_external_tracks_bulk(connector, [connector_track])
+        if not tracks:
+            logger.warning(f"Failed to ingest track {connector}:{connector_id}")
+            return None
+        return tracks[0]
 
     @db_operation("create_track_from_connector_data")
     async def create_track_from_connector_data(
         self, track: Track, connector: str
-    ) -> Track:
-        """Create a track directly from connector data."""
+    ) -> Track | None:
+        """Create a track directly from connector data.
+
+        This is a convenience method that leverages the bulk ingest operation
+        under the hood for consistency.
+        """
         if not track.title or not track.artists:
             raise ValueError("Track must have title and artists")
 
         if connector not in track.connector_track_ids:
             raise ValueError(f"Track doesn't have an ID for connector {connector}")
 
-        # Use the new ingest method for consistency
+        # Use the ingest method for consistency
         connector_id = track.connector_track_ids[connector]
         metadata = (
             track.connector_metadata.get(connector, {})
             if hasattr(track, "connector_metadata")
             else {}
         )
+
+        # Extract added_at from metadata if present
+        added_at = metadata.get("added_at")
 
         return await self.ingest_external_track(
             connector=connector,
@@ -434,6 +658,7 @@ class TrackConnectorRepository:
             duration_ms=track.duration_ms,
             release_date=track.release_date,
             isrc=track.isrc,
+            added_at=added_at,
         )
 
     @db_operation("get_connector_mappings")
@@ -539,42 +764,24 @@ class TrackConnectorRepository:
             "connector_track_id": connector_id,
         })
 
-        if not connector_track:
+        if not connector_track or "id" not in connector_track:
             return False
 
-        # Check if connector_track ID is valid
-        connector_track_id = connector_track.get("id")
-        if connector_track_id is None:
-            return False
-
-        # Find the mapping
-        mapping = await self.mapping_repo.find_one_by({
-            "track_id": track_id,
-            "connector_track_id": connector_track_id,
-        })
-
-        if not mapping:
-            return False
-
-        # Build a properly typed dictionary for the update
-        # This explicit dict[str, Any] helps Pylance understand the value types
-        update_data: dict[str, Any] = {
-            "confidence": confidence,
-        }
-
+        # Update mapping using upsert
+        update_data: dict[str, Any] = {"confidence": confidence}
         if match_method:
             update_data["match_method"] = match_method
-
         if confidence_evidence:
             update_data["confidence_evidence"] = confidence_evidence
 
-        # Update the mapping using the ID and update method
         try:
-            mapping_id = mapping.get("id")
-            if mapping_id is None:
-                return False
-
-            await self.mapping_repo.update(mapping_id, update_data)
+            await self.mapping_repo.upsert(
+                lookup_attrs={
+                    "track_id": track_id,
+                    "connector_track_id": connector_track["id"],
+                },
+                create_attrs=update_data,
+            )
             return True
         except ValueError:
             return False

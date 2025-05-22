@@ -37,14 +37,30 @@ async def safe_fetch_relationship(db_model: Any, rel_name: str) -> list[Any]:
 
     This function uses a single, consistent approach for safely accessing
     relationship attributes in async context using SQLAlchemy 2.0 best practices.
+    
+    Returns:
+        Always returns a list for consistent handling. For single-entity relationships,
+        callers should access the first element in the list. For empty results, the list
+        will be empty.
     """
     try:
         # Standard SQLAlchemy 2.0 pattern: use awaitable_attrs
         if hasattr(db_model, "awaitable_attrs"):
-            return await getattr(db_model.awaitable_attrs, rel_name)
+            result = await getattr(db_model.awaitable_attrs, rel_name)
+            # Ensure consistent return type (always list)
+            if result is None:
+                return []
+            if isinstance(result, list):
+                return result
+            return [result]
         # Simple fallback for non-AsyncAttrs models
         elif hasattr(db_model, rel_name):
-            return getattr(db_model, rel_name) or []
+            result = getattr(db_model, rel_name)
+            if result is None:
+                return []
+            if isinstance(result, list):
+                return result
+            return [result]
         return []
     except Exception:
         return []

@@ -75,45 +75,38 @@ async def import_spotify_likes(
             logger.info(f"Reached maximum import count: {max_imports}")
             break
 
-        # Fetch tracks from Spotify
-        tracks, next_cursor = await spotify.get_liked_tracks(
+        # Fetch connector tracks from Spotify
+        connector_tracks, next_cursor = await spotify.get_liked_tracks(
             limit=limit,
             cursor=cursor,
         )
 
-        if not tracks:
+        if not connector_tracks:
             logger.info("No more tracks to import from Spotify")
             break
 
-        # Process each track
+        # Process each connector track
         batch_timestamp = datetime.now(UTC)
-        for track in tracks:
+        for connector_track in connector_tracks:
             stats.total += 1
 
             try:
-                # Save or update track in database
-                # First try to find by Spotify ID using the track core repository
-                if "spotify" in track.connector_track_ids:
-                    # Use upsert directly with the core repository
-                    db_track = await track_repo.core.upsert(
-                        lookup_attrs={
-                            "spotify_id": track.connector_track_ids["spotify"]
-                        },
-                        create_attrs={
-                            "title": track.title,
-                            "artists": {
-                                "names": [artist.name for artist in track.artists]
-                            },
-                            "album": track.album,
-                            "duration_ms": track.duration_ms,
-                            "release_date": track.release_date,
-                            "isrc": track.isrc,
-                        },
-                    )
-                else:
-                    # No spotify ID available, use save_track
-                    db_track = await track_repo.core.save_track(track)
-                    logger.debug(f"Created new track: {track.title}")
+                # Use the connector repository which handles both:
+                # 1. Saving the connector track (external representation)
+                # 2. Creating/updating the domain track and mappings
+                db_track = await track_repo.connector.ingest_external_track(
+                    connector="spotify",
+                    connector_id=connector_track.connector_track_id,
+                    metadata=connector_track.raw_metadata,
+                    title=connector_track.title, 
+                    artists=[a.name for a in connector_track.artists],
+                    album=connector_track.album,
+                    duration_ms=connector_track.duration_ms,
+                    release_date=connector_track.release_date,
+                    isrc=connector_track.isrc,
+                )
+                
+                logger.debug(f"Ingested track: {connector_track.title} (ID: {db_track.id if db_track else None})")
 
                 # Ensure track_id is not None
                 if db_track and db_track.id is not None:
@@ -125,13 +118,13 @@ async def import_spotify_likes(
                     )
                 else:
                     logger.warning(
-                        f"Could not save likes for track: {track.title} - No valid track ID"
+                        f"Could not save likes for track: {connector_track.title} - No valid track ID"
                     )
 
                 stats.imported += 1
 
             except Exception as e:
-                logger.exception(f"Error importing track {track.title}: {e}")
+                logger.exception(f"Error importing track {connector_track.title}: {e}")
                 stats.errors += 1
 
         # Update checkpoint for resumability

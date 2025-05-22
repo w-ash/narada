@@ -1,4 +1,19 @@
-"""MusicBrainz service connector for entity resolution."""
+"""MusicBrainz service connector for entity resolution.
+
+This module provides integration with the MusicBrainz API for music metadata lookup
+and entity resolution. It implements efficient batch processing with proper rate
+limiting to comply with MusicBrainz API policies (1 request per second).
+
+Key components:
+- MusicBrainzConnector: Main connector with ISRC resolution capabilities
+- BatchProcessor integration: Efficient batch processing with proper backoff
+- Rate-limited request handling: Ensures API policy compliance
+
+The module specializes in:
+- ISRC to MBID (MusicBrainz ID) resolution for tracks
+- Fallback artist/title search when ISRC is unavailable
+- Efficient batch processing of multiple identifiers
+"""
 
 import asyncio
 from importlib.metadata import metadata
@@ -25,10 +40,14 @@ musicbrainzngs.set_useragent(app_name, app_version, app_url)
 
 @define(slots=True)
 class MusicBrainzConnector:
-    """Thin wrapper around musicbrainzngs with rate limiting.
+    """Wrapper for MusicBrainz API with rate-limiting support.
 
     Specializes in ISRC → MBID resolution with efficient batch processing
     while strictly adhering to MusicBrainz rate limits (1 req/sec).
+
+    Attributes:
+        _last_request_time: Timestamp of last API request for rate limiting
+        _request_lock: Asyncio lock to ensure sequential request handling
     """
 
     _last_request_time: float = field(default=0.0)

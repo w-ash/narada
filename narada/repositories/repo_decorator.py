@@ -1,16 +1,13 @@
-"""Decorator for standardizing repository operations with consistent error handling and logging.
+"""Repository decorator for standardizing DB operations.
 
-This module provides a decorator that wraps repository methods to provide:
-1. Consistent error handling for database operations
-2. Structured logging with context
-3. Performance tracking for database operations
-4. Proper typing for Pylance
+This module provides decorators for repository methods that handle common
+database operations including:
+- Structured logging with context and timing information
+- Comprehensive error handling with appropriate error classification
+- Consistent performance monitoring and debugging support
 
-Usage Example:
-    @db_operation("get_track")
-    async def get_track(self, id: int) -> Track:
-        # Implementation
-        ...
+The decorators help enforce a consistent pattern for all database operations
+while reducing repetitive error-handling code.
 """
 
 import asyncio

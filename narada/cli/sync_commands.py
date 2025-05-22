@@ -1,17 +1,15 @@
 """Synchronization commands for Narada CLI."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
 from typing import Annotated
 
 from rich.console import Console
 import typer
 
 from narada.cli.command_registry import register_command
-from narada.cli.ui import display_error, display_sync_stats
+from narada.cli.ui import command_error_handler, display_sync_stats
 from narada.config import get_logger
 from narada.services.like_sync import (
-    SyncStats,
     run_lastfm_likes_export,
     run_spotify_likes_import,
 )
@@ -40,37 +38,7 @@ def register_sync_commands(app: typer.Typer) -> None:
     )(export_likes_to_lastfm)
 
 
-def _run_sync_operation(
-    operation_name: str,
-    operation_fn: Callable[[], Awaitable[SyncStats]],
-    spinner_text: str,
-    title: str,
-    next_step_message: str | None = None,
-) -> None:
-    """Run a synchronization operation with standard UI patterns."""
-    try:
-        # Display progress spinner
-        with console.status(spinner_text) as status:
-            # Run the operation
-            async def main():
-                return await operation_fn()
-
-            stats = asyncio.run(main())
-
-            # Update status based on result
-            status.update("[bold green]Operation completed!")
-
-        # Display results
-        display_sync_stats(
-            stats=stats,
-            title=title,
-            next_step_message=next_step_message,
-        )
-    except Exception as e:
-        display_error(e, operation_name)
-        raise typer.Exit(1) from e
-
-
+@command_error_handler
 def import_spotify_likes(
     limit: Annotated[
         int | None,
@@ -93,14 +61,23 @@ def import_spotify_likes(
     imports them into the Narada database, preserving their like status.
     The operation is resumable and can be run incrementally.
     """
-    _run_sync_operation(
-        operation_name="Spotify likes import",
-        operation_fn=lambda: run_spotify_likes_import(
-            user_id=user_id,
-            limit=batch_size,
-            max_imports=limit,
-        ),
-        spinner_text="[bold blue]Importing liked tracks from Spotify...",
+    # Display progress spinner
+    with console.status("[bold blue]Importing liked tracks from Spotify...") as status:
+        # Run the operation
+        stats = asyncio.run(
+            run_spotify_likes_import(
+                user_id=user_id,
+                limit=batch_size,
+                max_imports=limit,
+            )
+        )
+
+        # Update status based on result
+        status.update("[bold green]Import completed!")
+
+    # Display results
+    display_sync_stats(
+        stats=stats,
         title="Spotify Likes Import Results",
         next_step_message=(
             "[yellow]Tip:[/yellow] Run [cyan]narada export-likes-to-lastfm[/cyan] "
@@ -109,6 +86,7 @@ def import_spotify_likes(
     )
 
 
+@command_error_handler
 def export_likes_to_lastfm(
     limit: Annotated[
         int | None,
@@ -131,13 +109,22 @@ def export_likes_to_lastfm(
     loved on Last.fm, and marks them as loved on Last.fm. Narada is
     considered the source of truth for liked tracks.
     """
-    _run_sync_operation(
-        operation_name="Last.fm likes export",
-        operation_fn=lambda: run_lastfm_likes_export(
-            user_id=user_id,
-            batch_size=batch_size,
-            max_exports=limit,
-        ),
-        spinner_text="[bold blue]Exporting liked tracks to Last.fm...",
+    # Display progress spinner
+    with console.status("[bold blue]Exporting liked tracks to Last.fm...") as status:
+        # Run the operation
+        stats = asyncio.run(
+            run_lastfm_likes_export(
+                user_id=user_id,
+                batch_size=batch_size,
+                max_exports=limit,
+            )
+        )
+
+        # Update status based on result
+        status.update("[bold green]Export completed!")
+
+    # Display results
+    display_sync_stats(
+        stats=stats,
         title="Last.fm Loves Export Results",
     )

@@ -4,8 +4,10 @@ This module provides reusable UI components and helpers for the CLI,
 keeping the presentation logic separate from business logic.
 """
 
+from collections.abc import Callable
+import functools
 import shlex
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 from rich.columns import Columns
 from rich.console import Console
@@ -21,6 +23,59 @@ from narada.services.like_sync import SyncStats
 # Initialize console and logger
 console = Console()
 logger = get_logger(__name__)
+
+# Type variables for command handler decorator
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def command_error_handler[**P, R](func: Callable[P, R]) -> Callable[P, R]:
+    """Decorator to standardize error handling for CLI commands.
+
+    This decorator wraps a command function to:
+    1. Provide consistent error handling using Typer's Exit mechanism
+    2. Log errors using Loguru with proper context
+    3. Display user-friendly error messages with Rich
+
+    Args:
+        func: The command function to wrap
+
+    Returns:
+        Wrapped function with integrated error handling
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        # Get operation name from function name for logging context
+        operation = func.__name__.replace("_", " ")
+
+        # Execute with logging context
+        with logger.contextualize(operation=operation):
+            try:
+                # Log command execution
+                logger.debug(f"Executing {operation}")
+                return func(*args, **kwargs)
+
+            except typer.Exit:
+                # Let typer.Exit propagate to Typer - it's already being handled
+                raise
+
+            except typer.Abort:
+                # User initiated abort (e.g., Ctrl+C), log and re-raise
+                logger.info(f"Operation {operation} aborted by user")
+                raise
+
+            except Exception as e:
+                # Log the exception with full traceback
+                logger.exception(f"Error during {operation}")
+
+                # Display a clean error message to the user
+                console.print(f"\n[bold red]✗ Error during {operation}:[/bold red] {e}")
+
+                # Convert to Typer exit for proper exit code
+                raise typer.Exit(code=1) from e
+
+    return wrapper
 
 
 def display_welcome_banner(
@@ -54,10 +109,13 @@ def display_welcome_banner(
 
     if is_repl:
         panel_content.append("[dim]Shell commands:[/dim]")
-        panel_content.append("[yellow]help[/yellow] - Show this menu")
-        panel_content.append("[yellow]exit[/yellow] - Exit the shell")
+        panel_content.append(
+            "[yellow]help[/yellow] or [yellow]?[/yellow] - Show available commands"
+        )
+        panel_content.append(
+            "[yellow]exit[/yellow] or [yellow]quit[/yellow] - Exit the shell"
+        )
         panel_content.append("[yellow]<tab>[/yellow] - Press to complete commands")
-        panel_content.append("[yellow]?[/yellow] - Show this help screen")
 
     # Organize commands by category for better presentation
     for group, cmds in sorted(command_groups.items()):
@@ -218,8 +276,6 @@ def display_workflow_result(
         console.print("\n")
 
         # Show summary stats first
-        # We use the already imported Columns and Panel
-
         panels = [
             Panel(
                 f"[bold]{len(result.tracks)}[/bold]",

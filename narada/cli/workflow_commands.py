@@ -18,7 +18,7 @@ from rich.table import Table
 import typer
 
 from narada.cli.command_registry import register_command
-from narada.cli.ui import display_error, display_workflow_result
+from narada.cli.ui import command_error_handler, display_workflow_result
 from narada.config import get_config, get_logger
 from narada.workflows.prefect import (
     register_progress_callback,
@@ -159,7 +159,7 @@ async def run_workflow_async(
             console.print(
                 "[yellow]Add workflow JSON files to the workflows directory[/yellow]",
             )
-            return 1
+            raise typer.Exit(code=1)
 
         # Display workflow table with numbers for selection
         table = Table(title="Available Workflows")
@@ -191,7 +191,7 @@ async def run_workflow_async(
                     workflow_id = workflows[choice - 1]["id"]
                 else:
                     console.print("[red]Invalid selection number.[/red]")
-                    return 1
+                    raise typer.Exit(code=1)
             except ValueError:
                 # Try matching by ID
                 matching_workflow = next(
@@ -203,7 +203,7 @@ async def run_workflow_async(
                     console.print(
                         "[red]Invalid selection. Enter a number or workflow ID.[/red]"
                     )
-                    return 1
+                    raise typer.Exit(code=1) from None
         except (KeyboardInterrupt, EOFError):
             console.print("\n[yellow]Workflow selection cancelled.[/yellow]")
             return 0
@@ -212,7 +212,7 @@ async def run_workflow_async(
     workflow_info = next((wf for wf in workflows if wf["id"] == workflow_id), None)
     if not workflow_info:
         console.print(f"[red]Workflow '{workflow_id}' not found.[/red]")
-        return 1
+        raise typer.Exit(code=1)
 
     # Initialize node system
     with console.status("[bold blue]Initializing node system..."):
@@ -221,7 +221,7 @@ async def run_workflow_async(
     if not success:
         console.print(f"[bold red]✗ {message}[/bold red]")
         logger.error(f"Node initialization failed: {message}")
-        return 1
+        raise typer.Exit(code=1)
 
     console.print(f"[bold green]✓ {message}[/bold green]")
     logger.info(f"Node initialization successful: {message}")
@@ -294,9 +294,10 @@ async def run_workflow_async(
             console.print("[bold red]✗ Workflow failed[/bold red]")
             console.print(f"[red]Error: {e}[/red]")
             logger.exception("Workflow execution failed")
-            return 1
+            raise typer.Exit(code=1) from e
 
 
+@command_error_handler
 def run_workflow(
     workflow_id: Annotated[
         str | None,
@@ -312,12 +313,5 @@ def run_workflow(
     ] = "table",
 ) -> None:
     """Run a workflow from available definitions."""
-    try:
-        exit_code = asyncio.run(
-            run_workflow_async(workflow_id, show_results, output_format)
-        )
-        if exit_code != 0:
-            raise typer.Exit(exit_code)
-    except Exception as e:
-        display_error(e, "workflow execution")
-        raise typer.Exit(1) from e
+    # Execute async workflow function
+    asyncio.run(run_workflow_async(workflow_id, show_results, output_format))

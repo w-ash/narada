@@ -17,6 +17,49 @@ P = TypeVar("P", bound="Playlist")
 
 
 @define(frozen=True, slots=True)
+class ConnectorPlaylistItem:
+    """Represents a track within an external service playlist with its position metadata."""
+
+    # Track identity - just the ID, not the full object
+    connector_track_id: str
+
+    # Position information
+    position: int
+    added_at: str | None = None
+    added_by_id: str | None = None
+
+    # Any service-specific data
+    extras: dict[str, Any] = field(factory=dict)
+
+
+@define(frozen=True, slots=True)
+class SyncCheckpoint:
+    """Represents the state of a synchronization process."""
+
+    user_id: str
+    service: str
+    entity_type: str  # 'likes', 'plays'
+    last_timestamp: datetime | None = None
+    cursor: str | None = None  # For pagination/continuation
+    id: int | None = None
+
+    def with_update(
+        self,
+        timestamp: datetime,
+        cursor: str | None = None,
+    ) -> "SyncCheckpoint":
+        """Create a new checkpoint with updated state."""
+        return self.__class__(
+            user_id=self.user_id,
+            service=self.service,
+            entity_type=self.entity_type,
+            last_timestamp=timestamp,
+            cursor=cursor or self.cursor,
+            id=self.id,
+        )
+
+
+@define(frozen=True, slots=True)
 class Artist:
     """Artist representation with normalized metadata."""
 
@@ -141,6 +184,18 @@ class TrackPlay:
 
 
 @define(frozen=True, slots=True)
+class TrackMetric:
+    """Time-series metrics for tracks from external services."""
+
+    track_id: int
+    connector_name: str
+    metric_type: str
+    value: float
+    collected_at: datetime = field(factory=lambda: datetime.now(UTC))
+    id: int | None = None
+
+
+@define(frozen=True, slots=True)
 class ConnectorTrack:
     """External track representation from a specific music service."""
 
@@ -157,31 +212,28 @@ class ConnectorTrack:
     id: int | None = None
 
 
-@define(frozen=True, slots=True)
-class SyncCheckpoint:
-    """Represents the state of a synchronization process."""
+@define(frozen=True)
+class ConnectorTrackMapping:
+    """Cross-connected-service entity mapping with confidence scoring.
 
-    user_id: str
-    service: str
-    entity_type: str  # 'likes', 'plays'
-    last_timestamp: datetime | None = None
-    cursor: str | None = None  # For pagination/continuation
-    id: int | None = None
+    Tracks how entities are resolved across connectors with metadata
+    about match quality and resolution method.
+    """
 
-    def with_update(
-        self,
-        timestamp: datetime,
-        cursor: str | None = None,
-    ) -> "SyncCheckpoint":
-        """Create a new checkpoint with updated state."""
-        return self.__class__(
-            user_id=self.user_id,
-            service=self.service,
-            entity_type=self.entity_type,
-            last_timestamp=timestamp,
-            cursor=cursor or self.cursor,
-            id=self.id,
-        )
+    connector_name: str = field(validator=validators.instance_of(str))
+    connector_track_id: str = field(validator=validators.instance_of(str))
+    match_method: str = attr.field(
+        validator=attr.validators.in_([
+            "direct",  # Direct match where internal object was created from the connector
+            "isrc",  # Matched by ISRC
+            "mbid",  # Matched by MusicBrainz ID
+            "artist_title",  # Matched by artist and title
+        ]),
+    )
+    confidence: int = field(
+        validator=[validators.instance_of(int), validators.ge(0), validators.le(100)],
+    )
+    metadata: dict[str, Any] = field(factory=dict)
 
 
 @define(frozen=True, slots=True)
@@ -262,6 +314,32 @@ class Playlist:
         )
 
 
+@define(frozen=True, slots=True)
+class ConnectorPlaylist:
+    """External service-specific playlist representation."""
+
+    connector_name: str
+    connector_playlist_id: str
+    name: str
+    description: str | None = None
+    items: list[ConnectorPlaylistItem] = field(
+        factory=list
+    )  # Single field for track items
+    owner: str | None = None
+    owner_id: str | None = None
+    is_public: bool = False
+    collaborative: bool = False
+    follower_count: int | None = None
+    raw_metadata: dict[str, Any] = field(factory=dict)
+    last_updated: datetime = field(factory=lambda: datetime.now(UTC))
+    id: int | None = None
+
+    @property
+    def track_ids(self) -> list[str]:
+        """Get all track IDs in this playlist."""
+        return [item.connector_track_id for item in self.items]
+
+
 @define(frozen=True)
 class TrackList:
     """Ephemeral, immutable collection of tracks for processing pipelines.
@@ -295,28 +373,15 @@ class TrackList:
         )
 
 
-@define(frozen=True)
-class ConnectorTrackMapping:
-    """Cross-connected-service entity mapping with confidence scoring.
+@define(frozen=True, slots=True)
+class PlaylistTrack:
+    """Playlist track ordering and metadata."""
 
-    Tracks how entities are resolved across connectors with metadata
-    about match quality and resolution method.
-    """
-
-    connector_name: str = field(validator=validators.instance_of(str))
-    connector_track_id: str = field(validator=validators.instance_of(str))
-    match_method: str = attr.field(
-        validator=attr.validators.in_([
-            "direct",  # Direct match where internal object was created from the connector
-            "isrc",  # Matched by ISRC
-            "mbid",  # Matched by MusicBrainz ID
-            "artist_title",  # Matched by artist and title
-        ]),
-    )
-    confidence: int = field(
-        validator=[validators.instance_of(int), validators.ge(0), validators.le(100)],
-    )
-    metadata: dict[str, Any] = field(factory=dict)
+    playlist_id: int
+    track_id: int
+    sort_key: str
+    added_at: datetime | None = None
+    id: int | None = None
 
 
 @define(frozen=True)

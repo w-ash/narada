@@ -7,13 +7,11 @@ access to all repositories via a single interface using a shared database sessio
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from narada.repositories.sync import SyncCheckpointRepository
 from narada.repositories.track.connector import TrackConnectorRepository
 from narada.repositories.track.core import TrackRepository
+from narada.repositories.track.likes import TrackLikeRepository
 from narada.repositories.track.metrics import TrackMetricsRepository
-from narada.repositories.track.sync import (
-    SyncCheckpointRepository,
-    TrackLikeRepository,
-)
 
 
 class TrackRepositories:

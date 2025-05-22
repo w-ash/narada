@@ -7,10 +7,8 @@ Usage:
     alembic upgrade head
 """
 
-from typing import Any
 
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB
 
 from alembic import op
 
