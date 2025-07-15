@@ -8,7 +8,7 @@ executed with enterprise-grade reliability.
 
 from collections.abc import Callable
 import datetime
-from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -94,12 +94,9 @@ async def execute_node(node_type: str, context: dict, config: dict) -> dict:
     progress_artifact_id: UUID | None = None
     if _should_show_progress_for_node(node_type):
         try:
-            progress_artifact_id = cast(
-                "UUID",
-                await create_progress_artifact(
-                    progress=0.0,
-                    description=f"Processing {node_type.replace('_', ' ').title()}",
-                ),
+            progress_artifact_id = await create_progress_artifact(  # type: ignore[misc]
+                progress=0.0,
+                description=f"Processing {node_type.replace('_', ' ').title()}",
             )
             task_logger.info(f"Created progress artifact for {node_type}")
         except Exception as e:
@@ -117,7 +114,9 @@ async def execute_node(node_type: str, context: dict, config: dict) -> dict:
         # Mark progress as complete
         if progress_artifact_id:
             try:
-                await update_progress_artifact(artifact_id=progress_artifact_id, progress=1.0)
+                await update_progress_artifact(
+                    artifact_id=progress_artifact_id, progress=1.0
+                )  # type: ignore[misc]
             except Exception as e:
                 task_logger.warning(
                     f"Failed to update progress artifact completion: {e}"

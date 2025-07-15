@@ -11,7 +11,7 @@ from src.domain.matching.types import MatchResultsById
 
 class MatchProvider(Protocol):
     """Contract for music service providers to find track matches.
-    
+
     Providers communicate with external APIs and transform responses into
     domain MatchResult objects.
     """
@@ -22,17 +22,17 @@ class MatchProvider(Protocol):
         **additional_options: Any,
     ) -> MatchResultsById:
         """Find matches for tracks in external service.
-        
+
         Args:
             tracks: Internal Track objects to match
             **additional_options: Provider-specific options
-            
+
         Returns:
             Track IDs mapped to MatchResult objects for successful matches only.
-            
+
         Raises:
             Exception: Unrecoverable errors (network failures, auth issues).
-            
+
         Note:
             Handle retries and rate limiting internally. Omit failed matches
             from results rather than raising exceptions.

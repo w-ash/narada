@@ -15,37 +15,37 @@ logger = get_logger(__name__)
 
 class LastFMProvider:
     """LastFM track matching provider."""
-    
+
     def __init__(self, connector_instance: Any) -> None:
         """Initialize with LastFM connector.
-        
+
         Args:
             connector_instance: LastFM service connector for API calls.
         """
         self.connector_instance = connector_instance
-        
+
     @property
     def service_name(self) -> str:
         """Service identifier."""
         return "lastfm"
-    
+
     async def find_potential_matches(
         self,
         tracks: list[Track],
         **additional_options: Any,
     ) -> MatchResultsById:
         """Find track matches in LastFM.
-        
+
         Args:
             tracks: Tracks to match against LastFM catalog.
             **additional_options: Additional options (unused).
-            
+
         Returns:
             Track IDs mapped to MatchResult objects.
         """
         # Acknowledge additional options to satisfy linter
         _ = additional_options
-        
+
         if not tracks:
             return {}
 
@@ -77,11 +77,11 @@ class LastFMProvider:
 
     def _create_match_result(self, track: Track, track_info: Any) -> MatchResult | None:
         """Create MatchResult from LastFM track data.
-        
+
         Args:
             track: Internal Track object.
             track_info: LastFM track info response.
-            
+
         Returns:
             MatchResult with confidence scoring, or None if creation fails.
         """
@@ -110,14 +110,16 @@ class LastFMProvider:
 
             # Use domain layer to calculate confidence
             from src.domain.matching.algorithms import calculate_confidence
-            
+
             # Prepare track data for confidence calculation
             internal_track_data = {
                 "title": track.title,
-                "artists": [artist.name for artist in track.artists] if track.artists else [],
+                "artists": [artist.name for artist in track.artists]
+                if track.artists
+                else [],
                 "duration_ms": track.duration_ms,
             }
-            
+
             confidence, evidence = calculate_confidence(
                 internal_track_data=internal_track_data,
                 service_track_data=service_data,
@@ -145,7 +147,7 @@ class LastFMProvider:
                 service_data=service_data,
                 evidence=evidence,
             )
-            
+
         except Exception as e:
             logger.warning(
                 f"Failed to create LastFM match result: {e}",

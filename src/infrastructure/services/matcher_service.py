@@ -7,7 +7,7 @@ while delegating the actual matching logic to providers and domain algorithms.
 from typing import Any
 
 from src.application.utilities.progress_integration import with_progress
-from src.domain.entities import Track, TrackList
+from src.domain.entities import TrackList
 from src.domain.matching.types import MatchResult, MatchResultsById
 from src.infrastructure.config import get_config, get_logger
 from src.infrastructure.persistence.repositories.track import TrackRepositories
@@ -19,14 +19,14 @@ logger = get_logger(__name__)
 
 class MatcherService:
     """Orchestrates track matching across providers and database operations.
-    
+
     Coordinates database lookups, provider delegation, and result persistence
     without containing business logic.
     """
 
     def __init__(self, track_repos: TrackRepositories) -> None:
         """Initialize with repository container.
-        
+
         Args:
             track_repos: Repository container for database operations.
         """
@@ -56,7 +56,7 @@ class MatcherService:
         """
         # Acknowledge additional options to satisfy linter
         _ = additional_options
-        
+
         if not track_list.tracks:
             return {}
 
@@ -83,7 +83,9 @@ class MatcherService:
                 return db_results
 
             # Step 2: Match new tracks using provider
-            logger.info(f"Need to match {len(tracks_to_match)} new tracks to {connector}")
+            logger.info(
+                f"Need to match {len(tracks_to_match)} new tracks to {connector}"
+            )
 
             # Create provider for this connector
             provider = create_provider(connector, connector_instance)
@@ -117,7 +119,9 @@ class MatcherService:
         if not track_ids:
             return {}
 
-        with logger.contextualize(operation="get_existing_mappings", connector=connector):
+        with logger.contextualize(
+            operation="get_existing_mappings", connector=connector
+        ):
             logger.info(f"Fetching existing mappings for {len(track_ids)} tracks")
 
             db_mapped_tracks = {}
@@ -150,11 +154,15 @@ class MatcherService:
                 return {}
 
             # Step 3: Get all tracks in a single batch call
-            tracks_by_id = await self.track_repos.core.find_tracks_by_ids(mapped_track_ids)
+            tracks_by_id = await self.track_repos.core.find_tracks_by_ids(
+                mapped_track_ids
+            )
 
             # Step 4: Get metadata for all tracks in a batch
-            connector_metadata = await self.track_repos.connector.get_connector_metadata(
-                mapped_track_ids, connector
+            connector_metadata = (
+                await self.track_repos.connector.get_connector_metadata(
+                    mapped_track_ids, connector
+                )
             )
 
             # Process tracks with existing mappings
@@ -192,7 +200,9 @@ class MatcherService:
                         base_score=confidence_evidence_dict.get("base_score", 0),
                         title_score=confidence_evidence_dict.get("title_score", 0.0),
                         artist_score=confidence_evidence_dict.get("artist_score", 0.0),
-                        duration_score=confidence_evidence_dict.get("duration_score", 0.0),
+                        duration_score=confidence_evidence_dict.get(
+                            "duration_score", 0.0
+                        ),
                         title_similarity=confidence_evidence_dict.get(
                             "title_similarity", 0.0
                         ),
@@ -286,7 +296,9 @@ class MatcherService:
                         if "database is locked" in str(e) or "OperationalError" in str(
                             type(e)
                         ):
-                            logger.error(f"Database error encountered, stopping sync: {e}")
+                            logger.error(
+                                f"Database error encountered, stopping sync: {e}"
+                            )
                             raise
                         # For other errors, log and continue
                         logger.error(f"Error mapping track {track.id}: {e}")

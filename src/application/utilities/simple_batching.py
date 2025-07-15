@@ -25,14 +25,14 @@ async def process_in_batches(
 
     Maintains API compatibility while using the new unified progress system.
     The progress_callback parameter is now bridged to the unified system.
-    
+
     Args:
         items: List of items to process
         process_func: Function to process each batch
         batch_size: Optional batch size override
         operation_name: Name for progress reporting
         connector: Connector name for batch size configuration
-        
+
     Returns:
         Dictionary mapping item IDs to results
     """

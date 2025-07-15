@@ -55,10 +55,12 @@ def calculate_play_match_confidence(
     # Convert track to dict format for domain function
     internal_track_data = {
         "title": internal_track.title,
-        "artists": [artist.name for artist in internal_track.artists] if internal_track.artists else [],
+        "artists": [artist.name for artist in internal_track.artists]
+        if internal_track.artists
+        else [],
         "duration_ms": internal_track.duration_ms,
     }
-    
+
     base_confidence, evidence = calculate_confidence(
         internal_track_data=internal_track_data,
         service_track_data=service_track_data,

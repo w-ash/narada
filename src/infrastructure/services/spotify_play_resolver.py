@@ -3,12 +3,12 @@
 from attrs import define
 
 from src.domain.entities import Artist, ConnectorTrack, Track
+from src.domain.matching.algorithms import calculate_confidence
+from src.domain.matching.types import ConfidenceEvidence
 from src.infrastructure.config import get_logger
 from src.infrastructure.connectors.spotify import SpotifyConnector
 from src.infrastructure.connectors.spotify_personal_data import SpotifyPlayRecord
 from src.infrastructure.persistence.repositories.track import TrackRepositories
-from src.domain.matching.algorithms import calculate_confidence
-from src.domain.matching.types import ConfidenceEvidence
 
 logger = get_logger(__name__)
 
@@ -418,14 +418,16 @@ class SpotifyPlayResolver:
                     # Convert track to dict format for domain function
                     internal_track_data = {
                         "title": original_track.title,
-                        "artists": [artist.name for artist in original_track.artists] if original_track.artists else [],
+                        "artists": [artist.name for artist in original_track.artists]
+                        if original_track.artists
+                        else [],
                         "duration_ms": original_track.duration_ms,
                     }
-                    
+
                     confidence, evidence = calculate_confidence(
                         internal_track_data=internal_track_data,
                         service_track_data=search_track_data,
-                        match_method="artist_title"
+                        match_method="artist_title",
                     )
 
                     # Only accept high-confidence matches

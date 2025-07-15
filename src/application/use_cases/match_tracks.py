@@ -14,14 +14,14 @@ from src.infrastructure.services.matcher_service import MatcherService
 
 class MatchTracksUseCase:
     """Orchestrates track matching business process with validation.
-    
+
     Validates business rules, delegates to infrastructure services, and
     handles errors at the application boundary.
     """
 
     def __init__(self, track_repos: TrackRepositories) -> None:
         """Initialize with repository dependencies.
-        
+
         Args:
             track_repos: Repository container for database operations.
         """
@@ -53,13 +53,13 @@ class MatchTracksUseCase:
         # Business rule validation
         if not track_list:
             raise ValueError("TrackList cannot be None")
-            
+
         if not track_list.tracks:
             return {}
-            
+
         if not connector:
             raise ValueError("Connector name cannot be empty")
-            
+
         if not connector_instance:
             raise ValueError("Connector instance cannot be None")
 
@@ -67,11 +67,13 @@ class MatchTracksUseCase:
         from src.infrastructure.services.matching.providers import (
             get_available_providers,
         )
-        
+
         available_providers = get_available_providers()
         if connector not in available_providers:
             available = ", ".join(available_providers)
-            raise ValueError(f"Unsupported connector: {connector}. Available: {available}")
+            raise ValueError(
+                f"Unsupported connector: {connector}. Available: {available}"
+            )
 
         # Delegate to infrastructure service for execution
         return await self.matcher_service.match_tracks(

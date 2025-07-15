@@ -4,6 +4,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from src.application.use_cases.match_tracks import match_tracks
 from src.application.utilities.results import ImportResultData, ResultFactory
 from src.domain.entities import (
     Artist,
@@ -18,7 +19,6 @@ from src.infrastructure.config import get_logger
 from src.infrastructure.connectors.lastfm import LastFMConnector
 from src.infrastructure.persistence.repositories.track import TrackRepositories
 from src.infrastructure.services.base_import import BaseImportService
-from src.application.use_cases.match_tracks import match_tracks
 
 logger = get_logger(__name__)
 

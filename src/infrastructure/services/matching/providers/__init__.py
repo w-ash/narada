@@ -23,14 +23,14 @@ __all__ = [
 
 def create_provider(connector: str, connector_instance: Any) -> MatchProvider:
     """Create provider instance for given connector.
-    
+
     Args:
         connector: Service name ("lastfm", "spotify", "musicbrainz").
         connector_instance: Service connector implementation.
-        
+
     Returns:
         Provider implementing MatchProvider protocol.
-        
+
     Raises:
         ValueError: Unsupported connector.
     """
@@ -39,18 +39,18 @@ def create_provider(connector: str, connector_instance: Any) -> MatchProvider:
         "spotify": SpotifyProvider,
         "musicbrainz": MusicBrainzProvider,
     }
-    
+
     if connector not in provider_map:
         available = ", ".join(provider_map.keys())
         raise ValueError(f"Unsupported connector: {connector}. Available: {available}")
-    
+
     provider_class = provider_map[connector]
     return provider_class(connector_instance)
 
 
 def get_available_providers() -> list[str]:
     """Get available provider names.
-    
+
     Returns:
         Connector names with provider implementations.
     """

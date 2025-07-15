@@ -9,10 +9,10 @@ Clean Architecture compliant - uses dependency injection for external concerns.
 
 from collections.abc import Awaitable, Callable
 
+from src.application.use_cases.match_tracks import match_tracks
 from src.domain.entities.track import TrackList
 from src.infrastructure.config import get_logger
 from src.infrastructure.connectors import CONNECTORS
-from src.application.use_cases.match_tracks import match_tracks
 
 from .destination_nodes import DESTINATION_HANDLERS
 from .node_context import NodeContext
@@ -166,13 +166,13 @@ class WorkflowNodeFactory:
             connector_instance = enricher_config["factory"](node_config)
 
             # Create repository instance for matcher (short-lived for workflow execution)
+            from src.application.use_cases.match_tracks import match_tracks
             from src.infrastructure.persistence.database.db_connection import (
                 get_session,
             )
             from src.infrastructure.persistence.repositories.track import (
                 TrackRepositories,
             )
-            from src.application.use_cases.match_tracks import match_tracks
 
             async with get_session() as session:
                 track_repos = TrackRepositories(session)

@@ -16,40 +16,40 @@ logger = get_logger(__name__)
 
 class SpotifyProvider:
     """Spotify track matching provider."""
-    
+
     def __init__(self, connector_instance: Any) -> None:
         """Initialize with Spotify connector.
-        
+
         Args:
             connector_instance: Spotify service connector for API calls.
         """
         self.connector_instance = connector_instance
-        
+
     @property
     def service_name(self) -> str:
         """Service identifier."""
         return "spotify"
-    
+
     async def find_potential_matches(
         self,
         tracks: list[Track],
         **additional_options: Any,
     ) -> MatchResultsById:
         """Find track matches in Spotify using ISRC and search APIs.
-        
+
         Prioritizes ISRC matches for higher confidence, then falls back to
         artist/title search for remaining tracks.
-        
+
         Args:
             tracks: Tracks to match against Spotify catalog.
             **additional_options: Additional options (unused).
-            
+
         Returns:
             Track IDs mapped to MatchResult objects.
         """
         # Acknowledge additional options to satisfy linter
         _ = additional_options
-        
+
         if not tracks:
             return {}
 
@@ -74,7 +74,9 @@ class SpotifyProvider:
             # Process remaining tracks using artist/title search
             remaining_tracks = [t for t in other_tracks if t.id not in results]
             if remaining_tracks:
-                logger.info(f"Processing {len(remaining_tracks)} tracks with artist/title")
+                logger.info(
+                    f"Processing {len(remaining_tracks)} tracks with artist/title"
+                )
                 artist_title_results = await process_in_batches(
                     remaining_tracks,
                     self._process_artist_title_batch,
@@ -88,10 +90,10 @@ class SpotifyProvider:
 
     async def _process_isrc_batch(self, batch: list[Track]) -> MatchResultsById:
         """Process tracks using ISRC lookup.
-        
+
         Args:
             batch: Tracks with ISRC codes.
-            
+
         Returns:
             Track IDs mapped to MatchResult objects.
         """
@@ -110,7 +112,7 @@ class SpotifyProvider:
                     )
                     if match_result:
                         batch_results[track.id] = match_result
-                        
+
             except Exception as e:
                 logger.warning(f"ISRC match failed: {e}", track_id=track.id)
 
@@ -118,10 +120,10 @@ class SpotifyProvider:
 
     async def _process_artist_title_batch(self, batch: list[Track]) -> MatchResultsById:
         """Process tracks using artist/title search.
-        
+
         Args:
             batch: Tracks with artist and title data.
-            
+
         Returns:
             Track IDs mapped to MatchResult objects.
         """
@@ -144,11 +146,9 @@ class SpotifyProvider:
                     )
                     if match_result:
                         batch_results[track.id] = match_result
-                        
+
             except Exception as e:
-                logger.warning(
-                    f"Artist/title match failed: {e}", track_id=track.id
-                )
+                logger.warning(f"Artist/title match failed: {e}", track_id=track.id)
 
         return batch_results
 
@@ -156,12 +156,12 @@ class SpotifyProvider:
         self, track: Track, spotify_track: dict[str, Any], match_method: str
     ) -> MatchResult | None:
         """Create MatchResult from Spotify track data.
-        
+
         Args:
             track: Internal Track object.
             spotify_track: Spotify API response.
             match_method: Match method used ("isrc" or "artist_title").
-            
+
         Returns:
             MatchResult with confidence scoring, or None if creation fails.
         """
@@ -184,14 +184,16 @@ class SpotifyProvider:
 
             # Use domain layer to calculate confidence
             from src.domain.matching.algorithms import calculate_confidence
-            
+
             # Prepare track data for confidence calculation
             internal_track_data = {
                 "title": track.title,
-                "artists": [artist.name for artist in track.artists] if track.artists else [],
+                "artists": [artist.name for artist in track.artists]
+                if track.artists
+                else [],
                 "duration_ms": track.duration_ms,
             }
-            
+
             confidence, evidence = calculate_confidence(
                 internal_track_data=internal_track_data,
                 service_track_data=service_data,
@@ -219,7 +221,7 @@ class SpotifyProvider:
                 service_data=service_data,
                 evidence=evidence,
             )
-            
+
         except Exception as e:
             logger.warning(
                 f"Failed to create Spotify match result: {e}",
