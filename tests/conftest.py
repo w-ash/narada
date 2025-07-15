@@ -1,20 +1,25 @@
 import asyncio
+import os
 
 import pytest
 
-from narada.database.db_connection import get_session
-from narada.database.db_models import init_db
+from src.infrastructure.persistence.database.db_connection import get_session
+from src.infrastructure.persistence.database.db_models import init_db
 
 
 @pytest.fixture(scope="session")
-def event_loop():
-    """Create an event loop for the test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
+def event_loop_policy():
+    """Create an event loop policy for the test session."""
+    return asyncio.get_event_loop_policy()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="session", autouse=True)
+def setup_test_database():
+    """Set up in-memory database for faster tests."""
+    os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+
+
+@pytest.fixture(scope="function")
 async def initialize_db():
     """Initialize database schema for tests."""
     try:
@@ -34,7 +39,7 @@ async def db_session(initialize_db):
 @pytest.fixture
 async def track_repo_fixture(db_session):
     """Provide a track repository."""
-    from narada.repositories import TrackRepository
+    from src.infrastructure.persistence.repositories import TrackRepository
 
     return TrackRepository(db_session)
 
@@ -42,6 +47,6 @@ async def track_repo_fixture(db_session):
 @pytest.fixture
 async def playlist_repo_fixture(db_session):
     """Provide a playlist repository."""
-    from narada.repositories import PlaylistRepository
+    from src.infrastructure.persistence.repositories import PlaylistRepository
 
     return PlaylistRepository(db_session)

@@ -1,12 +1,14 @@
 [tool.poetry]
 name = "narada"
-version = "0.2.0"
+version = "0.2.3"
 description = "Music metadata integration and playlist management platform"
 authors = ["Ash Wright <a@ashwright.net>"]
 homepage = "https://github.com/w-ash/narada"
 readme = "README.md"
 license = "MIT"
-packages = [{include = "narada"}]
+packages = [
+    {include = "src"}
+]
 
 [tool.poetry.dependencies]
 python = ">=3.13,<3.14"
@@ -37,7 +39,7 @@ pre-commit = "^4.2.0"
 pyright = "^1.1.399"
 
 [tool.poetry.scripts]
-narada = "narada.cli.app:main"
+narada = "src.infrastructure.cli.app:main"
 test-db = "narada.data.test_database:main"
 
 [build-system]
@@ -90,7 +92,7 @@ unfixable = []
 
 # Import sorting configuration
 [tool.ruff.lint.isort]
-known-first-party = ["narada"]
+known-first-party = ["narada", "src"]
 section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
 combine-as-imports = true
 split-on-trailing-comma = true
@@ -133,7 +135,7 @@ asyncio_mode = "auto"
 markers = ["integration: marks tests as integration tests"]
 
 [tool.coverage.run]
-source = ["narada"]
+source = ["narada", "src"]
 omit = ["tests/*"]
 
 [tool.poetry.urls]

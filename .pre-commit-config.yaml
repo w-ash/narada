@@ -5,10 +5,22 @@ repos:
     -   id: trailing-whitespace
     -   id: end-of-file-fixer
     -   id: check-yaml
--   repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: v0.9.9  # Match your local Ruff version
+    -   id: check-toml
+    -   id: check-json
+    -   id: debug-statements
+    -   id: check-added-large-files
+-   repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.0  # Match pyproject.toml Ruff version
     hooks:
     -   id: ruff
-        args: [--fix, --select=I]  # Run import sorting first
-    -   id: ruff
-        args: [--fix]  # Then run all other fixes
+        args: [--fix]  # This includes import sorting (no need for separate I hook)
+    -   id: ruff-format
+-   repo: https://github.com/psf/black
+    rev: 25.1.0  # Match pyproject.toml Black version
+    hooks:
+    -   id: black
+        language_version: python3
+-   repo: https://github.com/python-poetry/poetry
+    rev: 1.8.0
+    hooks:
+    -   id: poetry-check

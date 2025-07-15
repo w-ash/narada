@@ -15,48 +15,55 @@ Narada is a personal music metadata hub that integrates Spotify, Last.fm, and Mu
 
 ### Core Dependencies
 
-| Node                  | Package        | Version | Purpose                                                         |
+| Component             | Package        | Version | Purpose                                                         |
 | --------------------- | -------------- | ------- | --------------------------------------------------------------- |
 | Runtime               | Python         | ≥3.13.0 | Modern language features, pattern matching, improved type hints |
 | Database Engine       | SQLite         | ≥3.49.1 | Zero-config, embedded database with async support               |
-| Database ORM          | SQLAlchemy     | ≥2.0.38 | Type-safe query building, async support                         |
-| Database Migrations   | Alembic        | ≥1.14.1 | Schema version control and migrations                           |
-| HTTP Client           | httpx          | ≥0.28.1 | Modern async-first HTTP client                                  |
-| Spotify Interface     | spotipy        | ≥2.25.0 | OAuth handling, Spotify Web API client                          |
-| Last.fm Interface     | pylast         | ≥5.3.0  | Last.fm API integration                                         |
-| MusicBrainz Interface | musicbrainzngs | ≥0.7.1  | MusicBrainz metadata lookups                                    |
-| CLI Framework         | typer          | ≥0.15.1 | Type-safe CLI with minimal boilerplate                          |
-| Entity Definition     | attrs          | ≥25.1.0 | Immutable value objects with minimal boilerplate                |
-| Functional Tools      | toolz          | ≥1.0.0  | Functional composition utilities                                |
-| Logging               | loguru         | ≥0.7.3  | Context-aware logging with minimal configuration                |
-| Error Handling        | backoff        | ≥2.2.1  | Declarative retry mechanisms for API stability                  |
-| Terminal UI           | rich           | ≥13.7.0 | Rich terminal output formatting                                 |
-| Workflow Engine       | Prefect        | ≥3.2.7  | DAG-based execution with minimal overhead                       |
+| Database ORM          | SQLAlchemy     | ^2.0.40 | Type-safe query building, async support                         |
+| Database Migrations   | Alembic        | ^1.15.2 | Schema version control and migrations                           |
+| Database Async        | aiosqlite      | ^0.21.0 | Async SQLite driver for SQLAlchemy                              |
+| HTTP Client           | httpx          | ^0.28.1 | Modern async-first HTTP client                                  |
+| Spotify Interface     | spotipy        | ^2.25.1 | OAuth handling, Spotify Web API client                          |
+| Last.fm Interface     | pylast         | ^5.5.0  | Last.fm API integration                                         |
+| MusicBrainz Interface | musicbrainzngs | ^0.7.1  | MusicBrainz metadata lookups                                    |
+| CLI Framework         | typer          | ^0.15.2 | Type-safe CLI with minimal boilerplate                          |
+| Terminal UI           | rich           | ^14.0.0 | Rich terminal output formatting and progress bars               |
+| Entity Definition     | attrs          | ^25.3.0 | Immutable value objects with minimal boilerplate                |
+| Functional Tools      | toolz          | ^1.0.0  | Functional composition utilities                                |
+| Logging               | loguru         | ^0.7.3  | Context-aware logging with minimal configuration                |
+| Error Handling        | backoff        | ^2.2.1  | Declarative retry mechanisms for API stability                  |
+| String Matching       | rapidfuzz      | ^3.13.0 | High-performance fuzzy string matching                          |
+| Workflow Engine       | Prefect        | ^3.3.3  | DAG-based execution with minimal overhead                       |
+| Configuration         | python-dotenv  | ^1.1.0  | Environment variable management                                 |
 
 ### Development Tools
 
 | Tool          | Package        | Version | Purpose                           |
 | ------------- | -------------- | ------- | --------------------------------- |
 | Build System  | Poetry         | ≥2.1.0  | Dependency and build management   |
-| Linter        | ruff           | ≥0.9.7  | Fast, comprehensive Python linter |
-| Formatter     | black          | ≥25.1.0 | Opinionated code formatting       |
-| Testing       | pytest         | ≥8.3.4  | Test framework and runner         |
-| Async Testing | pytest-asyncio | ≥0.25.3 | Async test support                |
-| Coverage      | pytest-cov     | ≥6.0.0  | Test coverage reporting           |
-| Git Hooks     | pre-commit     | ≥4.1.0  | Automated pre-commit checks       |
+| Linter/Format | ruff           | ^0.11.5 | Fast, comprehensive Python linter and formatter |
+| Type Checker  | pyright        | ^1.1.399| Static type checking               |
+| Testing       | pytest         | ^8.3.5  | Test framework and runner         |
+| Async Testing | pytest-asyncio | ^0.26.0 | Async test support                |
+| Coverage      | pytest-cov     | ^6.1.1  | Test coverage reporting           |
+| Git Hooks     | pre-commit     | ^4.2.0  | Automated pre-commit checks       |
 
 ### Key Architectural Patterns
 
 | Pattern | Implementation | Benefit |
 |---------|---------------|---------|
-| Pipeline Architecture | toolz.compose | Enables unlimited playlist transformations within fixed LOC budget |
-| Connector Adapters | Thin API wrappers | Isolates external dependencies for easier testing and replacement |
-| Repository Pattern | SQLAlchemy async sessions | Centralizes data access with consistent error handling |
-| Entity Resolution | Multi-tier matching | Balances accuracy with performance through progressive resolution |
-| Command Pattern | Typer CLI | Separates UI from business logic for maximum reusability |
-| Service Layer | Domain-specific services | Places business logic between repositories and interfaces |
-| Composition | Like operations abstraction | Enables DRY implementation of related functionality |
-| Checkpoint-based Sync | SyncCheckpoint entities | Provides resumability for long-running operations |
+| Pipeline Architecture | toolz.compose + workflow nodes | Enables unlimited playlist transformations within fixed LOC budget |
+| Connector Adapters | Thin API wrappers with async support | Isolates external dependencies for easier testing and replacement |
+| Repository Pattern | SQLAlchemy 2.0 async with bulk operations | Centralizes data access with consistent error handling and performance |
+| Entity Resolution | Multi-tier matching with confidence scoring | Balances accuracy with performance through progressive resolution |
+| Command Pattern | Typer CLI with Rich formatting | Separates UI from business logic with beautiful user experience |
+| Service Layer | Domain-specific async services | Places business logic between repositories and interfaces |
+| Progress Integration | Unified progress tracking system | Consistent progress feedback across all operations |
+| Async-First Design | Async/await throughout the stack | Efficient handling of I/O-bound operations (API calls, DB) |
+| Composition | Like operations and sync abstractions | Enables DRY implementation of related functionality |
+| Checkpoint-based Sync | SyncCheckpoint entities with timestamps | Provides resumability for long-running operations |
+| Batch-First Operations | Repository bulk operations | Optimizes performance for large datasets |
+| Type Safety | Comprehensive type annotations | Prevents runtime errors and improves IDE support |
 
 ### Technology Selection Criteria
 
@@ -86,83 +93,107 @@ To effectively match tracks across connectors, Narada employs a multi-tier resol
 
 This approach balances accuracy with performance while respecting API rate limits.
 
-### Directory Structure
+### Directory Structure (Clean Architecture - v0.2.3)
 
 ```
-narada/                        # Project root
-├── pyproject.toml             # Project metadata and dependencies
-├── README.md                  # Project documentation
-├── CLAUDE.md                  # Commands and style guide
+narada/                           # Project root
+├── pyproject.toml                # Project metadata and dependencies  
+├── README.md                     # Project documentation
+├── CLAUDE.md                     # Commands and style guide
+├── BACKLOG.md                    # Development backlog and roadmap
 │
-├── narada/                    # Main package
-│   ├── __init__.py            # Package initialization
-│   ├── config.py              # Configuration management
+├── src/                          # Clean Architecture source code
+│   ├── domain/                   # Pure business logic (zero external dependencies)
+│   │   ├── entities/             # Core business entities
+│   │   │   ├── track.py          # Track and Artist entities
+│   │   │   ├── playlist.py       # Playlist and TrackList entities  
+│   │   │   ├── operations.py     # Operation result entities
+│   │   │   └── shared.py         # Shared value objects
+│   │   ├── matching/             # Track matching algorithms
+│   │   │   ├── algorithms.py     # Pure confidence calculation logic
+│   │   │   ├── types.py          # MatchResult, ConfidenceEvidence types
+│   │   │   └── protocols.py      # Matching service contracts
+│   │   └── transforms/           # Functional transformation pipelines
+│   │       └── core.py           # Pure functional primitives
 │   │
-│   ├── cli/                   # Command line interface
-│   │   ├── __init__.py        # CLI package initialization
-│   │   ├── app.py             # CLI entry point
-│   │   ├── commands.py        # Command implementations
-│   │   └── ui.py              # UI helper functions
+│   ├── application/              # Use cases and orchestration
+│   │   ├── services/             # Use case orchestrators
+│   │   │   ├── import_service.py # Import orchestration
+│   │   │   ├── sync_service.py   # Cross-service sync coordination
+│   │   │   └── matching_service.py # High-level matching orchestration
+│   │   ├── utilities/            # Shared application utilities
+│   │   │   ├── batching.py       # Batch processing utilities
+│   │   │   ├── progress.py       # Progress handling utilities
+│   │   │   └── results.py        # Result factory utilities
+│   │   └── workflows/            # Business workflow definitions
+│   │       ├── node_catalog.py   # Node registry and catalog
+│   │       ├── node_factories.py # Node creation factories
+│   │       ├── source_nodes.py   # Source node implementations
+│   │       ├── destination_nodes.py # Destination node implementations
+│   │       ├── prefect.py        # Prefect adapter with progress tracking
+│   │       └── definitions/      # JSON workflow definitions
 │   │
-│   ├── core/                  # Domain core
-│   │   ├── __init__.py        # Core package initialization
-│   │   ├── models.py          # Entity definitions (Track, Playlist)
-│   │   ├── matcher.py         # Entity resolution engine
-│   │   ├── protocols.py       # Shared core protocols
-│   │   └── transforms.py      # Pure functional primitives
-│   │
-│   ├── database/              # Data persistence
-│   │   ├── __init__.py        # Database package initialization
-│   │   ├── db_connection.py   # Database connection management
-│   │   ├── db_models.py       # SQLAlchemy model definitions
-│   │   └── migrations/        # Schema version control
-│   │
-│   ├── integrations/          # Service adapters
-│   │   ├── __init__.py        # Integrations package init
-│   │   ├── base_connector.py  # Base connector classes
-│   │   ├── spotify.py         # Spotify API integration
-│   │   ├── lastfm.py          # Last.fm API integration
-│   │   └── musicbrainz.py     # MusicBrainz integration
-│   │
-│   ├── repositories/          # Data access layer
-│   │   ├── __init__.py        # Repository package init
-│   │   ├── base.py            # Base repository class
-│   │   ├── repo_decorator.py  # Repository decorators
-│   │   ├── track.py           # Unified track repository
-│   │   ├── track_core.py      # Core track operations
-│   │   ├── track_sync.py      # Track sync operations 
-│   │   └── playlist.py        # Playlist repository
-│   │
-│   ├── services/              # Business logic services
-│   │   ├── __init__.py        # Services package init
-│   │   └── like_operations.py # Like sync operations
-│   │
-│   └── workflows/             # Workflow system
-│       ├── __init__.py        # Workflow package init
-│       ├── node_catalog.py    # Node registry
-│       ├── node_context.py    # Node execution context
-│       ├── node_factories.py  # Node creation factories
-│       ├── node_registry.py   # Node type registration
-│       ├── prefect.py         # Prefect adapter (thin layer)
-│       ├── source_nodes.py    # Source node implementations
-│       ├── destination_nodes.py # Destination node implementations
-│       ├── transform_registry.py # Transform registration
-│       ├── definitions/       # JSON workflow definitions
-│       │   ├── discovery_mix.json # Use case 1B definition
-│       │   ├── sort_by_lastfm_global_playcount.json # Sort by LastFM global playcount
-│       │   └── sort_by_lastfm_user_playcount.json # Sort by user playcount
+│   └── infrastructure/           # External implementations
+│       ├── config.py             # Configuration management
+│       ├── cli/                  # Command line interface
+│       │   ├── app.py            # CLI entry point with flattened commands
+│       │   ├── *_commands.py     # Command implementations by domain
+│       │   └── progress_provider.py # Rich-based progress UI
+│       │
+│       ├── connectors/           # External service integrations
+│       │   ├── spotify.py        # Spotify API integration
+│       │   ├── lastfm.py         # Last.fm API integration
+│       │   ├── musicbrainz.py    # MusicBrainz integration
+│       │   └── base_connector.py # Base connector classes
+│       │
+│       ├── persistence/          # Data access layer
+│       │   ├── database/         # Database management
+│       │   │   ├── db_connection.py # Database connection management
+│       │   │   ├── db_models.py  # SQLAlchemy model definitions
+│       │   │   └── migrations/   # Schema version control
+│       │   └── repositories/     # Repository implementations
+│       │       ├── track/        # Track repository module
+│       │       ├── playlist/     # Playlist repository module
+│       │       └── sync.py       # Sync checkpoint repository
+│       │
+│       └── services/             # Infrastructure-level services
+│           ├── matcher.py        # Entity resolution service
+│           ├── *_import.py       # Import service implementations
+│           └── like_sync.py      # Cross-service synchronization
 │
-├── tests/                     # Test suite
-│   ├── core/                  # Domain model tests
-│   ├── repositories/          # Repository tests
-│   ├── workflows/             # Workflow engine tests
-│   └── integration/           # End-to-end tests
+├── tests/                        # Test suite (Clean Architecture layers)
+│   ├── unit/                     # Fast unit tests
+│   │   ├── test_domain_*.py      # Domain layer tests (37 tests - zero dependencies)
+│   │   ├── test_application_*.py # Application layer tests (54 tests)
+│   │   └── test_services/        # Legacy service unit tests
+│   ├── integration/              # Integration tests
+│   │   └── test_*.py             # External service integration tests
+│   └── cli/                      # CLI command tests
+│       └── test_*.py             # Command interface tests
 │
-└── docs/                      # Documentation
-    ├── narada_bible.md        # Architectural vision
-    ├── workflow_guide.md      # Workflow authoring guide
-    └── backlog.md             # Development backlog
+├── docs/                         # Documentation and guides
+├── scripts/                      # Utility scripts
+├── alembic/                      # Database migrations
+└── data/                         # Data directory (db, imports, logs)
 ```
+
+#### Clean Architecture Theory
+
+**Why This Structure?**
+
+Clean Architecture organizes code by dependency direction: Infrastructure → Application → Domain. Dependencies only flow inward.
+
+- **Domain**: Pure business logic (track matching, confidence algorithms). No external dependencies.
+- **Application**: Use cases and orchestration. Defines interfaces for infrastructure to implement.
+- **Infrastructure**: External concerns (APIs, databases, CLI). Implements application interfaces.
+
+**Key Benefits**:
+- Domain tests run 10x faster (no database/network)
+- Business logic works with any interface (CLI today, web API tomorrow)
+- Technology can be swapped without changing core features
+- Clear debugging boundaries
+
+This enables Narada to add new interfaces (web, mobile) without rewriting business logic.
 
 #### Workflow System Interactions
 
@@ -497,32 +528,36 @@ Track preference state across music services with synchronization support.
 3. **Historical Data** - Captures when tracks were liked
 4. **Uniqueness** - One like entry per track/service combination
 
-#### Track Plays Table
+#### Track Plays Table ✅ **IMPLEMENTED**
 
-Immutable record of track play events across services.
+Immutable record of track play events from Spotify personal data imports.
 
 ```
-+-----------------+-------------+--------------------------------------+
-| track_plays     | Type        | Purpose                              |
-+-----------------+-------------+--------------------------------------+
-| id              | Integer (PK)| Internal identifier                  |
-| track_id        | Integer (FK)| Reference to track                   |
-| service         | String      | Service name (spotify, lastfm, etc)  |
-| played_at       | DateTime    | When the track was played            |
-| ms_played       | Integer     | Milliseconds played (optional)       |
-| context         | JSON        | Additional play context              |
-| created_at      | DateTime    | Record creation timestamp            |
-| updated_at      | DateTime    | Last update timestamp                |
-| is_deleted      | Boolean     | Soft delete indicator                |
-| deleted_at      | DateTime    | Deleted at timestamp                 |
-+-----------------+-------------+--------------------------------------+
++-------------------+-------------+--------------------------------------+
+| track_plays       | Type        | Purpose                              |
++-------------------+-------------+--------------------------------------+
+| id                | Integer (PK)| Internal identifier                  |
+| track_id          | Integer (FK)| Reference to track                   |
+| service           | String      | Service name (spotify, lastfm, etc)  |
+| played_at         | DateTime    | When the track was played            |
+| ms_played         | Integer     | Milliseconds played (optional)       |
+| context           | JSON        | Additional play context              |
+| import_timestamp  | DateTime    | When this record was imported        |
+| import_source     | String      | Source of import (e.g., "spotify_personal_data") |
+| import_batch_id   | String      | Batch identifier for import group    |
+| created_at        | DateTime    | Record creation timestamp            |
+| updated_at        | DateTime    | Last update timestamp                |
+| is_deleted        | Boolean     | Soft delete indicator                |
+| deleted_at        | DateTime    | Deleted at timestamp                 |
++-------------------+-------------+--------------------------------------+
 ```
 
 ##### Key Points
-1. **Immutable Events** - Records individual play events
-2. **Timeline Ready** - Optimized for chronological queries
-3. **Complete Context** - JSON field for platform-specific context
-4. **Duration Tracking** - Optional tracking of how long content was played
+1. **Immutable Events** - Records individual play events from Spotify exports
+2. **Timeline Ready** - Optimized for chronological queries with played_at index
+3. **Import Tracking** - Full provenance tracking for data imports
+4. **Batch Processing** - Support for efficient bulk imports with batch IDs
+5. **Complete Context** - JSON field for platform-specific metadata
 
 #### Playlists Table
 
@@ -793,32 +828,79 @@ This approach yields a system that performs complex cross-connector operations w
 
 ## Feature Roadmap
 
-### Use Case 1: Smart Playlist Operations
+### Use Case 0: Modern CLI Experience ✅ **IMPLEMENTED**
+**Description**: Beautiful, intuitive command-line interface with Rich formatting
+**Implementation Status**: **COMPLETE** - Modern CLI with flattened commands and Rich UI
 
-#### 1A: Play Count Sorting
+**Implemented Features**:
+- ✅ **Flattened Command Structure**: Direct commands like `import-spotify-likes`, `export-likes-to-lastfm`
+- ✅ **Rich Terminal UI**: Color-coded panels, progress bars, and professional typography
+- ✅ **Direct Workflow Execution**: Run workflows as simple commands (`narada discovery_mix`)
+- ✅ **Shell Completion**: Tab completion for commands and workflow names
+- ✅ **Unified Help System**: Organized command help with descriptive panels
+- ✅ **Progress Integration**: Real-time progress tracking for all long-running operations
+- ✅ **Error Handling**: Graceful error messages with actionable guidance
+
+**CLI Commands**:
+```sh
+# System commands
+narada setup              # Configure music service connections
+narada status             # Show system status and configuration
+
+# Data synchronization  
+narada import-spotify-likes    # Import liked tracks from Spotify
+narada import-spotify-plays    # Import play history from Spotify export
+narada export-likes-to-lastfm  # Export likes to Last.fm
+
+# Workflow management
+narada wf list                 # List available workflows
+narada discovery_mix           # Run discovery mix workflow directly
+narada sort_by_lastfm_user_playcount  # Run sorting workflow directly
+
+# Help and completion
+narada --help                  # Show all commands with organized panels
+narada completion --install    # Install shell completion
+```
+
+### Use Case 1: Smart Playlist Operations ✅ **IMPLEMENTED**
+
+#### 1A: Play Count Sorting ✅ **IMPLEMENTED**
 **Description**: Sort Spotify playlist by personal Last.fm play count  
+**Implementation Status**: **COMPLETE** - Available as `sort_by_lastfm_user_playcount` command
+
 **Architecture Flow**:
 - Fetch playlist via Spotify API
-- Resolve tracks to Last.fm entities
-- Retrieve & cache play counts
-- Apply sorting transformation
+- Resolve tracks to Last.fm entities via matcher service
+- Retrieve & cache play counts with batch optimization
+- Apply sorting transformation via workflow engine
 - Create/update playlist via Spotify API
 
-#### 1B: Discovery Mix Generation
+#### 1B: Discovery Mix Generation ✅ **IMPLEMENTED** 
 **Description**: Filter multiple playlists by recency/plays/blocks for discovery mix  
+**Implementation Status**: **COMPLETE** - Available as `discovery_mix` command
+
 **Architecture Flow**:
 - Batch fetch source playlists
-- Apply composite filtering pipeline
-- Deduplicate across sources
-- Sort by configurable metrics
-- Generate new playlist
+- Apply composite filtering pipeline via workflow nodes
+- Deduplicate across sources using workflow transforms
+- Sort by configurable metrics (Last.fm play counts, release dates)
+- Generate new playlist with rich metadata
 
-#### 1N: Additional Playlist Generation
-**Description**: Support dozens of complex DAG flows, flexibly extending 1A & 1B to any number of workflows  
+#### 1N: Additional Playlist Generation ✅ **IMPLEMENTED**
+**Description**: Support dozens of complex DAG flows via JSON workflow definitions
+**Implementation Status**: **COMPLETE** - Extensible workflow system with 4+ predefined workflows
+
+**Available Workflows**:
+- `discovery_mix` - Multi-source discovery playlist generation
+- `sort_by_lastfm_user_playcount` - Sort by personal Last.fm play counts
+- `sort_by_lastfm_global_playcount` - Sort by global Last.fm popularity  
+- `sort_by_release_date` - Sort by track release dates  
 
 
-### Use Case 2: Cross-Connector Likes Synchronization
+### Use Case 2: Cross-Connector Likes Synchronization ✅ **IMPLEMENTED**
 **Description**: Sync likes between services with Narada as source of truth  
+**Implementation Status**: **COMPLETE** - Full bidirectional like synchronization implemented
+
 **Architecture Flow**:
 - **Import Phase**:
   - Fetch liked tracks from external services (Spotify)
@@ -827,18 +909,22 @@ This approach yields a system that performs complex cross-connector operations w
   - Track sync state with checkpoints for resumability
 
 - **Export Phase**:
-  - Identify tracks liked in Narada but not in target service (LastFM)
+  - Identify tracks liked in Narada but not in target service (Last.fm)
   - Use matcher system for accurate service entity resolution
-  - Update external service (mark as loved in LastFM)
+  - Update external service (mark as loved in Last.fm)
   - Record sync state for incremental operation
 
-- **Components**:
-  - LikeOperation service for common like operations
-  - CheckpointManager for tracking sync state
-  - Connector-specific implementations for service interaction
-  - Batch processing for performance optimization
+- **Implemented Components**:
+  - ✅ `LikeOperation` service for common like operations
+  - ✅ `CheckpointManager` for tracking sync state 
+  - ✅ Spotify like import with OAuth integration
+  - ✅ Last.fm love export with API integration
+  - ✅ Batch processing for performance optimization
+  - ✅ Incremental sync with timestamp-based filtering
+  - ✅ Rich progress bars and CLI feedback
+  - ✅ Comprehensive test coverage
 
-- **Usage**:
+- **CLI Commands**:
   ```sh
   # Import liked tracks from Spotify to Narada
   narada import-spotify-likes [--limit NUMBER] [--batch-size NUMBER] [--user-id STRING]
@@ -846,6 +932,49 @@ This approach yields a system that performs complex cross-connector operations w
   # Export liked tracks from Narada to Last.fm
   narada export-likes-to-lastfm [--limit NUMBER] [--batch-size NUMBER] [--user-id STRING]
   ```
+
+### Use Case 2.1: Play History Import ✅ **IMPLEMENTED**
+**Description**: Import comprehensive play history from Spotify GDPR exports with revolutionary track resolution
+**Implementation Status**: **COMPLETE** - Enhanced Spotify track resolution with 100% processing rate
+
+**Features**:
+- ✅ Parse Spotify personal data JSON exports (any age, 2011+)
+- ✅ **Enhanced Multi-Stage Track Resolution**:
+  - **Stage 1**: Direct API lookup with relinking detection (90%+ success)
+  - **Stage 2**: Metadata-based search fallback with confidence scoring (≥70% threshold)
+  - **Stage 3**: Metadata preservation for complete data coverage (100% coverage)
+- ✅ **Smart Relinking Detection**: Automatically handles Spotify's track versioning and remastering
+- ✅ **Zero Data Loss**: Every play gets imported and tracked, even unresolvable tracks
+- ✅ **Automatic Track Creation**: Creates internal tracks from Spotify API data
+- ✅ **Rich Resolution Analytics**: Detailed statistics showing exactly how tracks were resolved
+- ✅ **Future-Proof Design**: Handles obsolete track IDs and rights changes
+- ✅ **Performance Optimized**: Efficient batching with error isolation and rate limiting
+- ✅ Track import progress with checkpoints
+- ✅ CLI command with Rich progress tracking
+
+**CLI Commands**:
+  ```sh
+  # Import play history from Spotify personal data export
+  narada import-spotify-plays FILE_PATH [--batch-size NUMBER]
+  ```
+
+**Enhanced Resolution Output Example**:
+  ```
+  📊 Enhanced Resolution Results:
+     Resolution rate: 100.0%
+     Direct ID: 2        (tracks found as-is)
+     Relinked ID: 8     (tracks updated by Spotify)
+     Search match: 0     (metadata-based fallback)
+     Preserved metadata: 0  (unresolvable but saved)
+     Total with track ID: 10
+  ```
+
+**Architecture**:
+- `SpotifyPersonalDataParser` for JSON parsing
+- `SpotifyPlayResolver` with enhanced `resolve_with_fallback()` method
+- Multi-stage resolution pipeline leveraging existing confidence scoring
+- `TrackPlayRepository` for efficient bulk storage
+- Progress integration with real-time feedback and resolution statistics
 
 ### Use Case 3: Playlist Backup & Restoration
 **Description**: Export playlists to local storage for restoration  
@@ -866,11 +995,34 @@ This approach yields a system that performs complex cross-connector operations w
 - Handle rate limits via batching
 - Track progress for resume capability
 
-### Possible Further Evolution
+### Current Development Roadmap (v0.2.4-0.2.6)
 
-1. **Web Interface** - Potential FastAPI frontend
-2. **More Connectors** - Integration with Apple Music, YouTube, etc.
-3. **Advanced Analytics** - Deeper insights into listening patterns
+**✅ v0.2.2 COMPLETE**: Enhanced Spotify JSON Track Resolution with 100% processing rate
+**✅ v0.2.3 COMPLETE**: Clean Architecture Migration for future web interface foundation
+
+Based on the current backlog, the immediate roadmap focuses on:
+
+#### v0.2.4: User Experience & Reliability  
+- **Enhanced Error Handling** - Better error messages and retry logic
+- **Shell Completion Support** - Tab completion for bash/zsh/fish
+- **Progress Reporting Consistency** - Unified progress across all operations
+
+#### v0.2.5: Performance & Advanced Analytics
+- **Performance Optimizations** - Database query optimization for large datasets
+- **Advanced Play Analytics** - Listening pattern analysis and insights
+- **Background Sync Capabilities** - Scheduled synchronization jobs
+
+#### v0.2.6: Advanced Features
+- **Play-Based Workflow Filters** - Filter and sort by play counts and time windows
+- **Export Capabilities** - Export analytics and play data to various formats
+
+### Future Evolution (v0.3.0+)
+
+1. **Manual Entity Resolution** - User override for automatic matching
+2. **Enhanced Destination Nodes** - Dynamic playlist naming and updates  
+3. **Web Interface** - Potential FastAPI frontend with workflow visualization
+4. **More Connectors** - Integration with Apple Music, YouTube, etc.
+5. **LLM-Assisted Workflows** - Natural language workflow creation
 
 ## Development Workflow
 
