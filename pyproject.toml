@@ -89,6 +89,7 @@ unfixable = []
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]   # Don't complain about unused imports in __init__ files
 "tests/**/*.py" = ["S101"] # Allow assert in tests
+"src/application/use_cases/*.py" = ["ARG002"] # Allow parameter forwarding patterns in orchestrators
 
 # Import sorting configuration
 [tool.ruff.lint.isort]
@@ -137,6 +138,23 @@ markers = ["integration: marks tests as integration tests"]
 [tool.coverage.run]
 source = ["narada", "src"]
 omit = ["tests/*"]
+
+# Type checking configuration
+[tool.pyright]
+include = ["src"]
+exclude = ["tests", "**/__pycache__"]
+typeCheckingMode = "strict"
+reportMissingImports = true
+reportMissingTypeStubs = false
+reportUnusedImport = true
+reportUnusedVariable = true
+reportDuplicateImport = true
+reportUntypedBaseClass = true
+reportUntypedClassDecorator = true
+reportUntypedFunctionDecorator = true
+reportUntypedNamedTuple = true
+pythonVersion = "3.13"
+pythonPlatform = "All"
 
 [tool.poetry.urls]
 "Documentation" = "https://github.com/w-ash/narada/docs"

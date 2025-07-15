@@ -269,5 +269,3 @@ class PlaylistConnectorRepository:
                 internal_playlist = await self.playlist_repo.save_playlist(playlist_obj)
 
         return persisted_playlist, internal_playlist
-
-

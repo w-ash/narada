@@ -1,6 +1,5 @@
 """Track repository for play operations."""
 
-
 from attrs import define
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -74,7 +73,7 @@ class TrackPlayRepository(BaseRepository[DBTrackPlay, TrackPlay]):
         """Bulk insert track plays efficiently."""
         if not plays:
             return 0
-            
+
         play_data = [
             {
                 "track_id": play.track_id,
@@ -88,13 +87,13 @@ class TrackPlayRepository(BaseRepository[DBTrackPlay, TrackPlay]):
             }
             for play in plays
         ]
-        
+
         result = await self.bulk_upsert(
             play_data,
             lookup_keys=["track_id", "service", "played_at", "ms_played"],
             return_models=False,
         )
-        
+
         # Return count of inserted records
         return len(play_data) if isinstance(result, list) else result
 

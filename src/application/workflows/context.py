@@ -29,6 +29,7 @@ class ConfigProviderImpl:
     def __init__(self):
         """Initialize configuration provider."""
         from src.infrastructure.config import get_config as _get_config
+
         self._get_config = _get_config
 
     def get(self, key: str, default: Any = None) -> Any:

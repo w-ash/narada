@@ -24,7 +24,7 @@ class TrackLikeMapper(BaseModelMapper[DBTrackLike, TrackLike]):
     @staticmethod
     def get_default_relationships() -> list[str]:
         """Return relationships to eagerly load for track likes.
-        
+
         Following SQLAlchemy 2.0 best practices, we specify which relationships
         should be eagerly loaded. For TrackLike, we typically don't need to load
         the related track object since we're usually just working with the like

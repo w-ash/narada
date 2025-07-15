@@ -119,7 +119,6 @@ narada/                           # Project root
 │   ├── application/              # Use cases and orchestration
 │   │   ├── services/             # Use case orchestrators
 │   │   │   ├── import_service.py # Import orchestration
-│   │   │   ├── sync_service.py   # Cross-service sync coordination
 │   │   │   └── matching_service.py # High-level matching orchestration
 │   │   ├── utilities/            # Shared application utilities
 │   │   │   ├── batching.py       # Batch processing utilities

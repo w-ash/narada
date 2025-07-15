@@ -70,7 +70,7 @@ async def handle_internal_destination(
     _context: dict,  # Kept for consistent interface
 ) -> dict:
     """Create a playlist in the internal database.
-    
+
     Infrastructure adapter that handles IO and delegates business logic
     to pure domain functions.
     """
@@ -91,7 +91,7 @@ async def handle_internal_destination(
         playlist=saved_playlist,
         tracklist=tracklist,
         persisted_tracks=db_tracks,
-        stats=stats
+        stats=stats,
     )
 
 
@@ -101,23 +101,25 @@ async def handle_spotify_destination(
     _context: dict,  # Kept for consistent interface
 ) -> dict:
     """Create a new Spotify playlist.
-    
+
     Infrastructure adapter that handles external API calls and database operations,
     delegating business logic to pure domain functions.
     """
     # Infrastructure: create playlist in Spotify via external API
     spotify = SpotifyConnector()
     spotify_id = await spotify.create_playlist(
-        config.get("name", "Narada Playlist"), 
-        tracklist.tracks, 
-        config.get("description", "Created by Narada")
+        config.get("name", "Narada Playlist"),
+        tracklist.tracks,
+        config.get("description", "Created by Narada"),
     )
 
     # Infrastructure: persist tracks to database
     db_tracks, stats = await persist_tracks(tracklist)
 
     # Domain: create playlist entity using pure business logic
-    playlist = create_spotify_playlist_operation(tracklist, config, db_tracks, spotify_id)
+    playlist = create_spotify_playlist_operation(
+        tracklist, config, db_tracks, spotify_id
+    )
 
     # Infrastructure: save playlist to database
     async with get_session() as session:
@@ -130,7 +132,7 @@ async def handle_spotify_destination(
         tracklist=tracklist,
         persisted_tracks=db_tracks,
         stats=stats,
-        spotify_id=spotify_id
+        spotify_id=spotify_id,
     )
 
 
@@ -140,7 +142,7 @@ async def handle_update_spotify_destination(
     _context: dict,  # Kept for consistent interface
 ) -> dict:
     """Update an existing Spotify playlist.
-    
+
     Infrastructure adapter that handles external API calls and database operations,
     delegating business logic to pure domain functions.
     """
@@ -186,7 +188,7 @@ async def handle_update_spotify_destination(
         stats=stats,
         spotify_id=spotify_id,
         append_mode=append,
-        original_track_count=len(existing.tracks)
+        original_track_count=len(existing.tracks),
     )
 
 

@@ -41,18 +41,18 @@ class SyncCheckpoint:
 # Standardized field names for TrackPlay context to eliminate redundancy
 class TrackContextFields:
     """Standardized field names for TrackPlay.context dictionary."""
-    
+
     # Core track metadata (used by all services)
     TRACK_NAME = "track_name"
-    ARTIST_NAME = "artist_name" 
+    ARTIST_NAME = "artist_name"
     ALBUM_NAME = "album_name"
-    
+
     # Service-specific identifiers
     SPOTIFY_TRACK_URI = "spotify_track_uri"
     LASTFM_TRACK_URL = "lastfm_track_url"
     LASTFM_ARTIST_URL = "lastfm_artist_url"
     LASTFM_ALBUM_URL = "lastfm_album_url"
-    
+
     # Behavioral metadata
     PLATFORM = "platform"
     COUNTRY = "country"
@@ -67,36 +67,36 @@ class TrackContextFields:
 @define(frozen=True, slots=True)
 class PlayRecord:
     """Base class for raw play data from any music service.
-    
+
     Unified structure for play records before conversion to TrackPlay.
     Eliminates redundancy between service-specific record types.
     """
-    
+
     # Core fields (mandatory)
     artist_name: str
     track_name: str
     played_at: datetime  # When track was played/scrobbled
     service: str  # "spotify", "lastfm", etc.
-    
+
     # Optional core fields
     album_name: str | None = None
     ms_played: int | None = None  # Spotify has this, Last.fm doesn't
-    
+
     # Service-specific metadata stored as dict for flexibility
     service_metadata: dict[str, Any] = field(factory=dict)
-    
+
     # Import tracking
     api_page: int | None = None
     raw_data: dict[str, Any] = field(factory=dict)
-    
+
     def to_track_play(
-        self, 
+        self,
         track_id: int | None = None,
         import_batch_id: str | None = None,
         import_timestamp: datetime | None = None,
     ) -> "TrackPlay":
         """Convert to unified TrackPlay using standardized context fields.
-        
+
         Eliminates redundant conversion logic across services.
         """
         # Build standardized context using TrackContextFields
@@ -104,13 +104,13 @@ class PlayRecord:
             TrackContextFields.TRACK_NAME: self.track_name,
             TrackContextFields.ARTIST_NAME: self.artist_name,
         }
-        
+
         if self.album_name:
             context[TrackContextFields.ALBUM_NAME] = self.album_name
-            
+
         # Add service-specific metadata to context
         context.update(self.service_metadata)
-        
+
         return TrackPlay(
             track_id=track_id,
             service=self.service,
@@ -133,56 +133,60 @@ class TrackPlay:
     ms_played: int | None = None
     context: dict[str, Any] | None = None
     id: int | None = None
-    
+
     # Import tracking (service-agnostic)
     import_timestamp: datetime | None = None
     import_source: str | None = None  # "spotify_export", "lastfm_api", "manual"
     import_batch_id: str | None = None
-    
+
     def get_platform(self) -> str | None:
         """Get platform/device from context (Spotify export)."""
         return self.context.get("platform") if self.context else None
-    
+
     def is_skipped(self) -> bool:
         """Check if track was skipped (Spotify export)."""
         return self.context.get("skipped", False) if self.context else False
-    
+
     def is_now_playing(self) -> bool:
         """Check if track is currently playing (Last.fm API)."""
         return self.context.get("nowplaying", False) if self.context else False
-    
+
     def to_track_metadata(self) -> dict[str, Any]:
         """Extract track metadata from context for matching/deduplication.
-        
+
         Returns standardized track data dictionary compatible with confidence scoring.
         Eliminates redundant extraction logic across services.
         """
         if not self.context:
             return {}
-        
+
         return {
             "title": self.context.get(TrackContextFields.TRACK_NAME, ""),
             "artist": self.context.get(TrackContextFields.ARTIST_NAME, ""),
             "album": self.context.get(TrackContextFields.ALBUM_NAME),
             "duration_ms": self.ms_played,
             # Additional metadata for service-specific matching
-            TrackContextFields.SPOTIFY_TRACK_URI: self.context.get(TrackContextFields.SPOTIFY_TRACK_URI),
-            TrackContextFields.LASTFM_TRACK_URL: self.context.get(TrackContextFields.LASTFM_TRACK_URL),
+            TrackContextFields.SPOTIFY_TRACK_URI: self.context.get(
+                TrackContextFields.SPOTIFY_TRACK_URI
+            ),
+            TrackContextFields.LASTFM_TRACK_URL: self.context.get(
+                TrackContextFields.LASTFM_TRACK_URL
+            ),
         }
-    
+
     def to_track(self) -> Track:
         """Create temporary Track object from play data for confidence calculation.
-        
+
         Eliminates redundant Track creation logic across deduplication services.
         """
         if not self.context:
             # Fallback for plays without context
             return Track(title="Unknown", artists=[Artist(name="Unknown")])
-        
+
         artist_name = self.context.get(TrackContextFields.ARTIST_NAME, "Unknown")
         track_title = self.context.get(TrackContextFields.TRACK_NAME, "Unknown")
         album_name = self.context.get(TrackContextFields.ALBUM_NAME)
-        
+
         return Track(
             title=track_title,
             artists=[Artist(name=artist_name)],
@@ -195,38 +199,38 @@ class TrackPlay:
 @define(frozen=False)
 class OperationResult:
     """Base class for operation results with track and play processing and metrics.
-    
+
     This class provides the foundation for all operations that process tracks
     and/or plays, ensuring consistent reporting across workflows, sync operations,
     imports, and future features like playlist backup.
-    
+
     The metrics system uses track IDs as keys to associate specific values
     with individual tracks, enabling detailed per-track reporting. For play-based
     operations, additional play metrics track processing statistics.
-    
+
     Unified fields consolidate all functionality from specialized result classes
     (SyncStats, LikeImportResult, LikeExportResult) into a single DRY implementation.
     """
-    
+
     tracks: list[Track] = field(factory=list)
     metrics: dict[str, dict[int, Any]] = field(
         factory=dict,
     )  # metric_name -> {track_id(int) -> value}
     operation_name: str = field(default="")
     execution_time: float = field(default=0.0)
-    
+
     # Play-based operation support
     plays_processed: int = field(default=0)  # Number of play records processed
     play_metrics: dict[str, Any] = field(factory=dict)  # Play-level statistics
-    
+
     # Unified count fields (consolidated from specialized classes)
-    imported_count: int = field(default=0)    # Tracks imported/processed successfully
-    exported_count: int = field(default=0)    # Tracks exported to external service
-    skipped_count: int = field(default=0)     # Tracks skipped (already processed, etc)
-    error_count: int = field(default=0)       # Tracks that failed processing
-    already_liked: int = field(default=0)     # Tracks already in desired state
-    candidates: int = field(default=0)        # Total tracks considered for operation
-    
+    imported_count: int = field(default=0)  # Tracks imported/processed successfully
+    exported_count: int = field(default=0)  # Tracks exported to external service
+    skipped_count: int = field(default=0)  # Tracks skipped (already processed, etc)
+    error_count: int = field(default=0)  # Tracks that failed processing
+    already_liked: int = field(default=0)  # Tracks already in desired state
+    candidates: int = field(default=0)  # Total tracks considered for operation
+
     def get_metric(
         self,
         track_id: int | None,
@@ -234,26 +238,28 @@ class OperationResult:
         default: Any = None,
     ) -> Any:
         """Get specific metric value for a track.
-        
+
         Args:
             track_id: The ID of the track to get the metric for
             metric_name: Name of the metric to retrieve
             default: Value to return if metric is not found
-            
+
         Returns:
             The metric value for the track, or default if not found
         """
         if track_id is None:
             return default
         return self.metrics.get(metric_name, {}).get(track_id, default)
-    
-    def with_metric(self, metric_name: str, values: dict[int, Any]) -> "OperationResult":
+
+    def with_metric(
+        self, metric_name: str, values: dict[int, Any]
+    ) -> "OperationResult":
         """Add or update a metric, returning a new instance.
-        
+
         Args:
             metric_name: Name of the metric to add/update
             values: Dictionary mapping track IDs to metric values
-            
+
         Returns:
             New instance with the updated metric
         """
@@ -271,33 +277,40 @@ class OperationResult:
             already_liked=self.already_liked,
             candidates=self.candidates,
         )
-    
+
     @property
     def total_processed(self) -> int:
         """Calculate total processed items (imported + exported + skipped + error)."""
-        return self.imported_count + self.exported_count + self.skipped_count + self.error_count
-    
+        return (
+            self.imported_count
+            + self.exported_count
+            + self.skipped_count
+            + self.error_count
+        )
+
     @property
     def success_rate(self) -> float:
         """Calculate success rate as percentage ((imported + exported) / total * 100)."""
         if self.total_processed == 0:
             return 0.0
-        return ((self.imported_count + self.exported_count) / self.total_processed) * 100
-    
+        return (
+            (self.imported_count + self.exported_count) / self.total_processed
+        ) * 100
+
     @property
     def efficiency_rate(self) -> float:
         """Calculate efficiency rate as percentage (already_liked / candidates * 100)."""
         if self.candidates == 0:
             return 0.0
         return (self.already_liked / self.candidates) * 100
-    
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to serializable dictionary for API responses.
-        
+
         This method provides a consistent JSON structure for web UI consumption,
         including both summary statistics and detailed per-track information.
         For play-based operations, includes play processing statistics.
-        
+
         Returns:
             Dictionary suitable for JSON serialization
         """
@@ -323,7 +336,9 @@ class OperationResult:
                     "total_tracks": len(values),
                     "avg_value": (
                         sum(v for v in values.values() if isinstance(v, (int, float)))
-                        / len([v for v in values.values() if isinstance(v, (int, float))])
+                        / len([
+                            v for v in values.values() if isinstance(v, (int, float))
+                        ])
                     )
                     if any(isinstance(v, (int, float)) for v in values.values())
                     else None,
@@ -342,28 +357,28 @@ class OperationResult:
             "success_rate": self.success_rate,
             "efficiency_rate": self.efficiency_rate,
         }
-        
+
         # Add play-based metrics if this is a play operation
         if self.plays_processed > 0:
             result["plays_processed"] = self.plays_processed
             result["play_metrics"] = self.play_metrics.copy()
-            
+
         return result
 
 
 @define(frozen=False)
 class WorkflowResult(OperationResult):
     """Result of a workflow execution with associated metrics.
-    
+
     Extends OperationResult to maintain backward compatibility while
     providing workflow-specific properties and methods.
     """
-    
+
     @property
     def workflow_name(self) -> str:
         """Backward compatibility property for workflow name."""
         return self.operation_name
-    
+
     @classmethod
     def create_workflow_result(
         cls,
@@ -373,13 +388,13 @@ class WorkflowResult(OperationResult):
         execution_time: float = 0.0,
     ) -> "WorkflowResult":
         """Create a workflow result with proper initialization.
-        
+
         Args:
             tracks: List of tracks processed by the workflow
             metrics: Optional metrics dictionary
             workflow_name: Name of the executed workflow
             execution_time: Time taken to execute the workflow
-            
+
         Returns:
             Initialized WorkflowResult instance
         """
@@ -394,7 +409,7 @@ class WorkflowResult(OperationResult):
 # LastfmPlayRecord now uses factory method pattern to build standardized metadata
 def create_lastfm_play_record(
     artist_name: str,
-    track_name: str, 
+    track_name: str,
     scrobbled_at: datetime,
     album_name: str | None = None,
     lastfm_track_url: str | None = None,
@@ -420,7 +435,7 @@ def create_lastfm_play_record(
         "streamable": streamable,
         "loved": loved,
     }
-    
+
     return PlayRecord(
         artist_name=artist_name,
         track_name=track_name,

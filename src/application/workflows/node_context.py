@@ -40,7 +40,7 @@ class NodeContext:
 
     def extract_tracklist(self) -> TrackList:
         """Extract primary tracklist from context.
-        
+
         Supports both workflow contexts (with upstream_task_id) and direct contexts
         (with tracklist key) for testing compatibility.
         """
@@ -49,14 +49,16 @@ class NodeContext:
             upstream_id = self.data["upstream_task_id"]
             if upstream_id in self.data and "tracklist" in self.data[upstream_id]:
                 return self.data[upstream_id]["tracklist"]
-        
+
         # Check for direct tracklist (testing/simple contexts)
         if "tracklist" in self.data:
             tracklist = self.data["tracklist"]
             if isinstance(tracklist, TrackList):
                 return tracklist
 
-        raise ValueError("Missing required tracklist from upstream node or direct context")
+        raise ValueError(
+            "Missing required tracklist from upstream node or direct context"
+        )
 
     def collect_tracklists(self, task_ids: list[str]) -> list[TrackList]:
         """Collect tracklists from multiple task results."""

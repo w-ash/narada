@@ -7,6 +7,7 @@ enabling Clean Architecture compliance through dependency inversion.
 from typing import Any, Protocol
 
 from src.domain.entities.track import Track, TrackList
+from src.domain.repositories.interfaces import RepositoryProvider
 
 
 class ConfigProvider(Protocol):
@@ -66,40 +67,6 @@ class DatabaseSessionProvider(Protocol):
 
     def get_session(self) -> Any:
         """Get database session context manager."""
-        ...
-
-
-class RepositoryProvider(Protocol):
-    """Protocol for repository access."""
-
-    @property
-    def core(self) -> Any:
-        """Core track repository."""
-        ...
-
-    @property
-    def plays(self) -> Any:
-        """Track plays repository."""
-        ...
-
-    @property
-    def likes(self) -> Any:
-        """Track likes repository."""
-        ...
-
-    @property
-    def connector(self) -> Any:
-        """Connector repository."""
-        ...
-
-    @property
-    def checkpoints(self) -> Any:
-        """Sync checkpoints repository."""
-        ...
-
-    @property
-    def playlists(self) -> Any:
-        """Playlist repository."""
         ...
 
 

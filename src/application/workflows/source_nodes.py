@@ -20,9 +20,7 @@ logger = get_logger(__name__)
 
 
 async def spotify_playlist_source(
-    _context: dict, 
-    config: dict, 
-    spotify_connector: SpotifyConnector | None = None
+    _context: dict, config: dict, spotify_connector: SpotifyConnector | None = None
 ) -> dict[str, Any]:
     """Fetch Spotify playlist and convert to TrackList using bulk operations."""
     playlist_id = config.get("playlist_id")

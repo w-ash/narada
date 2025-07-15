@@ -210,7 +210,7 @@ class LastFMConnector:
 
         # For write operations, we need username and password
         lastfm_password = os.getenv("LASTFM_PASSWORD")
-        
+
         if self.lastfm_username and lastfm_password:
             # Full authentication for write operations
             self.client = pylast.LastFMNetwork(
@@ -352,7 +352,7 @@ class LastFMConnector:
 
         # Use the pre-configured batch processor
         batch_results = await self.batch_processor.process(
-            tracks, 
+            tracks,
             process_track,
             progress_callback=wrapped_progress_callback,
             progress_task_name="enrich",
@@ -394,8 +394,10 @@ class LastFMConnector:
             return False
 
         # Check if client is authenticated for write operations
-        if not hasattr(self.client, 'username') or not self.client.username:
-            logger.error("Last.fm client not authenticated - set LASTFM_PASSWORD environment variable")
+        if not hasattr(self.client, "username") or not self.client.username:
+            logger.error(
+                "Last.fm client not authenticated - set LASTFM_PASSWORD environment variable"
+            )
             return False
 
         # Use provided username or fall back to configured one
@@ -454,14 +456,14 @@ class LastFMConnector:
         to_time: datetime | None = None,
     ) -> list[PlayRecord]:
         """Get recent tracks from Last.fm user.getRecentTracks API.
-        
+
         Args:
             username: Last.fm username (defaults to configured username)
             limit: Number of tracks per page (default 200, max 200)
             page: Page number to fetch (1-based)
             from_time: Beginning timestamp (UTC)
             to_time: End timestamp (UTC)
-            
+
         Returns:
             List of PlayRecord objects with Last.fm metadata
         """
@@ -488,7 +490,7 @@ class LastFMConnector:
             params = {
                 "limit": limit,
             }
-            
+
             # Add time range if specified (convert to UNIX timestamps)
             if from_time:
                 params["time_from"] = int(from_time.timestamp())
@@ -509,29 +511,62 @@ class LastFMConnector:
                 # track_info is a tuple: (Track, PlayedTime)
                 if len(track_info) >= 2:
                     track, played_time = track_info[0], track_info[1]
-                    
+
                     # Skip currently playing tracks (they have no timestamp)
                     if not played_time:
                         continue
 
                     # Parse the timestamp - pylast returns datetime objects
                     from datetime import UTC
-                    scrobbled_at = played_time if isinstance(played_time, datetime) else datetime.fromtimestamp(int(played_time), tz=UTC)
+
+                    scrobbled_at = (
+                        played_time
+                        if isinstance(played_time, datetime)
+                        else datetime.fromtimestamp(int(played_time), tz=UTC)
+                    )
 
                     # Extract track metadata
-                    track_name = track.get_title() if hasattr(track, 'get_title') else str(track)
-                    artist_name = track.get_artist().get_name() if hasattr(track, 'get_artist') and track.get_artist() else ""
-                    album_name = track.get_album().get_name() if hasattr(track, 'get_album') and track.get_album() else None
+                    track_name = (
+                        track.get_title() if hasattr(track, "get_title") else str(track)
+                    )
+                    artist_name = (
+                        track.get_artist().get_name()
+                        if hasattr(track, "get_artist") and track.get_artist()
+                        else ""
+                    )
+                    album_name = (
+                        track.get_album().get_name()
+                        if hasattr(track, "get_album") and track.get_album()
+                        else None
+                    )
 
                     # Extract URLs and MBIDs
-                    track_url = track.get_url() if hasattr(track, 'get_url') else None
-                    track_mbid = track.get_mbid() if hasattr(track, 'get_mbid') else None
-                    
-                    artist_url = track.get_artist().get_url() if hasattr(track, 'get_artist') and track.get_artist() else None
-                    artist_mbid = track.get_artist().get_mbid() if hasattr(track, 'get_artist') and track.get_artist() else None
-                    
-                    album_url = track.get_album().get_url() if hasattr(track, 'get_album') and track.get_album() else None
-                    album_mbid = track.get_album().get_mbid() if hasattr(track, 'get_album') and track.get_album() else None
+                    track_url = track.get_url() if hasattr(track, "get_url") else None
+                    track_mbid = (
+                        track.get_mbid() if hasattr(track, "get_mbid") else None
+                    )
+
+                    artist_url = (
+                        track.get_artist().get_url()
+                        if hasattr(track, "get_artist") and track.get_artist()
+                        else None
+                    )
+                    artist_mbid = (
+                        track.get_artist().get_mbid()
+                        if hasattr(track, "get_artist") and track.get_artist()
+                        else None
+                    )
+
+                    album_url = (
+                        track.get_album().get_url()
+                        if hasattr(track, "get_album") and track.get_album()
+                        else None
+                    )
+                    album_mbid = (
+                        track.get_album().get_mbid()
+                        if hasattr(track, "get_album") and track.get_album()
+                        else None
+                    )
 
                     # Create unified PlayRecord using factory method
                     play_record = create_lastfm_play_record(
@@ -546,15 +581,15 @@ class LastFMConnector:
                         artist_mbid=artist_mbid,
                         album_mbid=album_mbid,
                         streamable=False,  # Not available in recent tracks API
-                        loved=False,       # Not available in recent tracks API
+                        loved=False,  # Not available in recent tracks API
                         api_page=page,
                         raw_data={
                             "track_url": track_url,
                             "artist_url": artist_url,
                             "album_url": album_url,
-                        }
+                        },
                     )
-                    
+
                     play_records.append(play_record)
 
             logger.info(
@@ -564,7 +599,7 @@ class LastFMConnector:
                 from_time=from_time,
                 to_time=to_time,
             )
-            
+
             return play_records
 
         except pylast.WSError as e:

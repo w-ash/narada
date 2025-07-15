@@ -14,10 +14,10 @@ def complete_workflow_names(incomplete: str) -> list[str]:
     """Complete workflow names from definitions directory."""
     try:
         definitions_path = _get_workflow_definitions_path()
-        
+
         if not definitions_path.exists():
             return []
-        
+
         workflow_names = []
         for json_file in definitions_path.glob("*.json"):
             try:
@@ -28,8 +28,8 @@ def complete_workflow_names(incomplete: str) -> list[str]:
                     workflow_names.append(workflow_id)
             except (OSError, json.JSONDecodeError):
                 continue
-        
+
         return sorted(workflow_names)
-        
+
     except Exception:
         return []

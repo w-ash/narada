@@ -253,10 +253,12 @@ class DBTrackPlay(NaradaDBBase):
     )
     ms_played: Mapped[int | None]
     context: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    
+
     # Import tracking (service-agnostic)
     import_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    import_source: Mapped[str | None] = mapped_column(String(32))  # 'spotify_export', 'lastfm_api', 'manual'
+    import_source: Mapped[str | None] = mapped_column(
+        String(32)
+    )  # 'spotify_export', 'lastfm_api', 'manual'
     import_batch_id: Mapped[str | None] = mapped_column(String(64))
 
     # Relationships

@@ -7,7 +7,6 @@ Usage:
     alembic upgrade head
 """
 
-
 import sqlalchemy as sa
 
 from alembic import op

@@ -108,7 +108,7 @@ def calculate_confidence(
     internal_title = internal_track_data.get("title", "")
     internal_artists = internal_track_data.get("artists", [])
     internal_duration = internal_track_data.get("duration_ms")
-    
+
     service_title = service_track_data.get("title", "")
     service_artist = service_track_data.get("artist", "")
     service_duration = service_track_data.get("duration_ms")
@@ -139,7 +139,11 @@ def calculate_confidence(
     artist_score = 0.0
     if internal_artists and service_artist:
         # Get first artist name for comparison
-        internal_artist = internal_artists[0] if isinstance(internal_artists[0], str) else internal_artists[0].get("name", "")
+        internal_artist = (
+            internal_artists[0]
+            if isinstance(internal_artists[0], str)
+            else internal_artists[0].get("name", "")
+        )
         internal_artist = internal_artist.lower()
         service_artist = service_artist.lower()
 

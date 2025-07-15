@@ -97,7 +97,9 @@ class PlaylistMapper(BaseModelMapper[DBPlaylist, Playlist]):
 
                 # Get connector tracks - always returns a list
                 try:
-                    connector_tracks = await safe_fetch_relationship(m, "connector_track")
+                    connector_tracks = await safe_fetch_relationship(
+                        m, "connector_track"
+                    )
                     if not connector_tracks:
                         continue
 
@@ -107,7 +109,10 @@ class PlaylistMapper(BaseModelMapper[DBPlaylist, Playlist]):
                     # Skip if it's deleted or missing required attributes
                     if (
                         not connector_track
-                        or (hasattr(connector_track, "is_deleted") and connector_track.is_deleted)
+                        or (
+                            hasattr(connector_track, "is_deleted")
+                            and connector_track.is_deleted
+                        )
                         or not hasattr(connector_track, "connector_name")
                         or not hasattr(connector_track, "connector_track_id")
                     ):
@@ -126,7 +131,9 @@ class PlaylistMapper(BaseModelMapper[DBPlaylist, Playlist]):
                 continue
 
             # Extract artist names using standardized method
-            artist_names = TrackMapper.extract_artist_names(track.artists.get("names", []))
+            artist_names = TrackMapper.extract_artist_names(
+                track.artists.get("names", [])
+            )
             if not artist_names:
                 continue
 

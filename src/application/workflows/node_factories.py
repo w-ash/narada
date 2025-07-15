@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from src.domain.entities.track import TrackList
 from src.infrastructure.config import get_logger
 from src.infrastructure.connectors import CONNECTORS
-from src.infrastructure.services.matcher import match_tracks
+from src.application.use_cases.match_tracks import match_tracks
 
 from .destination_nodes import DESTINATION_HANDLERS
 from .node_context import NodeContext
@@ -152,12 +152,11 @@ class WorkflowNodeFactory:
             raise ValueError("Connector type is required")
         if enricher_type not in CONNECTORS:
             raise ValueError(f"Unsupported connector: {enricher_type}")
-        
+
         # Retrieve connector configuration once at creation time
         enricher_config = CONNECTORS[enricher_type]
 
         # Get connector from registry via dependency injection
-        # connector = self.context.connectors.get_connector(enricher_type)  # Not needed for new implementation
 
         async def node_impl(context: dict, node_config: dict) -> dict:
             ctx = NodeContext(context)
@@ -173,11 +172,11 @@ class WorkflowNodeFactory:
             from src.infrastructure.persistence.repositories.track import (
                 TrackRepositories,
             )
-            from src.infrastructure.services.matcher import match_tracks
-            
+            from src.application.use_cases.match_tracks import match_tracks
+
             async with get_session() as session:
                 track_repos = TrackRepositories(session)
-                
+
                 # Resolve track identities through matcher service
                 match_results = await match_tracks(
                     tracklist,

@@ -354,7 +354,6 @@ def sort_by_attribute(
                 )
 
         # Check if we have any non-null values
-        # non_null_values = {k: v for k, v in metrics_dict.items() if v is not None}  # Currently unused
 
         # Create enhanced key function that prioritizes metrics
         def enhanced_key_fn(track: Track) -> Any:

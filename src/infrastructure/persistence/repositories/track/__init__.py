@@ -51,9 +51,10 @@ class TrackRepositories:
         self.likes = TrackLikeRepository(session)
         self.plays = TrackPlayRepository(session)
         self.checkpoints = SyncCheckpointRepository(session)
-        
+
         # Import connectors registry for metric mappings
         from src.infrastructure.connectors import CONNECTORS
+
         self.connectors_config = CONNECTORS
 
     async def get_track(self, id_type: str, id_value: str):

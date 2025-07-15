@@ -153,10 +153,10 @@ def display_operation_result(
     next_step_message: str | None = None,
 ) -> None:
     """Unified display function for all operation results using Rich.
-    
+
     Leverages Rich (Typer's recommended display library) to provide consistent
     formatting across all operation types. Supports both summary and detailed views.
-    
+
     Args:
         result: Any OperationResult (WorkflowResult, SyncStats, etc.)
         title: Optional title override
@@ -165,43 +165,44 @@ def display_operation_result(
     """
     if output_format == "json":
         import json
+
         console.print_json(json.dumps(result.to_dict()))
         return
-    
+
     # Display title
     display_title = title or result.operation_name or "Operation Results"
     console.print(f"\n[bold blue]{display_title}[/bold blue]")
-    
+
     # Summary statistics
     summary_data = []
-    
+
     # Play-based operations show both plays and tracks
     if result.plays_processed > 0:
         summary_data.append(("Plays Processed", str(result.plays_processed)))
         summary_data.append(("Tracks Affected", str(len(result.tracks))))
-        
+
         # Add play-level metrics
         for metric_name, metric_value in result.play_metrics.items():
             display_name = metric_name.replace("_", " ").title()
             summary_data.append((display_name, str(metric_value)))
     else:
         summary_data.append(("Tracks Processed", str(len(result.tracks))))
-    
+
     # Add operation-specific summaries using duck typing
-    if hasattr(result, 'imported') and hasattr(result, 'exported'):  # SyncStats
-        imported = getattr(result, 'imported', 0)
-        exported = getattr(result, 'exported', 0)
-        skipped = getattr(result, 'skipped', 0)
-        errors = getattr(result, 'errors', 0)
-        total = getattr(result, 'total', 0)
-        
+    if hasattr(result, "imported") and hasattr(result, "exported"):  # SyncStats
+        imported = getattr(result, "imported", 0)
+        exported = getattr(result, "exported", 0)
+        skipped = getattr(result, "skipped", 0)
+        errors = getattr(result, "errors", 0)
+        total = getattr(result, "total", 0)
+
         # Enhanced intelligence reporting
-        already_liked = getattr(result, 'already_liked', 0)
-        candidates = getattr(result, 'candidates', 0)
-        
+        already_liked = getattr(result, "already_liked", 0)
+        candidates = getattr(result, "candidates", 0)
+
         success_count = imported + exported
         success_rate = (success_count / total * 100) if total > 0 else 0
-        
+
         # Show intelligence first (most important insight)
         if already_liked > 0:
             efficiency_rate = (already_liked / total * 100) if total > 0 else 0
@@ -210,7 +211,7 @@ def display_operation_result(
                 ("Already Liked ✅", f"{already_liked} ({efficiency_rate:.1f}%)"),
                 ("Candidates", str(candidates)),
             ])
-        
+
         summary_data.extend([
             ("Imported", str(imported)),
             ("Exported", str(exported)),
@@ -218,20 +219,20 @@ def display_operation_result(
             ("Errors", str(errors)),
             ("Success Rate", f"{success_rate:.1f}%"),
         ])
-    
+
     if result.execution_time > 0:
         summary_data.append(("Duration", f"{result.execution_time:.1f}s"))
-    
+
     # Create summary table
     summary_table = Table(show_header=False, box=None, padding=(0, 2))
     summary_table.add_column(style="cyan")
     summary_table.add_column(style="green bold")
-    
+
     for metric, value in summary_data:
         summary_table.add_row(metric, value)
-    
+
     console.print(summary_table)
-    
+
     # Track details table if we have tracks
     if result.tracks:
         console.print()
@@ -239,37 +240,42 @@ def display_operation_result(
         details_table.add_column("#", style="dim", justify="right")
         details_table.add_column("Artist", style="cyan")
         details_table.add_column("Track", style="green")
-        
+
         # Add metric columns
         metric_columns = sorted(result.metrics.keys())
         for metric_name in metric_columns:
             display_name = metric_name.replace("_", " ").title()
             details_table.add_column(display_name, style="yellow")
-        
+
         # Add track rows
         for i, track in enumerate(result.tracks, 1):
             artist_name = track.artists[0].name if track.artists else "Unknown"
             row = [str(i), artist_name, track.title]
-            
+
             for metric_name in metric_columns:
                 value = result.get_metric(track.id, metric_name, "—")
                 if metric_name == "sync_status" and isinstance(value, str):
                     # Add emoji for sync status
-                    emoji = {"imported": "✅", "exported": "📤", "skipped": "⚠️", "error": "❌"}.get(value, "❓")
+                    emoji = {
+                        "imported": "✅",
+                        "exported": "📤",
+                        "skipped": "⚠️",
+                        "error": "❌",
+                    }.get(value, "❓")
                     row.append(f"{emoji} {value}")
                 elif isinstance(value, float):
                     row.append(f"{value:.1f}")
                 else:
                     row.append(str(value))
-            
+
             details_table.add_row(*row)
-        
+
         console.print(details_table)
-    
+
     # Next step message
     if next_step_message:
         console.print(f"\n[yellow]{next_step_message}[/yellow]")
-    
+
     console.print()
 
 

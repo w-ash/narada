@@ -4,13 +4,13 @@ from typing import Annotated
 
 import typer
 
-from src.domain.entities import OperationResult
-from src.infrastructure.cli.async_helpers import async_db_operation
-from src.infrastructure.persistence.repositories.track import TrackRepositories
-from src.infrastructure.services.like_sync import (
+from src.application.use_cases.sync_likes import (
     run_lastfm_likes_export,
     run_spotify_likes_import,
 )
+from src.domain.entities import OperationResult
+from src.infrastructure.cli.async_helpers import async_db_operation
+from src.infrastructure.persistence.repositories.track import TrackRepositories
 
 # Create likes subcommand app
 app = typer.Typer(help="Manage liked tracks data")

@@ -96,7 +96,7 @@ async def execute_node(node_type: str, context: dict, config: dict) -> dict:
         try:
             progress_artifact_id = cast(
                 "UUID",
-                create_progress_artifact(
+                await create_progress_artifact(
                     progress=0.0,
                     description=f"Processing {node_type.replace('_', ' ').title()}",
                 ),
@@ -106,29 +106,9 @@ async def execute_node(node_type: str, context: dict, config: dict) -> dict:
             task_logger.warning(f"Failed to create progress artifact: {e}")
 
     try:
-        # Add progress artifact callback for Prefect UI updates
-        if progress_artifact_id:
-
-            def artifact_callback(event_type: str, event_data: dict) -> None:
-                """Update Prefect progress artifact based on events."""
-                try:
-                    if event_type == "batch_progress":
-                        current = event_data.get("items_processed", 0)
-                        total = event_data.get("total_items", 1)
-                        progress = min(1.0, current / total) if total > 0 else 0.0
-                        # Update artifact synchronously since it's not async
-                        try:
-                            update_progress_artifact(
-                                artifact_id=progress_artifact_id, progress=progress
-                            )
-                        except Exception as update_e:
-                            logger.debug(f"Artifact update failed: {update_e}")
-                except Exception as e:
-                    logger.debug(f"Progress update failed: {e}")
-
-            # Add progress callback to context for artifact updates
-            context = context.copy()  # Don't modify original context
-            context["progress_callback"] = artifact_callback
+        # Note: We only use progress artifacts for start/completion to avoid async/sync mismatch
+        # Real-time progress updates in sync callbacks cannot properly await async Prefect functions
+        # The progress system will still provide CLI feedback through other channels
 
         # Execute node with direct configuration
         # No template resolution - config passes through unchanged
@@ -137,7 +117,7 @@ async def execute_node(node_type: str, context: dict, config: dict) -> dict:
         # Mark progress as complete
         if progress_artifact_id:
             try:
-                update_progress_artifact(artifact_id=progress_artifact_id, progress=1.0)
+                await update_progress_artifact(artifact_id=progress_artifact_id, progress=1.0)
             except Exception as e:
                 task_logger.warning(
                     f"Failed to update progress artifact completion: {e}"

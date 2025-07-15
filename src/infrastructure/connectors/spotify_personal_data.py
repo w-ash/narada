@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 @define(frozen=True, slots=True)
 class SpotifyPlayRecord:
     """Raw Spotify play record from personal data export."""
-    
+
     timestamp: datetime
     track_uri: str
     track_name: str
@@ -55,10 +55,10 @@ class SpotifyPlayRecord:
 def parse_spotify_personal_data(file_path: Path) -> list[SpotifyPlayRecord]:
     """Parse Spotify personal data JSON file into play records."""
     logger.info(f"Parsing Spotify personal data file: {file_path}")
-    
+
     with file_path.open() as f:
         data = json.load(f)
-    
+
     # Filter out non-music content and parse records
     records = []
     for item in data:
@@ -68,6 +68,6 @@ def parse_spotify_personal_data(file_path: Path) -> list[SpotifyPlayRecord]:
             except (KeyError, ValueError) as e:
                 logger.warning(f"Skipping malformed record: {e}")
                 continue
-    
+
     logger.info(f"Parsed {len(records)} play records")
     return records

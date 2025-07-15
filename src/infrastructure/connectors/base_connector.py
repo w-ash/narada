@@ -239,15 +239,18 @@ class BatchProcessor[T, R]:
         total_batches = (len(items) + self.batch_size - 1) // self.batch_size
         total_items = len(items)
         processed_items = 0
-        
+
         # Emit batch processing started event
         if progress_callback:
-            progress_callback("batch_started", {
-                "task_name": progress_task_name,
-                "total_batches": total_batches,
-                "total_items": total_items,
-                "description": progress_description,
-            })
+            progress_callback(
+                "batch_started",
+                {
+                    "task_name": progress_task_name,
+                    "total_batches": total_batches,
+                    "total_items": total_items,
+                    "description": progress_description,
+                },
+            )
 
         @backoff.on_exception(
             backoff.expo,
@@ -273,66 +276,82 @@ class BatchProcessor[T, R]:
             batch = items[i : i + self.batch_size]
             current_batch = i // self.batch_size + 1
             batch_start_items = processed_items
-            
+
             self.logger_instance.debug(
                 f"Processing batch {current_batch}/{total_batches}",
                 batch_size=len(batch),
                 total_items=len(items),
             )
-            
+
             # Emit batch started event
             if progress_callback:
-                progress_callback("batch_progress", {
-                    "task_name": progress_task_name,
-                    "batch_number": current_batch,
-                    "total_batches": total_batches,
-                    "batch_size": len(batch),
-                    "items_processed": processed_items,
-                    "total_items": total_items,
-                    "description": f"{progress_description} (batch {current_batch}/{total_batches})",
-                })
+                progress_callback(
+                    "batch_progress",
+                    {
+                        "task_name": progress_task_name,
+                        "batch_number": current_batch,
+                        "total_batches": total_batches,
+                        "batch_size": len(batch),
+                        "items_processed": processed_items,
+                        "total_items": total_items,
+                        "description": f"{progress_description} (batch {current_batch}/{total_batches})",
+                    },
+                )
 
             # Create a progress-aware wrapper for individual item processing
-            async def process_item_with_progress(item: T, item_index: int, batch_start: int = batch_start_items, batch_num: int = current_batch) -> R:
+            async def process_item_with_progress(
+                item: T,
+                item_index: int,
+                batch_start: int = batch_start_items,
+                batch_num: int = current_batch,
+            ) -> R:
                 """Process item and emit progress event."""
                 result = await process_with_backoff(item)
-                
+
                 # Emit individual item progress every 10 items to avoid spam
                 current_item = batch_start + item_index + 1
-                if progress_callback and (current_item % 10 == 0 or current_item == total_items):
+                if progress_callback and (
+                    current_item % 10 == 0 or current_item == total_items
+                ):
                     # Try to get a meaningful description from the item
                     item_desc = ""
                     try:
-                        if hasattr(item, 'title') and hasattr(item, 'artists'):
-                            artists = getattr(item, 'artists', [])
-                            if artists and hasattr(artists[0], 'name'):
+                        if hasattr(item, "title") and hasattr(item, "artists"):
+                            artists = getattr(item, "artists", [])
+                            if artists and hasattr(artists[0], "name"):
                                 artist_name = artists[0].name
                             else:
                                 artist_name = "Unknown Artist"
                             item_desc = f"{artist_name} - {getattr(item, 'title', 'Unknown Track')}"
-                        elif hasattr(item, 'name'):
-                            item_desc = str(getattr(item, 'name', ''))
-                        elif hasattr(item, 'id'):
+                        elif hasattr(item, "name"):
+                            item_desc = str(getattr(item, "name", ""))
+                        elif hasattr(item, "id"):
                             item_desc = f"Item {getattr(item, 'id', '')}"
                     except (AttributeError, IndexError):
                         # Fallback if item structure is unexpected
                         item_desc = f"Item {item_index + 1}"
-                    
-                    progress_callback("track_processed", {
-                        "task_name": progress_task_name,
-                        "items_processed": current_item,
-                        "total_items": total_items,
-                        "current_batch": batch_num,
-                        "item_description": item_desc,
-                        "description": f"Processed {current_item}/{total_items} items",
-                    })
-                
+
+                    progress_callback(
+                        "track_processed",
+                        {
+                            "task_name": progress_task_name,
+                            "items_processed": current_item,
+                            "total_items": total_items,
+                            "current_batch": batch_num,
+                            "item_description": item_desc,
+                            "description": f"Processed {current_item}/{total_items} items",
+                        },
+                    )
+
                 return result
 
             # Use gather with return_exceptions=True to handle errors without failing the whole batch
             batch_results = await asyncio.gather(
-                *[process_item_with_progress(item, idx) for idx, item in enumerate(batch)], 
-                return_exceptions=True
+                *[
+                    process_item_with_progress(item, idx)
+                    for idx, item in enumerate(batch)
+                ],
+                return_exceptions=True,
             )
 
             # Process results, keeping errors separate
@@ -352,15 +371,18 @@ class BatchProcessor[T, R]:
 
             # Emit batch completed event
             if progress_callback:
-                progress_callback("batch_completed", {
-                    "task_name": progress_task_name,
-                    "batch_number": current_batch,
-                    "total_batches": total_batches,
-                    "items_processed": processed_items,
-                    "total_items": total_items,
-                    "batch_results": len(valid_results),
-                    "batch_failures": len(batch_results) - len(valid_results),
-                })
+                progress_callback(
+                    "batch_completed",
+                    {
+                        "task_name": progress_task_name,
+                        "batch_number": current_batch,
+                        "total_batches": total_batches,
+                        "items_processed": processed_items,
+                        "total_items": total_items,
+                        "batch_results": len(valid_results),
+                        "batch_failures": len(batch_results) - len(valid_results),
+                    },
+                )
 
             # Log batch completion
             self.logger_instance.debug(

@@ -37,7 +37,7 @@ async def safe_fetch_relationship(db_model: Any, rel_name: str) -> list[Any]:
 
     This function uses a single, consistent approach for safely accessing
     relationship attributes in async context using SQLAlchemy 2.0 best practices.
-    
+
     Returns:
         Always returns a list for consistent handling. For single-entity relationships,
         callers should access the first element in the list. For empty results, the list
@@ -148,7 +148,7 @@ class BaseModelMapper[TDBModel: NaradaDBBase, TDomainModel]:
 
         This is a convenience method that handles None values
         and performs the mapping operation in a consistent way.
-        
+
         Uses cls.to_domain to ensure the subclass implementation is called,
         not BaseModelMapper.to_domain directly.
         """

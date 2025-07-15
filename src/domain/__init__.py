@@ -33,32 +33,32 @@ from .transforms import (
 )
 
 __all__ = [
-    # Modules
-    "entities",
-    "matching", 
-    "transforms",
     # Key domain types
     "Artist",
-    "Track", 
-    "TrackList",
-    "Playlist",
-    "OperationResult",
-    "WorkflowResult",
-    "TrackPlay",
-    "PlayRecord",
-    "SyncCheckpoint",
     # Matching types
     "ConfidenceEvidence",
     "MatchResult",
+    "OperationResult",
+    "PlayRecord",
+    "Playlist",
+    "SyncCheckpoint",
+    "Track",
+    "TrackList",
+    "TrackPlay",
+    # Transform functions
+    "Transform",
+    "WorkflowResult",
     "calculate_confidence",
     "calculate_title_similarity",
-    # Transform functions
+    "concatenate",
     "create_pipeline",
-    "Transform",
+    # Modules
+    "entities",
     "filter_by_predicate",
     "filter_duplicates",
-    "sort_by_attribute", 
     "limit",
-    "concatenate",
+    "matching",
     "rename",
+    "sort_by_attribute",
+    "transforms",
 ]
