@@ -37,6 +37,7 @@ def validate_registry():
         "destination.create_internal_playlist",
         "destination.create_spotify_playlist",
         "destination.update_spotify_playlist",
+        "destination.update_playlist",
     ]
 
     registered = set(registry.list_nodes().keys())

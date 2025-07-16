@@ -6,15 +6,18 @@ and leveraging optimized bulk operations for maximum efficiency.
 
 from typing import Any
 
-from src.domain.entities.track import TrackList
+from src.application.use_cases.save_playlist import (
+    EnrichmentConfig,
+    PersistenceOptions,
+    SavePlaylistCommand,
+    SavePlaylistUseCase,
+)
+from src.domain.entities.track import Track, TrackList
 from src.infrastructure.config import get_logger
 from src.infrastructure.connectors.spotify import (
     SpotifyConnector,
     convert_spotify_track_to_connector,
 )
-from src.infrastructure.persistence.database.db_connection import get_session
-from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
-from src.infrastructure.persistence.repositories.track import TrackRepositories
 
 logger = get_logger(__name__)
 
@@ -55,48 +58,68 @@ async def spotify_playlist_source(
     # 3. Bulk fetch all track data (this uses the tracks endpoint)
     track_data_map = await spotify_connector.get_tracks_by_ids(track_ids)
 
-    # 4. Convert all tracks to connector models
-    connector_tracks = [
-        convert_spotify_track_to_connector(track_data)
+    # 4. Convert all tracks to domain models
+    domain_tracks = [
+        _convert_connector_track_to_domain(convert_spotify_track_to_connector(track_data))
         for track_data in track_data_map.values()
     ]
 
-    logger.info(f"Retrieved {len(connector_tracks)}/{len(track_ids)} tracks in bulk")
+    logger.info(f"Retrieved {len(domain_tracks)}/{len(track_ids)} tracks in bulk")
 
-    # 5. Process in database with a single session transaction
-    # (SQLAlchemy automatically begins a transaction when the session is used)
-    async with get_session() as session:
-        track_repos = TrackRepositories(session)
-        playlist_repos = PlaylistRepositories(session)
+    # 5. Create tracklist for use case
+    tracklist = TrackList(tracks=domain_tracks)
 
-        # 6. Bulk ingest all tracks at once
-        domain_tracks = await track_repos.connector.ingest_external_tracks_bulk(
-            connector="spotify", tracks=connector_tracks
-        )
-
-        # 7. Ingest playlist with all its tracks using the complete connector playlist
-        _, domain_playlist = await playlist_repos.connector.ingest_connector_playlist(
-            connector_playlist=connector_playlist,
+    # 6. Save playlist using SavePlaylistUseCase
+    save_command = SavePlaylistCommand(
+        tracklist=tracklist,
+        enrichment_config=EnrichmentConfig(
+            enabled=True,
+            primary_provider="spotify",
+            enrich_missing_only=True,
+        ),
+        persistence_options=PersistenceOptions(
+            operation_type="create_internal",
+            playlist_name=connector_playlist.name,
+            playlist_description=connector_playlist.description or "Imported from Spotify",
             create_internal_playlist=True,
-            tracks=domain_tracks,
-        )
+        ),
+    )
 
-        # 8. Create tracklist from domain playlist
-        if domain_playlist is None:
-            tracklist = TrackList()
-            playlist_id = None
-            playlist_name = "Unknown"
-        else:
-            tracklist = TrackList.from_playlist(domain_playlist)
-            playlist_id = domain_playlist.id
-            playlist_name = domain_playlist.name
+    use_case = SavePlaylistUseCase()
+    result = await use_case.execute(save_command)
 
-        return {
-            "tracklist": tracklist,
-            "playlist_id": playlist_id,
-            "playlist_name": playlist_name,
-            "source": "spotify",
-            "source_id": playlist_id,
-            "operation": "spotify_playlist_source",
-            "track_count": len(tracklist.tracks),
-        }
+    return {
+        "tracklist": tracklist,
+        "playlist_id": result.playlist.id,
+        "playlist_name": result.playlist.name,
+        "source": "spotify",
+        "source_id": playlist_id,
+        "operation": "spotify_playlist_source",
+        "track_count": len(result.enriched_tracks),
+    }
+
+
+def _convert_connector_track_to_domain(connector_track) -> Track:
+    """Convert ConnectorTrack to domain Track entity.
+    
+    Args:
+        connector_track: ConnectorTrack from Spotify API
+        
+    Returns:
+        Domain Track entity
+    """
+    return Track(
+        title=connector_track.title,
+        artists=connector_track.artists,
+        album=connector_track.album,
+        duration_ms=connector_track.duration_ms,
+        release_date=connector_track.release_date,
+        isrc=connector_track.isrc,
+        connector_track_ids={connector_track.connector_name: connector_track.connector_track_id},
+        connector_metadata={
+            connector_track.connector_name: {
+                "popularity": getattr(connector_track, "popularity", None),
+                "preview_url": getattr(connector_track, "preview_url", None),
+            }
+        },
+    )

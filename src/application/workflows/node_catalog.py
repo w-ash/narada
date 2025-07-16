@@ -141,3 +141,10 @@ node(
     input_type="tracklist",
     output_type="playlist_id",
 )(create_destination_node("update_spotify"))
+
+node(
+    "destination.update_playlist",
+    description="Updates playlists with sophisticated differential operations",
+    input_type="tracklist",
+    output_type="playlist_id",
+)(create_destination_node("update_playlist"))

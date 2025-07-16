@@ -327,6 +327,19 @@ narada wf list                         # Test the alias functionality
 5. Run linting and type checking
 6. Submit a pull request
 
+## Documentation
+
+Comprehensive documentation is available in the `/docs` directory:
+
+- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System architecture and design decisions
+- **[DEVELOPMENT.md](docs/DEVELOPMENT.md)** - Developer onboarding and contribution guide
+- **[DATABASE.md](docs/DATABASE.md)** - Database schema and design
+- **[API.md](docs/API.md)** - Complete CLI command reference
+- **[workflow_guide.md](docs/workflow_guide.md)** - Workflow system documentation
+- **[likes_sync_guide.md](docs/likes_sync_guide.md)** - Likes synchronization between Spotify and Last.fm
+- **[BACKLOG.md](BACKLOG.md)** - Project roadmap and planned features
+- **[CLAUDE.md](CLAUDE.md)** - Development commands and style guide
+
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
