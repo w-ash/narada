@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
+from src.config import get_logger, resilient_operation
 from src.domain.entities import (
     Artist,
     ConnectorPlaylist,
@@ -36,7 +37,6 @@ from src.domain.entities import (
     Playlist,
     Track,
 )
-from src.infrastructure.config import get_logger, resilient_operation
 from src.infrastructure.connectors.base_connector import (
     BaseMetricResolver,
     register_metrics,
@@ -530,18 +530,46 @@ def convert_spotify_playlist_to_connector(
     )
 
 
+def _extract_metric(obj: Any, field_names: list[str]) -> int | None:
+    """Extract a metric value from various object types."""
+    # First check for direct attribute access
+    for field_name in field_names:
+        if hasattr(obj, field_name) and getattr(obj, field_name) is not None:
+            return getattr(obj, field_name)
+
+    # Then check service_data dictionary access (used by enricher)
+    if hasattr(obj, "service_data") and obj.service_data:
+        for field_name in field_names:
+            if (
+                field_name in obj.service_data
+                and obj.service_data[field_name] is not None
+            ):
+                return obj.service_data[field_name]
+
+    # Then check metadata dictionary access
+    if hasattr(obj, "metadata"):
+        for field_name in field_names:
+            if field_name in obj.metadata and obj.metadata[field_name] is not None:
+                return obj.metadata[field_name]
+
+    # Finally check dictionary access
+    if hasattr(obj, "get"):
+        for field_name in field_names:
+            value = obj.get(field_name)
+            if value is not None:
+                return value
+
+    return None
+
+
 def get_connector_config() -> ConnectorConfig:
     """Spotify connector configuration."""
     return {
         "extractors": {
-            # Smart extractors that handle both object types
-            "popularity": lambda obj: obj.get_connector_attribute(
-                "spotify",
-                "popularity",
-                0,
-            )
-            if hasattr(obj, "get_connector_attribute")
-            else obj.get("popularity", 0),
+            "popularity": lambda obj: _extract_metric(
+                obj,
+                ["popularity", "spotify_popularity"],
+            ),
         },
         "dependencies": ["auth"],
         "factory": lambda _params: SpotifyConnector(),

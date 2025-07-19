@@ -25,8 +25,8 @@ from src.application.use_cases.update_playlist import (
     UpdatePlaylistOptions,
     UpdatePlaylistUseCase,
 )
+from src.config import get_logger
 from src.domain.entities.track import TrackList
-from src.infrastructure.config import get_logger
 from src.infrastructure.connectors.spotify import SpotifyConnector
 
 logger = get_logger(__name__)
@@ -170,11 +170,11 @@ async def handle_update_playlist_destination(
     _context: dict,  # Kept for consistent interface
 ) -> dict:
     """Update an existing playlist using UpdatePlaylistUseCase.
-    
+
     This destination node enables differential playlist updates that preserve
     track addition timestamps and minimize API operations through sophisticated
     add/remove/reorder algorithms.
-    
+
     Config parameters:
         playlist_id (str): ID of playlist to update (internal or connector ID)
         operation_type (str): "update_internal", "update_spotify", or "sync_bidirectional"
@@ -186,11 +186,15 @@ async def handle_update_playlist_destination(
     playlist_id = config.get("playlist_id")
     if not playlist_id:
         raise ValueError("Missing required playlist_id for update operation")
-    
+
     operation_type = config.get("operation_type", "update_internal")
-    if operation_type not in ["update_internal", "update_spotify", "sync_bidirectional"]:
+    if operation_type not in [
+        "update_internal",
+        "update_spotify",
+        "sync_bidirectional",
+    ]:
         raise ValueError(f"Invalid operation_type: {operation_type}")
-    
+
     # Create command for playlist update
     command = UpdatePlaylistCommand(
         playlist_id=playlist_id,
@@ -198,7 +202,9 @@ async def handle_update_playlist_destination(
         options=UpdatePlaylistOptions(
             operation_type=operation_type,
             conflict_resolution=config.get("conflict_resolution", "local_wins"),
-            track_matching_strategy=config.get("track_matching_strategy", "comprehensive"),
+            track_matching_strategy=config.get(
+                "track_matching_strategy", "comprehensive"
+            ),
             dry_run=config.get("dry_run", False),
             force_update=config.get("force_update", False),
             preserve_order=config.get("preserve_order", True),
@@ -209,13 +215,13 @@ async def handle_update_playlist_destination(
         metadata={
             "workflow_source": "destination_node",
             "original_config": config,
-        }
+        },
     )
-    
+
     # Execute using UpdatePlaylistUseCase
     use_case = UpdatePlaylistUseCase()
     result = await use_case.execute(command)
-    
+
     # Return result in expected format for backward compatibility
     return {
         "operation": "update_playlist",

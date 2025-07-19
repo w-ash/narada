@@ -7,8 +7,8 @@ from attrs import define
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config import get_logger
 from src.domain.entities import Artist, ConnectorTrack, Track
-from src.infrastructure.config import get_logger
 from src.infrastructure.persistence.database.db_models import (
     DBConnectorTrack,
     DBTrackMapping,
@@ -757,6 +757,45 @@ class TrackConnectorRepository:
         else:
             return {track_id: metadata for track_id, metadata in result if metadata}
 
+    @db_operation("get_connector_metadata_with_timestamps")
+    async def get_connector_metadata_with_timestamps(
+        self,
+        track_ids: list[int],
+        connector: str,
+    ) -> dict[int, dict[str, Any]]:
+        """Get connector metadata for tracks with last_updated timestamps."""
+        if not track_ids:
+            return {}
+
+        # Build efficient join query including last_updated
+        stmt = (
+            select(
+                self.mapping_repo.model_class.track_id,
+                self.connector_repo.model_class.raw_metadata,
+                self.connector_repo.model_class.last_updated,
+            )
+            .join(
+                self.connector_repo.model_class,
+                self.mapping_repo.model_class.connector_track_id
+                == self.connector_repo.model_class.id,
+            )
+            .where(
+                self.mapping_repo.model_class.track_id.in_(track_ids),
+                self.connector_repo.model_class.connector_name == connector,
+                self.mapping_repo.model_class.is_deleted == False,  # noqa: E712
+                self.connector_repo.model_class.is_deleted == False,  # noqa: E712
+            )
+        )
+
+        # Execute and build response
+        result = await self.session.execute(stmt)
+
+        response = {}
+        for track_id, metadata, last_updated in result:
+            if metadata:
+                response[track_id] = {"data": metadata, "last_updated": last_updated}
+        return response
+
     @db_operation("save_mapping_confidence")
     async def save_mapping_confidence(
         self,
@@ -766,6 +805,7 @@ class TrackConnectorRepository:
         confidence: int,
         match_method: str | None = None,
         confidence_evidence: dict | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> bool:
         """Save confidence information to the track mapping."""
         # Find the connector track first
@@ -776,6 +816,23 @@ class TrackConnectorRepository:
 
         if not connector_track or "id" not in connector_track:
             return False
+
+        # Update connector track metadata if provided
+        if metadata is not None:
+            try:
+                from datetime import UTC, datetime
+
+                # Update the connector track with fresh metadata and timestamp
+                await self.connector_repo.update(
+                    connector_track["id"],
+                    {
+                        "raw_metadata": metadata,
+                        "last_updated": datetime.now(UTC),
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"Failed to update connector track metadata: {e}")
+                # Don't fail the entire operation if metadata update fails
 
         # Update mapping using upsert
         update_data: dict[str, Any] = {"confidence": confidence}

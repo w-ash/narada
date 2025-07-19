@@ -8,8 +8,8 @@ This module decouples data access patterns from orchestration logic.
 from dataclasses import dataclass
 from typing import Any
 
+from src.config import get_logger
 from src.domain.entities.track import TrackList
-from src.infrastructure.config import get_logger
 
 logger = get_logger(__name__)
 

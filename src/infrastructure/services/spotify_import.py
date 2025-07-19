@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from src.application.utilities.results import ImportResultData, ResultFactory
+from src.config import get_logger
 from src.domain.entities import OperationResult, TrackPlay
-from src.infrastructure.config import get_logger
 from src.infrastructure.connectors.spotify import SpotifyConnector
 from src.infrastructure.connectors.spotify_personal_data import (
     SpotifyPlayRecord,

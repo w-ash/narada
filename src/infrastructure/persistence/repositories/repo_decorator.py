@@ -26,7 +26,7 @@ from sqlalchemy.exc import (
     TimeoutError,
 )
 
-from src.infrastructure.config import get_logger
+from src.config import get_logger
 
 # Type variables for generic function signatures
 P = ParamSpec("P")

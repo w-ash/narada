@@ -12,8 +12,8 @@ from src.application.use_cases.save_playlist import (
     SavePlaylistCommand,
     SavePlaylistUseCase,
 )
+from src.config import get_logger
 from src.domain.entities.track import Track, TrackList
-from src.infrastructure.config import get_logger
 from src.infrastructure.connectors.spotify import (
     SpotifyConnector,
     convert_spotify_track_to_connector,
@@ -60,7 +60,9 @@ async def spotify_playlist_source(
 
     # 4. Convert all tracks to domain models
     domain_tracks = [
-        _convert_connector_track_to_domain(convert_spotify_track_to_connector(track_data))
+        _convert_connector_track_to_domain(
+            convert_spotify_track_to_connector(track_data)
+        )
         for track_data in track_data_map.values()
     ]
 
@@ -69,7 +71,7 @@ async def spotify_playlist_source(
     # 5. Create tracklist for use case
     tracklist = TrackList(tracks=domain_tracks)
 
-    # 6. Save playlist using SavePlaylistUseCase
+    # 6. Save playlist using SavePlaylistUseCase (with track upsert)
     save_command = SavePlaylistCommand(
         tracklist=tracklist,
         enrichment_config=EnrichmentConfig(
@@ -80,7 +82,8 @@ async def spotify_playlist_source(
         persistence_options=PersistenceOptions(
             operation_type="create_internal",
             playlist_name=connector_playlist.name,
-            playlist_description=connector_playlist.description or "Imported from Spotify",
+            playlist_description=connector_playlist.description
+            or "Imported from Spotify",
             create_internal_playlist=True,
         ),
     )
@@ -89,7 +92,7 @@ async def spotify_playlist_source(
     result = await use_case.execute(save_command)
 
     return {
-        "tracklist": tracklist,
+        "tracklist": TrackList(tracks=result.enriched_tracks),
         "playlist_id": result.playlist.id,
         "playlist_name": result.playlist.name,
         "source": "spotify",
@@ -101,10 +104,10 @@ async def spotify_playlist_source(
 
 def _convert_connector_track_to_domain(connector_track) -> Track:
     """Convert ConnectorTrack to domain Track entity.
-    
+
     Args:
         connector_track: ConnectorTrack from Spotify API
-        
+
     Returns:
         Domain Track entity
     """
@@ -115,7 +118,9 @@ def _convert_connector_track_to_domain(connector_track) -> Track:
         duration_ms=connector_track.duration_ms,
         release_date=connector_track.release_date,
         isrc=connector_track.isrc,
-        connector_track_ids={connector_track.connector_name: connector_track.connector_track_id},
+        connector_track_ids={
+            connector_track.connector_name: connector_track.connector_track_id
+        },
         connector_metadata={
             connector_track.connector_name: {
                 "popularity": getattr(connector_track, "popularity", None),

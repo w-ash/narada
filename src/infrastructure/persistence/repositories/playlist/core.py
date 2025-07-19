@@ -7,8 +7,8 @@ from sqlalchemy import Select, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from src.config import get_logger
 from src.domain.entities import Playlist, Track
-from src.infrastructure.config import get_logger
 from src.infrastructure.persistence.database.db_models import (
     DBPlaylist,
     DBPlaylistMapping,

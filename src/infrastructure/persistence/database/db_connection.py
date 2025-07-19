@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
-from src.infrastructure.config import get_logger
+from src.config import get_logger
 
 # Create module logger
 logger = get_logger(__name__)

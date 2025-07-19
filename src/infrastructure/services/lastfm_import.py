@@ -6,6 +6,7 @@ from typing import Any
 
 from src.application.use_cases.match_tracks import match_tracks
 from src.application.utilities.results import ImportResultData, ResultFactory
+from src.config import get_logger
 from src.domain.entities import (
     Artist,
     OperationResult,
@@ -15,7 +16,6 @@ from src.domain.entities import (
     TrackList,
     TrackPlay,
 )
-from src.infrastructure.config import get_logger
 from src.infrastructure.connectors.lastfm import LastFMConnector
 from src.infrastructure.persistence.repositories.track import TrackRepositories
 from src.infrastructure.services.base_import import BaseImportService

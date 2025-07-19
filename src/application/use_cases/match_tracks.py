@@ -33,6 +33,7 @@ class MatchTracksUseCase:
         track_list: TrackList,
         connector: str,
         connector_instance: Any,
+        max_age_hours: float | None = None,
         **additional_options: Any,
     ) -> MatchResultsById:
         """Execute track matching with business validation.
@@ -41,6 +42,7 @@ class MatchTracksUseCase:
             track_list: Tracks to match against external service.
             connector: Target service name ("lastfm", "spotify", "musicbrainz").
             connector_instance: Service connector implementation.
+            max_age_hours: Maximum age of cached data in hours. If None, uses cached data regardless of age.
             **additional_options: Options forwarded to infrastructure.
 
         Returns:
@@ -80,6 +82,7 @@ class MatchTracksUseCase:
             track_list=track_list,
             connector=connector,
             connector_instance=connector_instance,
+            max_age_hours=max_age_hours,
             **additional_options,
         )
 
@@ -90,6 +93,7 @@ async def match_tracks(
     connector: str,
     connector_instance: Any,
     track_repos: TrackRepositories,
+    max_age_hours: float | None = None,
     **additional_options: Any,
 ) -> MatchResultsById:
     """Match tracks to external service (legacy API compatibility).
@@ -99,6 +103,7 @@ async def match_tracks(
         connector: Target service name.
         connector_instance: Service connector implementation.
         track_repos: Repository container.
+        max_age_hours: Maximum age of cached data in hours. If None, uses cached data regardless of age.
         **additional_options: Options forwarded to providers.
 
     Returns:
@@ -109,5 +114,6 @@ async def match_tracks(
         track_list=track_list,
         connector=connector,
         connector_instance=connector_instance,
+        max_age_hours=max_age_hours,
         **additional_options,
     )

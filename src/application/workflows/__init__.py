@@ -1,5 +1,7 @@
 """Workflow orchestration system with node-based transformation pipeline."""
 
+from contextlib import suppress
+
 # Force eager registration of all nodes to ensure registry completeness
 # This statement is key for registry population
 from . import node_catalog  # pyright: ignore[reportUnusedImport]
@@ -51,12 +53,10 @@ def validate_registry():
 
 
 # Validate at module load time to catch issues early
-try:
-    success, message = validate_registry()
-except Exception as e:
+with suppress(Exception):
     # Would need to inject logger via dependency injection for Clean Architecture
-    # For now, use print to avoid circular dependency
-    print(f"Node registry validation failed: {e}")
+    # For now, silently ignore registry validation failures to avoid circular dependency
+    success, message = validate_registry()
 
 # Export clean public API
 __all__ = [

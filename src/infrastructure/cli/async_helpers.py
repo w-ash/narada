@@ -32,11 +32,23 @@ def async_db_operation(
         display_title: Title for result display
         next_step_message: Optional next step hint
     """
+    # Import here to avoid circular imports
+    from typing import cast
+
+    from src.domain.repositories.interfaces import RepositoryProvider
+    from src.infrastructure.persistence.database import session_factory
+    from src.infrastructure.persistence.repositories.track import TrackRepositories
+    
+    def repository_factory(session) -> RepositoryProvider:
+        return cast("RepositoryProvider", TrackRepositories(session))
+    
     return with_db_progress(
         description=progress_text,
         success_text=success_text,
         display_title=display_title,
         next_step_message=next_step_message,
+        session_factory=session_factory,
+        repository_factory=repository_factory,
     )
 
 

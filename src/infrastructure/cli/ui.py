@@ -15,8 +15,8 @@ from rich.table import Table
 from rich.text import Text
 import typer
 
+from src.config import get_logger
 from src.domain.entities import OperationResult
-from src.infrastructure.config import get_logger
 
 # Initialize console and logger
 console = Console()
@@ -254,6 +254,9 @@ def display_operation_result(
 
             for metric_name in metric_columns:
                 value = result.get_metric(track.id, metric_name, "—")
+                logger.debug(
+                    f"Display: track {track.id} (type: {type(track.id)}) {metric_name}={value}"
+                )
                 if metric_name == "sync_status" and isinstance(value, str):
                     # Add emoji for sync status
                     emoji = {

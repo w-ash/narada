@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Literal
 
 from src.application.utilities.progress_integration import with_db_progress
+from src.config import get_logger
 from src.domain.entities import OperationResult
-from src.infrastructure.config import get_logger
 from src.infrastructure.persistence.repositories.track import TrackRepositories
 from src.infrastructure.services.lastfm_import import LastfmImportService
 from src.infrastructure.services.spotify_import import SpotifyImportService

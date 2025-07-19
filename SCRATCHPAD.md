@@ -1,397 +1,528 @@
-# Clean Architecture Reorganization Initiative
+# Narada v0.2.4: Playlist Workflow Expansion - Architectural Implementation Plan
 
-**Date**: 2025-07-15  
-**Overall Objective**: Transform legacy codebase into a modern, maintainable system following Clean Architecture principles and 2025 Python best practices
+**Version**: 0.2.4  
+**Initiative**: Playlist Workflow Expansion  
+**Goal**: Enable advanced playlist workflows with play history analysis while completing Clean Architecture foundation  
+**Status**: Planning Phase  
 
-## Progress Dashboard
-**Overall**: 100% Complete (7 of 7 phases) | **Status**: Clean Architecture Migration COMPLETE
+---
 
-| Phase                      | Status         | Completion | Priority | ETA       |
-| -------------------------- | -------------- | ---------- | -------- | --------- |
-| 1: Repository Interfaces   | ✅ Complete     | 100%       | -        | Done      |
-| 2: Service Layer           | ✅ Complete     | 100%       | -        | Done      |
-| 3: Architecture Compliance | ✅ Complete     | 100%       | -        | Done      |
-| 4: Parameter Forwarding    | ✅ Complete     | 100%       | -        | Done      |
-| 5: Matcher System          | ✅ Complete     | 100%       | -        | Done      |
-| 6: Workflow Nodes          | ✅ Complete     | 100%       | -        | Done      |
-| 7: Playlist Updates        | ✅ Complete     | 100%       | -        | Done      |
+## 🎯 Executive Summary
 
-## Strategic Vision & Objectives 🎯
+v0.2.4 represents a critical architectural maturation phase that must **complete the Clean Architecture foundation** before adding new functionality. This dual focus ensures that new play history and workflow capabilities are built on solid architectural principles while addressing existing technical debt.
 
-**Primary Goal**: Create a world-class Python codebase that exemplifies 2025 industry standards for maintainability, testability, and extensibility.
+**Core Principle**: *Foundation First, Features Second* - No new functionality until architectural integrity is complete.
 
-**Core Objectives**:
-1. **Architectural Excellence**: Implement proper Clean Architecture with strict layer boundaries
-2. **Zero Technical Debt**: Eliminate all code duplication and architectural violations  
-3. **Modern Python Standards**: Leverage Python 3.13+ features and current best practices
-4. **Developer Productivity**: Enable rapid feature development through clear separation of concerns
-5. **Future-Ready Foundation**: Build a system ready for modern frameworks (FastAPI, async patterns, observability)
+---
 
-## Background & Problem Statement
+## 🏗️ Current Architecture Assessment
 
-### The Challenge
-Our codebase suffered from classic "big ball of mud" anti-patterns where business logic, infrastructure concerns, and application workflows were deeply entangled. This created:
+### ✅ Strengths (Maintain & Leverage)
+- **Clean Architecture Structure**: Proper Domain/Application/Infrastructure separation
+- **Modern Python 3.13 Patterns**: Future-ready type system and language features  
+- **Comprehensive Testing**: 509 passing tests with good coverage
+- **Workflow Foundation**: Solid node-based transformation system
+- **Repository Pattern**: Established but incomplete dependency injection
+- **DRY Implementation**: Zero redundancy across major components
 
-- **Maintenance Nightmare**: Simple changes required touching multiple unrelated files
-- **Testing Difficulty**: Business logic trapped inside infrastructure made unit testing nearly impossible
-- **Code Duplication**: Same functionality implemented multiple times across different layers
-- **Tight Coupling**: High-level business rules dependent on low-level implementation details
-- **Development Friction**: Adding new features required understanding the entire system
+### ⚠️ Critical Gaps (Must Address)
+- **Incomplete Dependency Inversion**: Use cases create concrete instances vs receiving interfaces
+- **Type Safety Violations**: `Any` types in domain interfaces breaking type contracts
+- **Data Flow Confusion**: Matching and enrichment conflated in single service
+- **Architectural "Hacks"**: LazyRepositoryProvider circumvents proper DI patterns
+- **Incomplete Implementations**: UpdatePlaylistUseCase contains placeholder TODOs
 
-### The Solution: Clean Architecture + Modern Python
-By methodically reorganizing our code into distinct Domain, Application, and Infrastructure layers with strict dependency rules, we're creating a highly modular system where:
+---
 
-- **Each component has a single, clear responsibility**
-- **Business logic is isolated and easily testable**
-- **External dependencies can be swapped without affecting core logic**
-- **New features can be built with confidence and speed**
-- **The codebase follows 2025 Python industry standards**
+## 🔧 Technical Debt Resolution Strategy
 
-This isn't just refactoring—it's **strategic technical transformation** that positions us for rapid, sustainable growth.
+### Phase 1: Repository Pattern Completion (Foundation)
+**Priority**: CRITICAL - Prerequisite for all other work
+**Target**: True dependency inversion in use cases
 
-## Architecture Transformation ✅
-
-**From**: Tangled Legacy System
-```
-CLI ↔ Infrastructure ↔ Mixed Logic ↔ Database
-     (tightly coupled, hard to test)
+```python
+# Current (PROBLEM):
+class SavePlaylistUseCase:
+    async def execute(self, ...):
+        async with get_session() as session:  # Direct coupling
+            repo = TrackRepository(session)   # Creates concrete instance
+            
+# Target (SOLUTION):  
+class SavePlaylistUseCase:
+    def __init__(self, track_repo: TrackRepositoryProtocol, ...):  # Dependency injection
+        self.track_repo = track_repo
 ```
 
-**To**: Clean Architecture (2025 Standards)
+**Benefits**:
+- 100% testable business logic (no database mocking)
+- Technology-agnostic use cases
+- Proper Clean Architecture compliance
+- Foundation for rapid feature development
+
+### Phase 2: Service Layer Clarification
+**Priority**: HIGH - Enables efficient data flow
+**Target**: Separate identity resolution from metadata enrichment
+
+```python
+# Current (PROBLEM):
+class MatcherService:
+    async def match_tracks(self, tracks):
+        # Conflates identity resolution + metadata enrichment
+        
+# Target (SOLUTION):
+class TrackIdentityResolver:        # NEW - Handles unknown tracks
+    async def resolve_identity(self, unknown_tracks) -> list[TrackMatch]
+    
+class TrackMetadataEnricher:        # NEW - Refreshes known tracks  
+    async def enrich_metadata(self, known_tracks) -> list[Track]
 ```
-CLI Commands → Application Use Cases → Domain Entities → Infrastructure Implementations
-          (loose coupling, highly testable)
+
+**Benefits**:
+- Clear separation of expensive vs cheap operations
+- No re-matching of known tracks
+- Explicit data flow for different track states
+- Simplified MetadataFreshnessController logic
+
+### Phase 3: Playlist Command Clarification  
+**Priority**: MEDIUM - Enables clear responsibility boundaries
+**Target**: Single responsibility for playlist operations
+
+```python
+# Current (PROBLEM):
+class SavePlaylistUseCase:
+    # Handles both creation AND updates
+    
+# Target (SOLUTION):
+class PersistPlaylistUseCase:       # RENAMED - Database persistence only
+    async def persist(self, playlist: Playlist) -> Playlist
+    
+class UpdatePlaylistUseCase:        # FOCUSED - External service updates only  
+    async def update_external(self, diff: PlaylistDiff) -> UpdateResult
 ```
 
-**Layer Responsibilities**:
-- **Domain**: Pure business logic, entities, repository interfaces (no external dependencies)
-- **Application**: Use cases, business workflow orchestration, dependency injection
-- **Infrastructure**: Repository implementations, external APIs, CLI commands, framework adapters
+---
 
-**Modern Python Integration Points**:
-- Type safety with Python 3.13 enhanced typing system
-- Async-first patterns for I/O operations  
-- Pydantic V2 integration for data validation
-- Ready for FastAPI, observability tools, and modern deployment patterns
+## 🎨 Architectural Vision for Play History Integration
 
-## COMPLETED PHASES ✅
+### Design Principle: *Composition over Extension*
+New play history capabilities should **compose existing patterns** rather than creating new architectural concepts.
 
-### Phase 0: Project Structure Migration ✅
-**Objective**: Migrate from legacy `/narada` to modern `/src` structure
+### Transformation Node Pattern Extension
+```python
+# Leverage existing TRANSFORM_REGISTRY pattern:
+@register_transform("filter.play_count")
+class PlayCountFilter(FilterTransform):
+    """Filter tracks by play count thresholds."""
+    
+@register_transform("sort.last_played") 
+class LastPlayedSorter(SortTransform):
+    """Sort tracks by recency of last play."""
+    
+@register_transform("discover.seasonal")
+class SeasonalDiscovery(FilterTransform):
+    """Find tracks played heavily in specific time periods."""
+```
 
-**Problem Identified**:
-- Legacy project structure with inconsistent import paths
-- Mixed module organization preventing clean architectural boundaries
-- Import statements using deprecated `narada.*` patterns
+**Benefits**:
+- Zero new architectural concepts
+- Leverages existing workflow infrastructure  
+- Maintains DRY principles across transformations
+- Easy to test and compose
 
-**Actions Taken**:
-- ✅ **MIGRATED** all code from `/narada` directory to `/src` structure
-- ✅ **UPDATED** all imports from `narada.*` to `src.*` patterns
-- ✅ **VERIFIED** 314/332 tests passing after migration
-- ✅ **REMOVED** legacy `/narada` directory after comprehensive verification
-- ✅ **ESTABLISHED** foundation for Clean Architecture layer organization
+### Play History Data Flow
+```python
+# Clean data flow for play analysis:
+PlayHistorySource -> PlayMetricsCalculator -> TransformationNodes -> PlaylistDestination
+```
 
-**Results Achieved**:
-- **Modern Python Project Structure**: Following 2025 industry standards
-- **Import Path Consistency**: All modules using standard `src.*` imports  
-- **Clean Foundation**: Ready for proper Domain/Application/Infrastructure separation
-- **Zero Breaking Changes**: Core functionality maintained through migration
+**Key Insight**: Play history is just another data source that feeds into the existing transformation pipeline.
 
+---
 
-### Phase 1: Repository Interface Consolidation ✅
-**Objective**: Single source of truth for repository contracts
+## 🚀 Implementation Strategy
 
-**Problem Identified**:
-- 5 duplicate `RepositoryProvider` protocols scattered across application files
-- Repository interfaces missing from domain layer (Clean Architecture violation)
+### Pre-Development Checklist
+**CRITICAL**: These steps must be completed before any new feature work:
 
-**Actions Taken**:
-- ✅ **CREATED** unified repository interfaces in `src/domain/repositories/interfaces.py`
-- ✅ **MOVED** `RepositoryProvider` protocol from workflows to domain layer
-- ✅ **ELIMINATED** duplicate protocols across application files
-- ✅ **UPDATED** all imports to use domain layer interfaces
+1. **✅ Format & Lint**: `ruff format . && ruff check . --fix`
+2. **✅ Type Check**: `poetry run pyright src/` (zero errors required)
+3. **✅ Test Suite**: `poetry run pytest` (all tests passing)
+4. **✅ Architecture Review**: Confirm Clean Architecture compliance
 
-**Verification**:
-- ✅ Domain layer now owns repository contracts
-- ✅ All application code imports from single source
+### Development Workflow
+1. **Technical Debt First**: Complete architectural foundation
+2. **Pattern Establishment**: Create clear patterns for new functionality
+3. **Incremental Implementation**: Add capabilities following established patterns
+4. **Continuous Validation**: Maintain architectural integrity at each step
 
-### Phase 2: Service Layer Reorganization (Ruthlessly DRY) ✅
-**Objective**: Move business logic to correct architectural layer
+---
 
-**Problem Identified**:
-- Business logic in infrastructure layer (`import_orchestrator.py`, `like_service.py`)
-- Unused duplicate services in application layer
-- CLI bypassing application layer
+## 📐 DRY Principles Application
 
-**Actions Taken**:
-- ✅ **MOVED** `src/infrastructure/services/import_orchestrator.py` → `src/application/use_cases/import_tracks.py`
-- ✅ **MOVED** `src/infrastructure/services/like_service.py` → `src/application/use_cases/sync_likes.py`
-- ✅ **DELETED** unused `src/application/services/` directory entirely
-- ✅ **DELETED** redundant services: `like_sync.py`, `like_operations.py`
-- ✅ **UPDATED** CLI imports to use application layer
+### Unified Progress Reporting Pattern
+```python
+# Current state: Inconsistent progress reporting across operations
+# Target: Single interface for all long-running operations
 
-**Verification**:
-- ✅ Business logic now in application layer
-- ✅ One implementation per business operation
-- ✅ CLI depends on application, not infrastructure
+class ProgressReporter(Protocol):
+    async def report(self, current: int, total: int, message: str) -> None
+        
+# Apply to all operations:
+- Track matching progress
+- Playlist sync progress  
+- Play history import progress
+- Workflow execution progress
+```
 
-### Phase 3: Architecture Compliance & Quality ✅
-**Objective**: Ensure Clean Architecture principles and code quality
+### Transformation Pattern Consistency
+```python
+# Maintain consistent transformation signatures:
+async def transform_fn(
+    context: WorkflowContext,
+    config: TransformConfig
+) -> TrackList
 
-**Actions Taken**:
-- ✅ **VERIFIED** proper dependency direction (Infrastructure → Application → Domain)
-- ✅ **CONFIRMED** domain layer has no external dependencies
-- ✅ **UPDATED** Python 3.13 best practices (match statements, modern type syntax)
-- ✅ **CLEANED UP** orphaned tests for deleted services
-- ✅ **MAINTAINED** full test coverage: 305 tests pass (270 unit + 35 integration)
+# Never deviate from this pattern - ensures composability
+```
 
-**Verification**:
-- ✅ All layers follow Clean Architecture principles
-- ✅ Zero functionality lost
-- ✅ Modern Python patterns throughout
+### Error Handling Standardization
+```python
+# Unified error handling across all operations:
+@resilient_operation("operation_name")
+async def operation(...) -> OperationResult
+    # Consistent error handling, logging, and retry logic
+```
 
-## Results of Completed Phases ✅
+---
 
-### Strategic Success Metrics Achieved
-1. **Zero functionality lost** - All CLI commands work identically (backward compatibility maintained)
-2. **Clean dependencies** - Proper inward-pointing dependency flow established
-3. **Ruthlessly DRY** - One implementation per business operation (no duplication)
-4. **Comprehensive testing** - 305 tests pass (270 unit + 35 integration) with maintained coverage
-5. **Modern code quality** - Python 3.13 patterns, type safety, maintainable structure
+## 📋 Detailed Implementation Plan
 
-### Quantified Improvements
-- **Deleted 7 files** (4 unused services + 3 redundant tests) - reduced complexity
-- **Eliminated 5 duplicate protocols** - single source of truth established
-- **Achieved Clean Architecture compliance** - proper layer boundaries enforced
-- **Modernized codebase** - ready for 2025 Python ecosystem integration
+### Sprint 1: Architectural Foundation (2-3 days)
+**Goal**: Complete Clean Architecture implementation
 
-### Phase 5: Matcher System Modernization ✅
-**Objective**: Transform monolithic matcher into modular provider pattern
+#### 1.1 Repository Interface Type Safety
+- [ ] Replace `Any` types with proper domain entity forward references
+- [ ] Update all repository protocols with correct typing
+- [ ] Verify pyright passes with strict type checking
 
-**Problem Identified**:
-- 961-line `matcher.py` violating Single Responsibility Principle
-- Mixed domain logic, service-specific API calls, and workflow orchestration
-- Difficult to maintain, test, and extend
+#### 1.2 Use Case Dependency Inversion  
+- [ ] Define repository protocols in domain layer
+- [ ] Refactor SavePlaylistUseCase to accept interfaces
+- [ ] Refactor UpdatePlaylistUseCase to accept interfaces
+- [ ] Update workflow context to provide proper DI
+- [ ] Remove LazyRepositoryProvider "hack"
 
-**Actions Taken**:
-- ✅ **CREATED** domain layer with pure matching algorithms and confidence scoring
-- ✅ **IMPLEMENTED** pluggable provider pattern for LastFM, Spotify, MusicBrainz services
-- ✅ **BUILT** lean orchestrator service coordinating providers and database operations
-- ✅ **ESTABLISHED** application use case with business validation and error handling
-- ✅ **FIXED** async/await compliance in Prefect 3.0 progress artifact integration
-- ✅ **ACHIEVED** comprehensive test coverage (19 tests covering domain and integration)
-- ✅ **REMOVED** legacy 961-line monolithic matcher.py
+#### 1.3 Service Layer Clarification
+- [ ] Create TrackIdentityResolver for unknown track matching
+- [ ] Create TrackMetadataEnricher for known track refreshing
+- [ ] Refactor existing MatcherService consumers
+- [ ] Update MetadataFreshnessController logic
 
-**Verification**:
-- ✅ Zero functionality lost - all CLI commands work identically
-- ✅ Provider pattern enables easy extension to new music services
-- ✅ Clean Architecture compliance with proper layer boundaries
-- ✅ Code reduction: 961 lines → ~300 lines across focused files
+### Sprint 2: UpdatePlaylistUseCase Completion (2-3 days)
+**Goal**: Production-ready playlist update functionality
 
-## UPCOMING PHASES 📝
+#### 2.1 Sophisticated Reordering Logic (TODO #123)
+- [ ] Implement optimal track reordering algorithm
+- [ ] Add position optimization for minimal API calls
+- [ ] Include track addition timestamp preservation
 
-### Phase 6: Refactor Workflow Source & Destination Nodes ✅ 
-**Status**: ✅ **COMPLETE** (100% Complete)
-**Objective**: Extract complex playlist persistence logic into reusable Application Use Case
+#### 2.2 ISRC/Metadata Matching (TODO #124)  
+- [ ] Extend matching beyond Spotify ID
+- [ ] Add ISRC-based track identification
+- [ ] Implement metadata-based fallback matching
 
-**Problem Identified**:
-- `SourceNode` and `DestinationNode` are too "smart" with complex persistence logic
-- Multi-step playlist saving logic violates node responsibility  
-- Code duplication in workflows like `discovery_mix.json`
-- Business process logic in infrastructure layer
--   **Why**: Currently, workflow nodes directly handle the complex steps of saving playlists, leading to code duplication and making it harder to reason about the overall process. This violates the Single Responsibility Principle.
+#### 2.3 Actual Spotify API Operations (TODO #125)
+- [ ] Replace playlist creation with track add/remove/reorder
+- [ ] Implement proper Spotify API differential updates
+- [ ] Add comprehensive error handling and retries
 
-**Implementation Progress**:
--   ✅ **CREATED** `SavePlaylistUseCase` with 2025 patterns (Command, Strategy, Event-driven)
--   ✅ **IMPLEMENTED** `SavePlaylistCommand` with rich context (tracklist, enrichment config, persistence options)
--   ✅ **DESIGNED** `TrackEnrichmentStrategy` protocol for pluggable providers
--   ✅ **BUILT** async transaction management using existing repository patterns
--   ✅ **ADDED** support for all operation types: create_internal, create_spotify, update_spotify
--   ✅ **COMPLETED** comprehensive unit tests for use case (11 tests, 100% coverage)
--   ✅ **SIMPLIFIED** source nodes to delegate track persistence to SavePlaylistUseCase
--   ✅ **REFACTORED** destination nodes to single use case calls
--   ✅ **FIXED** integration tests for end-to-end verification
--   ✅ **MAINTAINED** backward compatibility with existing APIs
+### Sprint 3: Play History Foundation (2-3 days)
+**Goal**: Establish patterns for play history functionality
 
-**Architecture Achievements**:
-- **Command Pattern**: Rich `SavePlaylistCommand` encapsulates all operation context
-- **Strategy Pattern**: Pluggable `TrackEnrichmentStrategy` for provider abstraction  
-- **Type Safety**: Full Python 3.13 type coverage with runtime validation
-- **Async-First**: Proper transaction management with existing repository patterns
-- **Clean Architecture**: Business logic in application layer, infrastructure delegation
+#### 3.1 Play History Transformation Nodes (BACKLOG: Play History Filter and Sort)
+- [ ] Create PlayCountFilter following existing filter patterns
+  - [ ] Enable play count filtering (e.g., tracks played >10 times, <5 times)
+  - [ ] Support time-period analysis (e.g., tracks played >5 times in July 2024)
+- [ ] Create LastPlayedSorter following existing sort patterns  
+  - [ ] Add play recency sorting (most/least recently played)
+  - [ ] Include relative time periods (last 30 days, past week, this month)
+- [ ] Create SeasonalDiscovery for time-period analysis
+  - [ ] Build on existing metric-based filtering patterns
+- [ ] Register all new transforms in TRANSFORM_REGISTRY
+- [ ] Leverage existing filter/sorter architecture patterns
+
+#### 3.2 Unified Progress Reporting
+- [ ] Create ProgressReporter protocol
+- [ ] Implement console progress reporter with Rich
+- [ ] Update all long-running operations to use unified progress
+- [ ] Add ETA calculations and operation-specific details
+
+### Sprint 4: Advanced Playlist Capabilities (2-3 days)
+**Goal**: Enhanced playlist workflow features
+
+#### 4.1 Advanced Transformer Nodes (BACKLOG: Advanced Transformer Workflow nodes)
+- [ ] Implement combining operations with different strategies
+- [ ] Add time-based transformers (seasonal, time of day)
+- [ ] Include randomization with optional weighting for sorting a playlist
+- [ ] Include selection of just the first X or last X from a tracklist
+
+#### 4.2 Enhanced Playlist Naming (BACKLOG: Enhanced Playlist Naming)
+- [ ] Support template parameters in playlist names
+- [ ] Allow using source playlist names in new playlist names/descriptions
+- [ ] Add the ability to append date/time to names and descriptions
+- [ ] Implement metadata insertion into descriptions
+- [ ] Add validation to prevent invalid characters
+
+---
+
+## 🧪 Testing Strategy & Pyramid Implementation
+
+### Test Pyramid Architecture (Clean Architecture Alignment)
+```
+           /\     E2E CLI Tests (5-10%)
+          /  \    tests/cli/ - End-to-end user scenarios
+         /____\   
+        /      \  Integration Tests (15-20%)
+       /        \ tests/application/ - Use case integration
+      /          \tests/infrastructure/ - External service tests
+     /____________\
+    Unit Tests (70-80%)
+    tests/domain/ - Fast business logic tests
+```
+
+### Layer-Specific Testing Strategy
+
+#### Domain Layer Tests (Unit - Fast & Isolated)
+```bash
+poetry run pytest tests/domain/  # Target: <100ms total
+```
+**Focus Areas**:
+- [ ] Business logic validation (Track, Playlist entities)
+- [ ] Transform functions (filters, sorters, combiners) 
+- [ ] Matching algorithms and confidence calculations
+- [ ] Domain service orchestration logic
+- [ ] Error handling and edge cases
+
+**Testing Principles**:
+- **Fast**: <1ms per test, no I/O operations
+- **Isolated**: Pure functions, no database/network
+- **Deterministic**: Same result every time
+- **Focused**: One behavior per test
+
+#### Application Layer Tests (Integration - Use Case Orchestration)
+```bash
+poetry run pytest tests/application/  # Target: <5s total
+```
+**Focus Areas**:
+- [ ] Use case orchestration (SavePlaylistUseCase, UpdatePlaylistUseCase)
+- [ ] Repository interface contracts
+- [ ] Service coordination and data flow
+- [ ] Dependency injection patterns
+- [ ] Cross-component integration
+
+**Testing Approach**:
+- **Real Dependencies**: Use actual repository implementations
+- **Test Database**: In-memory SQLite for speed
+- **Interface Validation**: Ensure protocols are correctly implemented
+- **Data Flow**: Verify end-to-end data transformations
+
+#### Infrastructure Layer Tests (Integration - External Boundaries)
+```bash
+poetry run pytest tests/infrastructure/  # Target: <10s total
+```
+**Focus Areas**:
+- [ ] Database repository operations (CRUD, queries)
+- [ ] External API integrations (Spotify, Last.fm, MusicBrainz)
+- [ ] Connector implementations and rate limiting
+- [ ] File I/O operations and data parsing
+- [ ] Configuration and environment handling
 
 **Testing Strategy**:
--   **Use Case**: Comprehensive unit test with mocked repository methods, covering track enrichment and persistence logic.
--   **Nodes**: Trivial tests mocking `SavePlaylistUseCase`, verifying correct data passing.
+- **Contract Testing**: Verify external API assumptions
+- **Database Testing**: Real SQLite operations with test data
+- **Error Simulation**: Network failures, rate limits, invalid responses
+- **Performance Validation**: Ensure acceptable response times
 
-**Results Achieved**:
-1. **✅ Code Simplification**: Workflow nodes transformed from complex persistence handlers to simple delegators
-2. **✅ Architecture Compliance**: Business logic moved to correct application layer
-3. **✅ 2025 Patterns**: Modern Command, Strategy, and async-first patterns implemented
-4. **✅ Zero Functionality Loss**: All existing APIs maintain backward compatibility
-5. **✅ Comprehensive Testing**: 11 unit tests + integration tests ensure quality
-6. **✅ Maintainability**: Single source of truth for playlist persistence logic
+#### CLI Layer Tests (E2E - User Experience)
+```bash
+poetry run pytest tests/cli/  # Target: <30s total
+```
+**Focus Areas**:
+- [ ] Command-line interface behavior
+- [ ] User workflow scenarios
+- [ ] Progress reporting and error messages
+- [ ] Configuration management
+- [ ] Output formatting and validation
 
-**Impact**: Successfully modernized workflow system while maintaining full backward compatibility and improving code organization following Clean Architecture principles.
+### TDD Implementation Strategy for v0.2.4
 
-### Phase 7: Sophisticated Playlist Update & Differential Synchronization ✅
-**Status**: ✅ **COMPLETE** (100% Complete)
-**Objective**: Create DRY UpdatePlaylistUseCase for differential playlist updates serving both workflow destinations and future manual editing
+#### Sprint 1: Architectural Foundation TDD
+```python
+# 1. Write failing domain test
+def test_track_repository_protocol_type_safety():
+    # Test proper typing without Any usage
+    assert False  # RED
 
-**Problem Identified**:
-- No existing mechanism for updating playlists (only creation via SavePlaylistUseCase)  
-- Need differential operations (add/remove/reorder) instead of naive replacement
-- Spotify requires sophisticated API usage to preserve track addition timestamps
-- Future need for manual playlist editing with external service synchronization
-- Must follow DRY principle: single implementation for all update scenarios
+# 2. Implement minimal code
+class TrackRepositoryProtocol(Protocol):
+    async def find_by_id(self, track_id: int) -> Track | None: ...
+    # GREEN
 
-**Planned Architecture**:
+# 3. Refactor with full implementation
+# REFACTOR - Complete type safety across all protocols
+```
 
-**Core Components**:
-- **UpdatePlaylistUseCase**: Business logic for differential playlist updates
-- **UpdatePlaylistCommand**: Rich command with playlist ID, tracks, sync options
-- **PlaylistDiffCalculator**: Algorithm for minimal add/remove/reorder operations
-- **New destination node**: `handle_update_playlist_destination` for workflows
+#### Sprint 2: UpdatePlaylistUseCase TDD
+```python
+# Test sophisticated reordering logic (TODO #123)
+def test_playlist_reordering_minimizes_api_calls():
+    # Test optimal reordering algorithm
+    assert calculate_reorder_operations(current, target) == expected_minimal_ops
 
-**Differential Operations Engine**:
-- **Smart Track Matching**: Identify tracks across services (Spotify ID, ISRC, metadata)
-- **Operation Optimization**: Calculate minimal operations respecting API constraints
-- **Spotify-Specific Logic**: Use snapshot_id, batch operations, proper sequencing
-- **Extensible Design**: Foundation for future Apple Music, etc.
+# Test ISRC matching (TODO #124)
+def test_isrc_matching_fallback():
+    # Test ISRC-based track identification
+    assert match_by_isrc(track_without_spotify_id) == expected_match
 
-**Integration Strategy**:
-- **Workflow Integration**: New destination node using established patterns
-- **Reusability**: Same use case serves future manual editing needs
-- **Clean Architecture**: Follows SavePlaylistUseCase patterns and principles
-- **DRY Implementation**: Single source of truth for all playlist updates
+# Test actual Spotify operations (TODO #125)
+def test_spotify_differential_update():
+    # Test real Spotify API operations vs playlist creation
+    assert update_playlist_tracks(diff) == UpdateResult.SUCCESS
+```
 
-**Implementation Progress**:
+#### Sprint 3: Play History TDD
+```python
+# Domain tests for new transformations
+def test_play_count_filter_applies_threshold():
+    tracks_with_plays = create_test_tracks_with_play_counts([5, 15, 2])
+    filtered = PlayCountFilter(min_plays=10).transform(tracks_with_plays)
+    assert len(filtered.tracks) == 1  # Only track with 15 plays
 
-**Phase 1: Core Use Case ✅ COMPLETE**
--   ✅ **CREATED** UpdatePlaylistCommand with rich validation and business context
--   ✅ **IMPLEMENTED** UpdatePlaylistUseCase with sophisticated differential logic
--   ✅ **BUILT** PlaylistDiffCalculator with Spotify API-optimized algorithms
--   ✅ **ADDED** comprehensive unit tests (26 tests) covering all update scenarios
+# Application tests for integration
+def test_play_history_workflow_integration():
+    workflow = build_play_history_workflow()
+    result = await execute_workflow(workflow, test_context)
+    assert result.success and len(result.tracks) > 0
+```
 
-**Phase 2: Workflow Integration ✅ COMPLETE**
--   ✅ **CREATED** `handle_update_playlist_destination` workflow node
--   ✅ **INTEGRATED** with existing workflow system and DESTINATION_HANDLERS
--   ✅ **MAINTAINED** backward compatibility with existing destination patterns
--   ✅ **VERIFIED** workflow integration with type checking and testing
+### Testing Quality Gates
 
-**Phase 3: Spotify Implementation ✅ LEVERAGED EXISTING**
--   ✅ **LEVERAGED** existing SpotifyConnector with spotipy integration
--   ✅ **UTILIZED** existing `@resilient_operation` and `@backoff` patterns
--   ✅ **CONFIRMED** rate limiting and exponential backoff already implemented
--   ✅ **READY** for UpdatePlaylistUseCase integration with proven infrastructure
+#### Pre-Development Validation
+- **✅ All Tests Pass**: `poetry run pytest` (0 failures, 0 skipped)
+- **✅ Type Safety**: `poetry run pyright src/` (0 errors)
+- **✅ Code Quality**: `ruff check . --fix` (0 violations)
 
-**Phase 4: Future-Proofing & Documentation**
--   🚀 **FOUNDATION** ready for Apple Music and other streaming services
--   🚀 **ARCHITECTURE** established for advanced playlist operations
--   🚀 **PATTERNS** documented through comprehensive implementation
+#### Development Workflow (TDD Cycle)
+1. **RED**: Write failing test for new functionality
+2. **GREEN**: Write minimal code to pass the test
+3. **REFACTOR**: Improve code while keeping tests green
+4. **VALIDATE**: Run full test suite + type checking
 
-**Results Achieved**:
-1. **✅ Sophisticated Differential Engine**: Advanced algorithm calculating minimal operations for API efficiency
-2. **✅ Command Pattern Implementation**: Rich UpdatePlaylistCommand with comprehensive business validation
-3. **✅ Strategy Pattern Ready**: Extensible design for multiple streaming service providers
-4. **✅ Workflow Integration**: Complete destination node ready for production workflows
-5. **✅ Comprehensive Testing**: 26 unit tests ensuring reliability and correctness
-6. **✅ Clean Architecture Compliance**: Proper domain/application/infrastructure separation
-7. **✅ Performance Optimized**: API call estimation and batching for efficient operations
-8. **✅ Future Extensible**: Foundation for manual editing and advanced playlist features
+#### Post-Sprint Validation
+- **✅ Test Coverage**: >90% on domain layer, >80% on application layer
+- **✅ Performance**: Domain tests <100ms, application tests <5s
+- **✅ Architecture**: Tests validate Clean Architecture principles
+- **✅ Integration**: All layers tested at appropriate boundaries
 
-**Impact**: Successfully created a production-ready playlist update system that exceeds initial objectives, providing sophisticated differential operations while maintaining Clean Architecture principles and leveraging existing proven infrastructure.
+### Testing Infrastructure Updates for v0.2.4
 
-## CLEAN ARCHITECTURE MIGRATION - FINAL COMPLETION STATUS 🎉
+#### Enhanced Test Fixtures
+```python
+# Domain layer test builders
+@pytest.fixture
+def sample_track_with_plays():
+    return create_track_with_play_history(play_count=10, last_played=yesterday())
 
-**Date Completed**: 2025-07-16  
-**Final Status**: ✅ **100% COMPLETE** - All 7 phases successfully implemented
+# Application layer test context
+@pytest.fixture
+async def use_case_context():
+    return create_test_context_with_real_repos()
 
-### 🏆 Strategic Transformation Achieved
+# Infrastructure layer test database
+@pytest.fixture
+async def test_database():
+    return create_in_memory_test_database()
+```
 
-**Original Objective**: Transform legacy codebase into a modern, maintainable system following Clean Architecture principles and 2025 Python best practices
+#### Parallel Test Execution
+```bash
+# Fast feedback during development
+poetry run pytest tests/domain/ -x      # Stop on first failure
+poetry run pytest tests/application/ -v # Verbose output for integration
+poetry run pytest --tb=short           # Concise error output
+```
 
-**✅ MISSION ACCOMPLISHED**: We have successfully delivered a world-class Python codebase that exemplifies 2025 industry standards for maintainability, testability, and extensibility.
+#### Continuous Validation
+```bash
+# Pre-commit validation script
+poetry run pytest tests/domain/ tests/application/ && \
+poetry run pyright src/ && \
+ruff check . --fix
+```
 
-### 📊 Final Quantified Results
+---
 
-**Architecture Transformation**:
-- **✅ 7 completed phases** with zero functionality lost
-- **✅ 100% Clean Architecture compliance** with proper layer boundaries
-- **✅ Modern Python 3.13 patterns** throughout codebase
-- **✅ Comprehensive test coverage** maintained and expanded
+## 🎯 Success Metrics
 
-**Technical Debt Eliminated**:
-- **✅ Zero code duplication** - ruthlessly DRY implementation
-- **✅ Single responsibility principle** enforced across all components  
-- **✅ Proper dependency inversion** - infrastructure depends on domain
-- **✅ Testable business logic** isolated from external concerns
+### Technical Quality Gates
+- **✅ Zero Type Errors**: `poetry run pyright src/` passes completely
+- **✅ Zero Test Failures**: All 509+ tests pass consistently  
+- **✅ Zero Technical Debt**: All TODO markers resolved or documented
+- **✅ Clean Architecture Compliance**: Full dependency inversion achieved
 
-**Advanced Features Delivered**:
-- **✅ Sophisticated playlist update system** with differential algorithms
-- **✅ Pluggable provider pattern** for streaming services
-- **✅ Command and Strategy patterns** implemented
-- **✅ Production-ready workflow system** with comprehensive node catalog
+### Feature Completeness Gates
+- **✅ Production Playlist Updates**: UpdatePlaylistUseCase handles real Spotify operations
+- **✅ Play History Integration**: New transformation nodes functional and tested
+- **✅ Unified Progress**: Consistent progress reporting across all operations
+- **✅ Discovery Templates**: Pre-built workflows demonstrate new capabilities
 
-### 🎯 Strategic Benefits Realized
+### Maintainability Gates  
+- **✅ Pattern Consistency**: All new code follows established patterns
+- **✅ DRY Compliance**: Zero code duplication in new functionality
+- **✅ Documentation Complete**: BACKLOG.md updated with completed work
+- **✅ Test Coverage**: >90% coverage maintained on new functionality
 
-1. **Developer Productivity**: Rapid feature development through clear separation of concerns
-2. **Maintainability**: Business logic isolated and easily testable  
-3. **Extensibility**: Ready for new streaming services and advanced features
-4. **Quality Assurance**: Comprehensive test coverage ensures reliability
-5. **Future-Ready**: Foundation for modern frameworks (FastAPI, observability tools)
-6. **Performance**: Optimized algorithms and efficient database operations
+---
 
-### 🚀 What's Next: Advanced Features Pipeline
+## 🔍 Architectural Decision Records
 
-With the Clean Architecture foundation complete, the codebase is now ready for:
+### ADR-001: Repository Pattern Completion
+**Decision**: Complete dependency inversion for all use cases before new features
+**Rationale**: Foundation must be solid before building new capabilities
+**Impact**: Dramatically improves testability and architectural clarity
 
-**Immediate Opportunities**:
-- Advanced Spotify API features (playlist collaboration, sharing)
-- Apple Music integration using established patterns
-- Real-time playlist synchronization
-- Advanced analytics and recommendation systems
-- Web API development with FastAPI
-- Microservices decomposition ready
+### ADR-002: Service Layer Separation  
+**Decision**: Separate identity resolution from metadata enrichment
+**Rationale**: Different performance characteristics and data flow requirements
+**Impact**: More efficient processing and clearer component responsibilities
 
-**Technical Foundation Ready For**:
-- Modern observability (OpenTelemetry, structured logging)
-- Event-driven architecture patterns
-- Advanced caching strategies
-- Performance monitoring and optimization
-- Cloud-native deployment patterns
+### ADR-003: Transformation Pattern Reuse
+**Decision**: New play history features use existing transformation patterns
+**Rationale**: Maintains architectural consistency and leverages existing infrastructure
+**Impact**: Faster development and consistent user experience
 
-### 🏅 Final Assessment
+### ADR-004: Progress Reporting Unification
+**Decision**: Single progress interface across all operations
+**Rationale**: Consistent user experience and simplified implementation
+**Impact**: Better user feedback and reduced code duplication
 
-**EXCEEDED ALL OBJECTIVES**: This Clean Architecture migration represents a complete technical transformation that not only achieved all original goals but delivered sophisticated features that position the codebase for future growth and innovation.
+---
 
-**Result**: A production-ready, enterprise-quality Python application that demonstrates best practices and serves as a foundation for advanced music technology features.
+## 🎉 Expected Outcomes
 
-**Technical Details**:
+Upon completion of v0.2.4, the system will have:
 
-**Differential Algorithm Strategy**:
-- **Track Identity**: Match tracks using Spotify ID → ISRC → metadata similarity
-- **Operation Sequencing**: Remove (high→low index) → Add → Move to avoid conflicts
-- **Batch Optimization**: Group operations within Spotify's 100-track limits
-- **Cost Estimation**: Calculate API call requirements before execution
+1. **Architectural Maturity**: Complete Clean Architecture implementation with proper dependency inversion
+2. **Feature Richness**: Advanced play history analysis and playlist workflow capabilities  
+3. **Technical Excellence**: Zero technical debt and consistent architectural patterns
+4. **User Experience**: Unified progress reporting and discovery workflow templates
+5. **Developer Productivity**: Clear patterns for future feature development
+6. **Maintainability**: Compact, understandable codebase following DRY principles
 
-**Spotify API Integration**:
-- **snapshot_id Validation**: Detect external changes before operations
-- **Mutually Exclusive Operations**: Respect Spotify's replace vs reorder constraints
-- **Error Recovery**: Handle rate limits, conflicts, and partial failures
-- **Performance Optimization**: Minimize API calls through intelligent batching
+**Strategic Result**: A solid foundation ready for FastAPI web interface development and advanced streaming service integrations in future versions.
 
-**Benefits Achieved**:
-- **DRY Principle**: Single implementation for all playlist update needs
-- **Workflow Ready**: Immediate capability for update destination nodes
-- **Future Extensible**: Foundation for manual editing and new streaming services
-- **Performance Optimized**: Minimal API calls through differential operations
-- **User Experience**: Preserves Spotify track addition timestamps and history
-- **Clean Architecture**: Consistent with existing SavePlaylistUseCase patterns
+---
 
-**Success Metrics**:
-- New workflow destination for playlist updates functional
-- Zero regression in existing workflow functionality
-- Comprehensive test coverage (unit + integration + end-to-end)
-- Performance baseline established for future optimization
-- Documentation ready for future developer handoff
+*"Architecture is about the important stuff... whatever that is." - Ralph Johnson*
+
+In v0.2.4, the "important stuff" is completing our architectural foundation while adding powerful new capabilities that maintain our system's elegance and maintainability.

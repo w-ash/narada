@@ -4,7 +4,7 @@ import importlib
 import pkgutil
 import sys
 
-from src.infrastructure.config import get_logger
+from src.config import get_logger
 
 # Import main connector classes for re-export
 from src.infrastructure.connectors.lastfm import (

@@ -10,10 +10,9 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 # attrs import removed - no longer needed with unified result classes
-from src.application.utilities.progress_integration import with_db_progress
 from src.application.utilities.results import ResultFactory
+from src.config import get_config, get_logger
 from src.domain.entities import OperationResult, SyncCheckpoint, Track
-from src.infrastructure.config import get_config, get_logger
 from src.infrastructure.connectors.lastfm import LastFMConnector
 from src.infrastructure.connectors.spotify import SpotifyConnector
 from src.infrastructure.persistence.repositories.track import TrackRepositories
@@ -72,21 +71,10 @@ class LikeService:
             LikeImportResult with operation metrics
         """
 
-        # Apply progress decorator for consistent UI
-        @with_db_progress(
-            description="Importing Spotify liked tracks...",
-            success_text="Spotify likes imported successfully!",
-            display_title="Spotify Likes Import Results",
-            next_step_message="[yellow]Tip:[/yellow] Export to Last.fm with [cyan]narada likes export[/cyan]",
+        # Direct call - progress is handled by CLI decorator
+        return await self._import_spotify_likes_internal(
+            user_id, limit, max_imports
         )
-        async def _import_operation(
-            _repositories: TrackRepositories,
-        ) -> OperationResult:
-            return await self._import_spotify_likes_internal(
-                user_id, limit, max_imports
-            )
-
-        return _import_operation(self.repositories)
 
     async def export_likes_to_lastfm(
         self,
@@ -108,21 +96,10 @@ class LikeService:
             LikeExportResult with operation metrics
         """
 
-        # Apply progress decorator for consistent UI
-        @with_db_progress(
-            description="Exporting likes to Last.fm...",
-            success_text="Likes exported to Last.fm successfully!",
-            display_title="Last.fm Likes Export Results",
-            next_step_message="[yellow]Tip:[/yellow] Likes are now synced across services",
+        # Direct call - progress is handled by CLI decorator
+        return await self._export_likes_to_lastfm_internal(
+            user_id, batch_size, max_exports
         )
-        async def _export_operation(
-            _repositories: TrackRepositories,
-        ) -> OperationResult:
-            return await self._export_likes_to_lastfm_internal(
-                user_id, batch_size, max_exports
-            )
-
-        return _export_operation(self.repositories)
 
     async def _import_spotify_likes_internal(
         self,

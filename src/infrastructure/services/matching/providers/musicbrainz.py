@@ -7,9 +7,9 @@ MusicBrainz track data into our domain MatchResult objects.
 from typing import Any
 
 from src.application.utilities.simple_batching import process_in_batches
+from src.config import get_logger
 from src.domain.entities import Track
 from src.domain.matching.types import MatchResult, MatchResultsById
-from src.infrastructure.config import get_logger
 
 logger = get_logger(__name__)
 

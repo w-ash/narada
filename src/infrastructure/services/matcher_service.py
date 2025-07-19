@@ -4,12 +4,13 @@ This service coordinates between providers and handles database operations,
 while delegating the actual matching logic to providers and domain algorithms.
 """
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from src.application.utilities.progress_integration import with_progress
+from src.config import get_config, get_logger
 from src.domain.entities import TrackList
 from src.domain.matching.types import MatchResult, MatchResultsById
-from src.infrastructure.config import get_config, get_logger
 from src.infrastructure.persistence.repositories.track import TrackRepositories
 
 from .matching.providers import create_provider
@@ -41,6 +42,7 @@ class MatcherService:
         track_list: TrackList,
         connector: str,
         connector_instance: Any,
+        max_age_hours: float | None = None,
         **additional_options: Any,
     ) -> MatchResultsById:
         """Match tracks to external service with database caching.
@@ -49,6 +51,7 @@ class MatcherService:
             track_list: Tracks to match.
             connector: Target service name.
             connector_instance: Service connector implementation.
+            max_age_hours: Maximum age of cached data in hours. If None, uses cached data regardless of age.
             **additional_options: Options forwarded to providers.
 
         Returns:
@@ -73,18 +76,22 @@ class MatcherService:
             operation="match_tracks", connector=connector, track_count=len(track_ids)
         ):
             # Step 1: Check database for existing mappings
-            db_results = await self._get_existing_mappings(track_ids, connector)
+            db_results = await self._get_existing_mappings(
+                track_ids, connector, max_age_hours
+            )
 
-            # Find tracks that need matching
+            # Find tracks that need matching (including those with stale data)
             tracks_to_match = [t for t in valid_tracks if t.id not in db_results]
 
             if not tracks_to_match:
-                logger.info(f"All {len(db_results)} tracks already mapped in database")
+                logger.info(
+                    f"All {len(db_results)} tracks already mapped in database with fresh data"
+                )
                 return db_results
 
-            # Step 2: Match new tracks using provider
+            # Step 2: Match tracks using provider (both new tracks and those with stale data)
             logger.info(
-                f"Need to match {len(tracks_to_match)} new tracks to {connector}"
+                f"Need to match {len(tracks_to_match)} tracks to {connector} (includes tracks with stale data)"
             )
 
             # Create provider for this connector
@@ -106,12 +113,14 @@ class MatcherService:
         self,
         track_ids: list[int],
         connector: str,
+        max_age_hours: float | None = None,
     ) -> MatchResultsById:
         """Retrieve existing mappings from database.
 
         Args:
             track_ids: Track IDs to check for existing mappings.
             connector: Target service name.
+            max_age_hours: Maximum age of cached data in hours. If specified, only return mappings with fresh data.
 
         Returns:
             Track IDs mapped to MatchResult objects for existing mappings.
@@ -158,12 +167,44 @@ class MatcherService:
                 mapped_track_ids
             )
 
-            # Step 4: Get metadata for all tracks in a batch
-            connector_metadata = (
-                await self.track_repos.connector.get_connector_metadata(
+            # Step 4: Get metadata for all tracks in a batch (with timestamps for freshness check)
+            if max_age_hours is not None:
+                connector_metadata_with_timestamps = await self.track_repos.connector.get_connector_metadata_with_timestamps(
                     mapped_track_ids, connector
                 )
-            )
+                # Calculate cutoff time for freshness
+                cutoff_time = datetime.now(UTC) - timedelta(hours=max_age_hours)
+                logger.info(
+                    f"Filtering mappings older than {cutoff_time} (max_age_hours={max_age_hours})"
+                )
+
+                # Filter out stale mappings and extract just the metadata
+                connector_metadata = {}
+                fresh_track_ids = []
+                for track_id in mapped_track_ids:
+                    if track_id in connector_metadata_with_timestamps:
+                        metadata_info = connector_metadata_with_timestamps[track_id]
+                        last_updated = metadata_info["last_updated"]
+
+                        if last_updated and last_updated >= cutoff_time:
+                            # Data is fresh enough
+                            connector_metadata[track_id] = metadata_info["data"]
+                            fresh_track_ids.append(track_id)
+                        else:
+                            logger.debug(
+                                f"Track {track_id} metadata is stale (last_updated: {last_updated})"
+                            )
+
+                # Update mapped_track_ids to only include tracks with fresh data
+                mapped_track_ids = fresh_track_ids
+                logger.info(f"Found {len(fresh_track_ids)} tracks with fresh metadata")
+            else:
+                # No freshness check required, use existing method
+                connector_metadata = (
+                    await self.track_repos.connector.get_connector_metadata(
+                        mapped_track_ids, connector
+                    )
+                )
 
             # Process tracks with existing mappings
             for track_id in mapped_track_ids:

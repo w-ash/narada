@@ -5,8 +5,8 @@ from typing import Any, ClassVar
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config import get_logger
 from src.domain.entities import Artist, Track
-from src.infrastructure.config import get_logger
 from src.infrastructure.persistence.database.db_models import DBTrack
 from src.infrastructure.persistence.repositories.base_repo import BaseRepository
 from src.infrastructure.persistence.repositories.repo_decorator import db_operation

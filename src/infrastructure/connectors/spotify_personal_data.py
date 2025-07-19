@@ -7,7 +7,7 @@ from typing import Any
 
 from attrs import define
 
-from src.infrastructure.config import get_logger
+from src.config import get_logger
 
 logger = get_logger(__name__)
 

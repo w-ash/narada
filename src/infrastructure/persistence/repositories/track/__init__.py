@@ -57,6 +57,14 @@ class TrackRepositories:
 
         self.connectors_config = CONNECTORS
 
+    @property
+    def playlists(self):
+        """Playlist repository for compatibility with RepositoryProvider protocol."""
+        from src.infrastructure.persistence.repositories.playlist import (
+            PlaylistRepositories,
+        )
+        return PlaylistRepositories(self.session)
+
     async def get_track(self, id_type: str, id_value: str):
         """Get a track by any identifier type.
 

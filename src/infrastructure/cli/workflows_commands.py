@@ -20,6 +20,17 @@ app = typer.Typer(help="Run workflows for playlist generation")
 console = Console()
 
 
+@app.callback(invoke_without_command=True)
+def playlist_main(ctx: typer.Context) -> None:
+    """Create and manage playlists.
+
+    Shows interactive workflow menu when called without a subcommand.
+    """
+    if ctx.invoked_subcommand is None:
+        # Show interactive workflow menu
+        _interactive_workflow_selection()
+
+
 @app.command()
 def run(
     workflow_id: Annotated[
@@ -178,6 +189,70 @@ def _list_workflows() -> None:
         table.add_row(wf["id"], wf["name"], wf["description"], str(wf["task_count"]))
 
     console.print(table)
+
+
+def _interactive_workflow_selection() -> None:
+    """Display interactive workflow selection menu."""
+
+    # Get available workflows
+    workflows = list_workflows()
+
+    if not workflows:
+        console.print("[red]No workflows found.[/red]")
+        return
+
+    # Create interactive menu with numbers
+    console.print(
+        Panel.fit(
+            "🎵 Available Workflows",
+            title="[bold blue]Narada Playlist[/bold blue]",
+            border_style="blue",
+        )
+    )
+
+    console.print()
+    for i, wf in enumerate(workflows, 1):
+        console.print(
+            f"  [cyan]{i}[/cyan]. [bold]{wf['id']}[/bold] - {wf['name']} ([dim]{wf['task_count']} tasks[/dim])"
+        )
+
+    # Build choices list for Rich validation (numbers + workflow IDs)
+    # Add numeric choices
+    choices = [str(i) for i in range(1, len(workflows) + 1)]
+    # Add workflow ID choices
+    choices.extend(wf["id"] for wf in workflows)
+    # Add exit options
+    choices.extend(["q", "quit", "exit", "cancel"])
+
+    # Get user selection with Rich validation
+    console.print()
+    choice = Prompt.ask(
+        f"Select workflow [1-{len(workflows)}] or type name",
+        choices=choices,
+        default="",
+        show_choices=False,  # Don't show the long list
+    ).strip()
+
+    # Handle exit options
+    if choice in ("", "q", "quit", "exit", "cancel"):
+        return
+
+    # Determine workflow_id from choice
+    workflow_id = None
+
+    # Handle numeric selection
+    if choice.isdigit():
+        choice_num = int(choice)
+        if 1 <= choice_num <= len(workflows):
+            workflow_id = workflows[choice_num - 1]["id"]
+    else:
+        # Handle name-based selection (Rich already validated it's in choices)
+        workflow_id = choice
+
+    # Execute the selected workflow
+    if workflow_id:
+        console.print(f"\n[green]Running workflow:[/green] [bold]{workflow_id}[/bold]")
+        _run_workflow_interactive(workflow_id, show_results=True, output_format="table")
 
 
 def _simple_workflow_feedback(event_type: str, event_data: dict) -> None:

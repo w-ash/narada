@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from src.application.utilities.progress_integration import batch_progress_wrapper
-from src.infrastructure.config import get_config, get_logger
+from src.config import get_config, get_logger
 
 logger = get_logger(__name__)
 

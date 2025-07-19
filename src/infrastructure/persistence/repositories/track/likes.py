@@ -5,8 +5,8 @@ from datetime import UTC, datetime
 from attrs import define
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config import get_logger
 from src.domain.entities import TrackLike
-from src.infrastructure.config import get_logger
 from src.infrastructure.persistence.database.db_models import DBTrackLike
 from src.infrastructure.persistence.repositories.base_repo import (
     BaseModelMapper,

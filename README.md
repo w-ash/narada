@@ -9,38 +9,8 @@ Narada connects multiple music services (Spotify, Last.fm, MusicBrainz) to help 
 - **Music Service Integration**: Connect with Spotify, Last.fm, and MusicBrainz
 - **Workflow System**: Define complex playlist transformation pipelines using JSON
 - **Smart Filtering**: Filter tracks by release date, artist, popularity, and more
-- **Modern CLI Interface**: Rich-formatted output with panels, colors, and professional typography
-- **Direct Workflow Execution**: Run workflows as simple commands (`narada discovery_mix`)
 - **Data Persistence**: Store and manage playlists in local database and Spotify
 
-## What's New in v0.2.3
-
-### Core Features (v0.2.2 & Earlier)
-- 🚀 **Enhanced Spotify Track Resolution**: 100% processing rate for Spotify exports
-- 🔗 **Smart Relinking Detection**: Automatically handles Spotify's track versioning and remastering  
-- 🎯 **Multi-Stage Resolution Pipeline**: Direct lookup → Search fallback → Metadata preservation
-- 📊 **Rich Resolution Analytics**: Detailed statistics showing exactly how tracks were resolved
-- 💪 **Future-Proof Design**: Handles any age of Spotify export (2011+) with zero data loss
-- 🎵 **Play History Import**: Import comprehensive play history from Spotify GDPR exports
-- 💾 **Enhanced Repository Layer**: Robust data access with batch operations and type safety
-- 🔗 **Cross-Service Sync**: Complete likes synchronization between Spotify and Last.fm
-- 📈 **Incremental Sync**: Efficient timestamp-based incremental likes export for large libraries
-
-### Architecture Foundation (v0.2.3)
-- 🏗️ **Clean Architecture**: Restructured for maintainability and future web interface
-- ⚡ **Performance**: Domain tests run 10x faster with isolated business logic
-- 🔧 **Dependency Injection**: Technology-agnostic business logic ready for web API
-- 🧪 **130 Tests Passing**: Comprehensive test coverage across all architectural layers
-
-### User Experience
-- 🎨 **Modern CLI Design**: Beautiful Rich-formatted interface with color-coded panels
-- ⚡ **Direct Workflow Commands**: Run `narada discovery_mix` instead of verbose commands  
-- 🗂️ **Flattened CLI Structure**: Clear command names like `import-spotify-plays`, `export-likes-to-lastfm`
-- 🔧 **Workflow Alias**: Short `wf` alias for workflow management (`narada wf list`)
-- 📋 **Single Help System**: Consolidated help showing all commands with descriptive names
-- 🏷️ **Version Display**: Automatic version detection throughout the CLI
-- 📦 **Organized Panels**: System, Data Sync, and Playlist Workflow sections
-- ✅ **Shell Completion**: Tab completion for commands and workflow names
 
 ## Getting Started
 
@@ -82,77 +52,15 @@ narada import-spotify-plays data/spotify_export.json
 narada import-spotify-likes --limit 1000
 narada export-likes-to-lastfm
 
-# Run workflows directly (new in v0.2.1!)
+# Run workflows directly 
 narada discovery_mix
 narada sort_by_release_date
 
 # Short alias for workflow management
 narada wf list
 narada wf run
-
-# Quick version check
-narada version
 ```
 
-### Enhanced Spotify Track Resolution (v0.2.2)
-
-Narada achieves **100% processing rate** for Spotify exports of any age:
-
-#### Multi-Stage Resolution Pipeline
-- **Stage 1**: Direct API lookup with automatic relinking detection (90%+ success)
-- **Stage 2**: Metadata-based search fallback using confidence scoring (≥70% threshold)  
-- **Stage 3**: Metadata preservation for complete data preservation (100% coverage)
-
-#### Real-World Benefits
-- **Handles any age of Spotify export** - from 2011 to present day
-- **Zero data loss** - every play gets imported and tracked
-- **Smart relinking detection** - automatically handles Spotify's track versioning
-- **Rich visibility** - see exactly how each track was resolved
-
-#### Example Resolution Output
-```
-📊 Enhanced Resolution Results:
-   Resolution rate: 100.0%
-   Direct ID: 2        (tracks found as-is)
-   Relinked ID: 8     (tracks updated by Spotify)
-   Search match: 0     (metadata-based fallback)
-   Preserved metadata: 0  (unresolvable but saved)
-   Total with track ID: 10
-```
-
-### Clean Architecture Foundation (v0.2.3)
-
-Narada was restructured to Clean Architecture patterns to enable future expansion:
-
-#### Technical Foundation
-- **Domain Layer**: Pure business logic with zero external dependencies
-- **Application Layer**: Use case orchestrators with dependency injection
-- **Infrastructure Layer**: External services and interfaces
-- **Performance**: Domain tests run 10x faster without database dependencies
-
-#### Benefits for Users
-- **Future Web Interface**: Foundation laid for web-based management alongside CLI
-- **Faster Development**: New features can be added more quickly and safely
-- **Better Testing**: More reliable tests lead to fewer bugs
-- **Extensibility**: Easy to add new music services and interfaces
-
-### Modern CLI Experience
-
-Narada features a beautiful, modern CLI with Rich-formatted output and intuitive navigation:
-
-#### Visual Interface
-- **Rich panels** with color-coded sections and emoji icons
-- **Professional typography** with proper spacing and visual hierarchy  
-- **Automatic version display** throughout the interface
-- **Single help system** - `narada` shows comprehensive help
-
-#### Flattened Command Structure
-- **Descriptive names**: `import-spotify-plays`, `export-likes-to-lastfm` 
-- **No nested commands**: All commands available at top level
-- **Clear purpose**: Command names describe exactly what they do
-- **Direct workflow execution**: `narada discovery_mix` (no more verbose commands!)
-- **Short alias available**: `narada wf list` and `narada wf run`
-- **Direct workflow execution** with simple command names
 
 ## Workflow System
 

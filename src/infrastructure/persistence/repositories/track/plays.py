@@ -3,8 +3,8 @@
 from attrs import define
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config import get_logger
 from src.domain.entities import TrackPlay
-from src.infrastructure.config import get_logger
 from src.infrastructure.persistence.database.db_models import DBTrackPlay
 from src.infrastructure.persistence.repositories.base_repo import (
     BaseModelMapper,

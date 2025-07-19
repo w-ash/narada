@@ -5,8 +5,8 @@ from datetime import UTC, datetime
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config import get_logger
 from src.domain.entities import ConnectorPlaylist, Playlist, Track
-from src.infrastructure.config import get_logger
 from src.infrastructure.persistence.database.db_models import DBConnectorPlaylist
 from src.infrastructure.persistence.repositories.base_repo import BaseRepository
 from src.infrastructure.persistence.repositories.playlist.mapper import (

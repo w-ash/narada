@@ -7,6 +7,7 @@ from attrs import define
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config import get_logger
 from src.domain.entities import (
     Artist,
     ConnectorPlaylist,
@@ -15,7 +16,6 @@ from src.domain.entities import (
     Track,
     ensure_utc,
 )
-from src.infrastructure.config import get_logger
 from src.infrastructure.persistence.database.db_models import (
     DBConnectorPlaylist,
     DBPlaylist,

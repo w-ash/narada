@@ -18,8 +18,12 @@ from typing import Any, TypeVar, cast
 
 from toolz import compose_left, curry
 
+from src.config import get_logger
+
 from src.domain.entities.playlist import Playlist
 from src.domain.entities.track import Track, TrackList
+
+logger = get_logger(__name__)
 
 # Type variables for generic transformations
 T = TypeVar("T", bound=TrackList)
@@ -253,11 +257,10 @@ def filter_by_metric_range(
         metric_values = metrics.get(metric_name, {})
 
         # Check if track has the metric
-        track_id_str = str(track.id)
-        if track_id_str not in metric_values:
+        if track.id not in metric_values:
             return include_missing
 
-        value = metric_values[track_id_str]
+        value = metric_values[track.id]
 
         # Check range bounds
         if min_value is not None and value < min_value:
@@ -325,7 +328,12 @@ def sort_by_attribute(
         key_fn = metric_key_fn
 
     def _extract_track_metric(track: Track, metric_key: str, default: Any = 0) -> Any:
-        """Extract metric from track or its metadata."""
+        """Extract metric from track or its metadata.
+
+        This function is used during the initial key_fn setup phase,
+        but the actual metric extraction is handled by enhanced_key_fn
+        which has access to the tracklist metadata.
+        """
         if not track.id:
             return default
 
@@ -333,6 +341,8 @@ def sort_by_attribute(
         if hasattr(track, metric_key) and getattr(track, metric_key) is not None:
             return getattr(track, metric_key)
 
+        # Note: Tracklist metadata metrics are handled by enhanced_key_fn
+        # This function is only used as a fallback for track attributes
         return default
 
     def transform(t: TrackList) -> TrackList:
@@ -361,13 +371,20 @@ def sort_by_attribute(
                 return key_fn(track)
 
             # Check if track ID exists in metrics - track IDs should be integers
+            logger.debug(
+                f"Sorting track {track.id} (type: {type(track.id)}), metric_dict keys: {list(metrics_dict.keys())[:5]}..."
+            )
             if track.id in metrics_dict:
                 # Use resolved metric if it exists and isn't None
                 metric_value = metrics_dict[track.id]
                 if metric_value is not None:
+                    logger.debug(
+                        f"Using metric value {metric_value} for track {track.id}"
+                    )
                     return metric_value
 
             # For missing or None values, use a default that will sort appropriately
+            logger.debug(f"Track {track.id} missing from metrics, using fallback value")
             if reverse:
                 # When sorting in descending order (reverse=True), put None values at the end
                 return float("-inf")  # Lowest possible value

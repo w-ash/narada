@@ -9,8 +9,8 @@ from rich.panel import Panel
 from rich.table import Table
 import typer
 
+from src.config import get_config, get_logger
 from src.infrastructure.cli.ui import command_error_handler
-from src.infrastructure.config import get_config, get_logger
 from src.infrastructure.persistence.database.db_models import init_db
 
 # Initialize console and logger

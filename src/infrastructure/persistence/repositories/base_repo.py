@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute, selectinload
 from sqlalchemy.sql import ColumnElement
 
-from src.infrastructure.config import get_logger
+from src.config import get_logger
 
 # Import needed for relationship chains in eager loading
 from src.infrastructure.persistence.database.db_models import NaradaDBBase

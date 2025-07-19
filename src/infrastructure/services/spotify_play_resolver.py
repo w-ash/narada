@@ -2,10 +2,10 @@
 
 from attrs import define
 
+from src.config import get_logger
 from src.domain.entities import Artist, ConnectorTrack, Track
 from src.domain.matching.algorithms import calculate_confidence
 from src.domain.matching.types import ConfidenceEvidence
-from src.infrastructure.config import get_logger
 from src.infrastructure.connectors.spotify import SpotifyConnector
 from src.infrastructure.connectors.spotify_personal_data import SpotifyPlayRecord
 from src.infrastructure.persistence.repositories.track import TrackRepositories

@@ -7,7 +7,7 @@ from typing import Any
 from attrs import define
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.infrastructure.config import get_logger, resilient_operation
+from src.config import get_logger, resilient_operation
 from src.infrastructure.connectors.metrics_registry import (
     connector_metrics,
     metric_resolvers,

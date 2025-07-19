@@ -20,7 +20,7 @@ from typing import Any, ClassVar, TypeVar
 from attrs import define, field
 import backoff
 
-from src.infrastructure.config import get_logger
+from src.config import get_config, get_logger
 from src.infrastructure.connectors.metrics_registry import (
     MetricResolverProtocol,
     get_metric_freshness,
@@ -75,7 +75,7 @@ class BaseMetricResolver:
         Returns:
             Dictionary mapping track IDs to their metric values
         """
-        from src.infrastructure.config import get_logger
+        from src.config import get_logger
         from src.infrastructure.persistence.repositories.track.connector import (
             TrackConnectorRepository,
         )
@@ -308,10 +308,12 @@ class BatchProcessor[T, R]:
                 """Process item and emit progress event."""
                 result = await process_with_backoff(item)
 
-                # Emit individual item progress every 10 items to avoid spam
+                # Emit individual item progress based on config frequency
                 current_item = batch_start + item_index + 1
+                progress_frequency = get_config("BATCH_PROGRESS_LOG_FREQUENCY")
                 if progress_callback and (
-                    current_item % 10 == 0 or current_item == total_items
+                    current_item % progress_frequency == 0
+                    or current_item == total_items
                 ):
                     # Try to get a meaningful description from the item
                     item_desc = ""
@@ -345,26 +347,35 @@ class BatchProcessor[T, R]:
 
                 return result
 
-            # Use gather with return_exceptions=True to handle errors without failing the whole batch
-            batch_results = await asyncio.gather(
-                *[
-                    process_item_with_progress(item, idx)
-                    for idx, item in enumerate(batch)
-                ],
-                return_exceptions=True,
-            )
+            # Create tasks for all items in this batch
+            batch_tasks = [
+                asyncio.create_task(process_item_with_progress(item, idx))
+                for idx, item in enumerate(batch)
+            ]
 
-            # Process results, keeping errors separate
+            # Process items as they complete for real-time progress (streaming pattern)
             valid_results = []
-            for result in batch_results:
-                if isinstance(result, Exception):
+            completed_in_batch = 0
+
+            for completed_task in asyncio.as_completed(batch_tasks):
+                try:
+                    result = await completed_task
+                    valid_results.append(result)
+                    completed_in_batch += 1
+
+                    # Log real-time completion within batch
+                    self.logger_instance.debug(
+                        f"Item {completed_in_batch}/{len(batch)} completed in batch {current_batch}",
+                        batch_progress=f"{completed_in_batch}/{len(batch)}",
+                        total_progress=f"{processed_items + completed_in_batch}/{total_items}",
+                    )
+
+                except Exception as result:
                     self.logger_instance.error(
                         "Item processing failed",
                         error=str(result),
                         error_type=type(result).__name__,
                     )
-                else:
-                    valid_results.append(result)
 
             results.extend(valid_results)
             processed_items += len(batch)
@@ -380,7 +391,7 @@ class BatchProcessor[T, R]:
                         "items_processed": processed_items,
                         "total_items": total_items,
                         "batch_results": len(valid_results),
-                        "batch_failures": len(batch_results) - len(valid_results),
+                        "batch_failures": len(batch) - len(valid_results),
                     },
                 )
 
@@ -388,7 +399,7 @@ class BatchProcessor[T, R]:
             self.logger_instance.debug(
                 f"Batch {current_batch} complete",
                 valid_results=len(valid_results),
-                failures=len(batch_results) - len(valid_results),
+                failures=len(batch) - len(valid_results),
             )
 
         return results

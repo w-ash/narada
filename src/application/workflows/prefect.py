@@ -17,10 +17,9 @@ from prefect import flow, tags, task
 from prefect.artifacts import create_progress_artifact, update_progress_artifact
 from prefect.logging import get_run_logger
 
-from src.domain.entities.operations import WorkflowResult
-
 # Prefect logging is configured through dependency injection in WorkflowContext
-from src.infrastructure.config import get_logger
+from src.config import get_logger
+from src.domain.entities.operations import WorkflowResult
 
 from .node_registry import get_node
 

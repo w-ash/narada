@@ -7,9 +7,9 @@ from rich.console import Console
 from rich.table import Table
 import typer
 
+from src.config import get_logger, resilient_operation
 from src.infrastructure.cli.async_helpers import async_operation
 from src.infrastructure.cli.command_registry import SERVICES
-from src.infrastructure.config import get_logger, resilient_operation
 
 # Initialize console and logger
 console = Console()

@@ -29,33 +29,26 @@ narada status
 **Purpose**: Display current configuration, database status, and service connections
 **Output**: Formatted status panel with service connection status
 
-### Data Synchronization Commands
+### Data Management Commands
 
-#### `narada import-spotify-likes`
-Import liked tracks from Spotify to local database.
+Narada organizes all data operations under the unified `narada data` command, providing both interactive discovery and direct access for power users.
+
+#### `narada data menu`
+Interactive menu showing all available data operations.
 
 ```bash
-narada import-spotify-likes [OPTIONS]
+narada data menu
 ```
 
-**Options**:
-- `--limit NUMBER`: Maximum number of tracks to import (default: no limit)
-- `--batch-size NUMBER`: Number of tracks to process per batch (default: 100)
-- `--user-id STRING`: Spotify user ID (default: current user)
+**Purpose**: Display categorized menu of all data operations for easy discovery
+**Interactive**: Yes - shows numbered menu with operation selection
+**Output**: Interactive menu with play history and liked tracks operations
 
-**Example**:
-```bash
-narada import-spotify-likes --limit 1000 --batch-size 50
-```
-
-**Purpose**: Sync liked tracks from Spotify to Narada database
-**Output**: Progress bar and import statistics
-
-#### `narada import-spotify-plays`
+#### `narada data spotify-plays-file`
 Import play history from Spotify GDPR export.
 
 ```bash
-narada import-spotify-plays FILE_PATH [OPTIONS]
+narada data spotify-plays-file FILE_PATH [OPTIONS]
 ```
 
 **Arguments**:
@@ -66,7 +59,7 @@ narada import-spotify-plays FILE_PATH [OPTIONS]
 
 **Example**:
 ```bash
-narada import-spotify-plays ~/Downloads/spotify_export.json --batch-size 500
+narada data spotify-plays-file ~/Downloads/spotify_export.json --batch-size 500
 ```
 
 **Purpose**: Import comprehensive play history from Spotify personal data exports
@@ -81,43 +74,90 @@ narada import-spotify-plays ~/Downloads/spotify_export.json --batch-size 500
 - Enhanced resolution statistics
 - Import summary with resolution breakdown
 
-#### `narada export-likes-to-lastfm`
-Export liked tracks from Narada to Last.fm as loved tracks.
+#### `narada data lastfm-plays`
+Import play history from Last.fm API.
 
 ```bash
-narada export-likes-to-lastfm [OPTIONS]
+narada data lastfm-plays [OPTIONS]
+```
+
+**Options**:
+- `--recent NUMBER`: Number of recent plays to import (overrides default incremental)
+- `--limit NUMBER`: Maximum number of items to process
+- `--full`: Full sync instead of incremental (requires confirmation)
+- `--confirm`: Skip confirmation prompts
+- `--resolve-tracks/--no-resolve-tracks`: Resolve tracks for playlists (default: resolve)
+- `--user USERNAME`: Last.fm username (defaults to LASTFM_USERNAME env)
+
+**Examples**:
+```bash
+narada data lastfm-plays                          # Incremental sync
+narada data lastfm-plays --recent 1000            # Recent 1000 plays
+narada data lastfm-plays --full --confirm         # Full history sync
+```
+
+**Purpose**: Import play history from Last.fm API with flexible sync modes
+**Output**: Progress bar and import statistics
+
+#### `narada data spotify-likes`
+Import liked tracks from Spotify API.
+
+```bash
+narada data spotify-likes [OPTIONS]
+```
+
+**Options**:
+- `--limit NUMBER`: Maximum number of tracks to import (default: no limit)
+- `--batch-size NUMBER`: API batch size for processing (default: 100)
+- `--user USERNAME`: User ID for checkpoint tracking (default: "default")
+
+**Example**:
+```bash
+narada data spotify-likes --limit 1000 --batch-size 50
+```
+
+**Purpose**: Sync liked tracks from Spotify to Narada database
+**Output**: Progress bar and import statistics
+
+#### `narada data lastfm-loves`
+Export liked tracks to Last.fm as loved tracks.
+
+```bash
+narada data lastfm-loves [OPTIONS]
 ```
 
 **Options**:
 - `--limit NUMBER`: Maximum number of tracks to export (default: no limit)
 - `--batch-size NUMBER`: Number of tracks to process per batch (default: 100)
-- `--user-id STRING`: Last.fm username (default: configured user)
+- `--user USERNAME`: Last.fm username for tracking (default: "default")
 
 **Example**:
 ```bash
-narada export-likes-to-lastfm --limit 500 --batch-size 25
+narada data lastfm-loves --limit 500 --batch-size 25
 ```
 
 **Purpose**: Sync liked tracks from Narada to Last.fm love status
 **Output**: Progress bar and export statistics
 
-### Workflow Commands
+### Playlist Management Commands
 
-#### `narada wf list`
+All playlist operations are unified under `narada playlist` for workflow execution and management.
+
+#### `narada playlist list`
 List available workflow definitions.
 
 ```bash
-narada wf list
+narada playlist list
 ```
 
 **Purpose**: Display all available workflow definitions with descriptions
 **Output**: Formatted table with workflow ID, name, description, and task count
 
-#### `narada wf run`
+#### `narada playlist run`
 Run a specific workflow by ID.
 
 ```bash
-narada wf run [WORKFLOW_ID] [OPTIONS]
+narada playlist run [WORKFLOW_ID] [OPTIONS]
 ```
 
 **Arguments**:
@@ -129,9 +169,9 @@ narada wf run [WORKFLOW_ID] [OPTIONS]
 
 **Examples**:
 ```bash
-narada wf run discovery_mix
-narada wf run sort_by_lastfm_user_playcount --format json
-narada wf run  # Interactive selection
+narada playlist run discovery_mix
+narada playlist run sort_by_lastfm_user_playcount --format json
+narada playlist run  # Interactive selection
 ```
 
 **Purpose**: Execute workflow definitions with progress tracking
@@ -139,20 +179,6 @@ narada wf run  # Interactive selection
 - Workflow execution progress
 - Task completion status
 - Result metrics and track counts
-
-#### Direct Workflow Commands
-
-For convenience, common workflows can be executed directly:
-
-```bash
-narada discovery_mix              # Run discovery mix workflow
-narada sort_by_lastfm_user_playcount  # Sort by personal play counts
-narada sort_by_lastfm_global_playcount # Sort by global popularity
-narada sort_by_release_date       # Sort by release date
-```
-
-**Purpose**: Quick access to frequently used workflows
-**Output**: Same as `narada wf run` with specific workflow
 
 ### Help and Completion
 

@@ -7,11 +7,11 @@ from typing import Annotated
 from rich.console import Console
 import typer
 
-from src.infrastructure.cli import likes_commands, plays_commands, workflows_commands
+from src.config import get_logger, setup_loguru_logger
+from src.infrastructure.cli import data_commands, workflows_commands
 from src.infrastructure.cli.setup_commands import register_setup_commands
 from src.infrastructure.cli.status_commands import register_status_commands
 from src.infrastructure.cli.workflows_commands import list_workflows
-from src.infrastructure.config import get_logger, setup_loguru_logger
 
 VERSION = version("narada")
 
@@ -30,77 +30,76 @@ app = typer.Typer(
     pretty_exceptions_show_locals=False,
 )
 
-# Add workflow management commands
+# Add unified playlist command
 app.add_typer(
     workflows_commands.app,
-    name="workflows",
-    help="Run workflows for playlist generation (list, run)",
+    name="playlist",
+    help="Create and manage playlists",
     rich_help_panel="🔧 Playlist Workflow Management",
-)
-
-# Add workflow alias (simple duplicate registration since Typer lacks native aliases)
-app.add_typer(
-    workflows_commands.app, name="wf", help="Short alias for workflows", hidden=True
 )
 
 # Register individual utility commands
 register_status_commands(app)
 register_setup_commands(app)
 
-# Add clean import command structure using subcommands
+# Add unified data command
 app.add_typer(
-    plays_commands.app,
-    name="import",
-    help="Import play history from various sources",
-    rich_help_panel="📊 Data Import",
-)
-
-# Add likes commands (keeping for now)
-app.add_typer(
-    likes_commands.app,
-    name="likes",
-    help="Manage liked tracks",
+    data_commands.app,
+    name="data",
+    help="Manage your music data",
     rich_help_panel="📊 Data Sync",
 )
 
 
-def register_workflow_commands(app: typer.Typer) -> None:
-    """Dynamically register workflow commands as top-level commands."""
+# Register individual workflow commands for direct access
+def register_workflow_commands() -> None:
+    """Register individual workflow commands at the top level for direct access."""
     try:
         workflows = list_workflows()
-        logger.info(f"Registering {len(workflows)} workflow commands")
-
         for workflow in workflows:
             workflow_id = workflow["id"]
             workflow_name = workflow["name"]
 
-            # Create workflow runner function with closure
-            def create_workflow_runner(wf_id: str):
-                def workflow_command() -> None:
+            # Create a command function for this workflow
+            def create_workflow_command(wf_id: str, wf_name: str) -> None:
+                """Create a command function for a specific workflow."""
+
+                @app.command(
+                    name=wf_id,
+                    help=f"Run {wf_name} workflow",
+                    rich_help_panel="🎵 Playlist Workflows",
+                )
+                def workflow_command(  # pyright: ignore[reportUnusedFunction]
+                    show_results: Annotated[
+                        bool,
+                        typer.Option(
+                            "--show-results/--no-results", help="Show result metrics"
+                        ),
+                    ] = True,
+                    output_format: Annotated[
+                        str,
+                        typer.Option(
+                            "--format", "-f", help="Output format (table, json)"
+                        ),
+                    ] = "table",
+                ) -> None:
+                    """Run workflow."""
+                    # Import here to avoid circular imports
                     from src.infrastructure.cli.workflows_commands import (
                         _run_workflow_interactive,
                     )
 
-                    _run_workflow_interactive(wf_id, True, "table")
+                    _run_workflow_interactive(wf_id, show_results, output_format)
 
-                return workflow_command
-
-            # Register with rich help text
-            app.command(
-                name=workflow_id,
-                help=f"🎵 {workflow_name}",
-                rich_help_panel="🎵 Playlist Workflows",
-            )(create_workflow_runner(workflow_id))
-
-        logger.debug(f"Successfully registered {len(workflows)} workflow commands")
+            create_workflow_command(workflow_id, workflow_name)
 
     except Exception as e:
-        # Fail gracefully if workflows can't be loaded
-        logger.warning(
-            "Failed to load workflows for dynamic registration",
-            error=str(e),
-            exc_info=True,
-        )
+        # If workflow registration fails, log but don't crash the CLI
+        logger.debug(f"Failed to register workflow commands: {e}")
+
+
+# Register workflow commands at import time
+register_workflow_commands()
 
 
 @app.command(name="version", rich_help_panel="⚙️ System")
@@ -111,8 +110,7 @@ def version_command() -> None:
     )
 
 
-# Register workflow commands at import time for help system
-register_workflow_commands(app)
+# No longer registering duplicate workflow commands - use unified 'playlist' command
 
 
 @app.callback()

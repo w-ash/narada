@@ -7,7 +7,7 @@ Clean Architecture principles.
 from dataclasses import dataclass
 from typing import Any
 
-from src.infrastructure.config import get_logger
+from src.config import get_logger
 from src.infrastructure.connectors import CONNECTORS, discover_connectors
 from src.infrastructure.persistence.database.db_connection import get_session
 from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
@@ -28,7 +28,7 @@ class ConfigProviderImpl:
 
     def __init__(self):
         """Initialize configuration provider."""
-        from src.infrastructure.config import get_config as _get_config
+        from src.config import get_config as _get_config
 
         self._get_config = _get_config
 

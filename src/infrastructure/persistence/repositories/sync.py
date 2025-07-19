@@ -5,8 +5,8 @@ from typing import Literal
 from attrs import define
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config import get_logger
 from src.domain.entities import SyncCheckpoint
-from src.infrastructure.config import get_logger
 from src.infrastructure.persistence.database.db_models import DBSyncCheckpoint
 from src.infrastructure.persistence.repositories.base_repo import (
     BaseModelMapper,

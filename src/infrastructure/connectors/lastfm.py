@@ -29,13 +29,13 @@ from attrs import define, field
 import backoff
 import pylast
 
+from src.config import get_config, get_logger, resilient_operation
 from src.domain.entities import (
     Artist,
     PlayRecord,
     Track,
     create_lastfm_play_record,
 )
-from src.infrastructure.config import get_config, get_logger, resilient_operation
 from src.infrastructure.connectors.base_connector import (
     BaseMetricResolver,
     BatchProcessor,
@@ -270,6 +270,19 @@ class LastFMConnector:
         base=get_config("LASTFM_API_RETRY_BASE_DELAY"),
         max_value=get_config("LASTFM_API_RETRY_MAX_DELAY"),
         jitter=backoff.full_jitter,
+        on_backoff=lambda details: logger.warning(
+            f"LastFM API retry {details['tries']}/{get_config('LASTFM_API_RETRY_COUNT')}",
+            wait_time=f"{details.get('wait', 0):.1f}s",
+            elapsed=f"{details.get('elapsed', 0):.1f}s",
+            target=details["target"].__name__,
+            exception=str(details.get("exception", "Unknown")),
+        ),
+        on_giveup=lambda details: logger.error(
+            f"LastFM API gave up after {details['tries']} attempts",
+            total_elapsed=f"{details.get('elapsed', 0):.1f}s",
+            target=details["target"].__name__,
+            final_exception=str(details.get("exception", "Unknown")),
+        ),
     )
     async def get_lastfm_track_info(
         self,
@@ -284,6 +297,18 @@ class LastFMConnector:
 
         user = lastfm_username or self.lastfm_username
 
+        # Log API call start with lookup method
+        lookup_method = "MBID" if mbid else "artist/title"
+        lookup_params = (
+            {"mbid": mbid} if mbid else {"artist": artist_name, "title": track_title}
+        )
+        logger.debug(
+            "LastFM API call starting",
+            method=lookup_method,
+            params=lookup_params,
+            username=user,
+        )
+
         try:
             # Fetch track using appropriate method
             _, _, track = await self._fetch_track(mbid, artist_name, track_title)
@@ -292,15 +317,53 @@ class LastFMConnector:
             track.username = user
 
             # Convert to domain object
-            return await asyncio.to_thread(LastFMTrackInfo.from_pylast_track, track)
+            result = await asyncio.to_thread(LastFMTrackInfo.from_pylast_track, track)
+
+            # Log successful API call with key metadata
+            logger.debug(
+                "LastFM API call successful",
+                method=lookup_method,
+                artist=result.lastfm_artist_name
+                if result.lastfm_artist_name
+                else "Unknown",
+                title=result.lastfm_title if result.lastfm_title else "Unknown",
+                playcount=result.lastfm_user_playcount,
+                listeners=result.lastfm_listeners,
+            )
+
+            return result
 
         except ValueError:
+            logger.error(
+                "LastFM API call failed - ValueError",
+                method=lookup_method,
+                params=lookup_params,
+                username=user,
+            )
             raise
         except pylast.WSError as e:
             if "not found" in str(e).lower():
+                logger.debug(
+                    "LastFM API call - track not found",
+                    method=lookup_method,
+                    params=lookup_params,
+                    username=user,
+                )
                 return LastFMTrackInfo.empty()
+            logger.error(
+                f"LastFM API call failed - WSError: {e}",
+                method=lookup_method,
+                params=lookup_params,
+                username=user,
+            )
             raise
-        except Exception:
+        except Exception as e:
+            logger.error(
+                f"LastFM API call failed - Unexpected error: {e}",
+                method=lookup_method,
+                params=lookup_params,
+                username=user,
+            )
             return LastFMTrackInfo.empty()
 
     @resilient_operation("batch_get_track_info")
@@ -321,24 +384,34 @@ class LastFMConnector:
         async def process_track(track: Track) -> tuple[int, LastFMTrackInfo | None]:
             """Process a single track."""
             if track.id is None:
+                logger.warning(f"Track has no ID, skipping: {track.title}")
                 return -1, None
 
             # Try MusicBrainz ID first, fall back to artist/title
             mbid = track.connector_track_ids.get("musicbrainz")
             artist_name = track.artists[0].name if track.artists else None
 
-            if mbid:
-                return track.id, await self.get_lastfm_track_info(
-                    mbid=mbid,
-                    lastfm_username=user,
-                )
-            elif artist_name:
-                return track.id, await self.get_lastfm_track_info(
-                    artist_name=artist_name,
-                    track_title=track.title,
-                    lastfm_username=user,
-                )
-            else:
+            try:
+                if mbid:
+                    result = await self.get_lastfm_track_info(
+                        mbid=mbid,
+                        lastfm_username=user,
+                    )
+                    return track.id, result
+                elif artist_name:
+                    result = await self.get_lastfm_track_info(
+                        artist_name=artist_name,
+                        track_title=track.title,
+                        lastfm_username=user,
+                    )
+                    return track.id, result
+                else:
+                    logger.warning(
+                        f"No lookup method available for track {track.id}: {track.title}"
+                    )
+                    return track.id, LastFMTrackInfo.empty()
+            except Exception as e:
+                logger.error(f"Error processing track {track.id}: {e}")
                 return track.id, LastFMTrackInfo.empty()
 
         # Create a wrapper for progress callback to ensure proper task context
@@ -657,6 +730,15 @@ def _extract_metric(obj: Any, field_names: list[str]) -> int | None:
     for field_name in field_names:
         if hasattr(obj, field_name) and getattr(obj, field_name) is not None:
             return getattr(obj, field_name)
+
+    # Then check service_data dictionary access (used by enricher)
+    if hasattr(obj, "service_data") and obj.service_data:
+        for field_name in field_names:
+            if (
+                field_name in obj.service_data
+                and obj.service_data[field_name] is not None
+            ):
+                return obj.service_data[field_name]
 
     # Then check metadata dictionary access
     if hasattr(obj, "metadata"):

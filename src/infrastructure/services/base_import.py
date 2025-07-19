@@ -7,8 +7,8 @@ from typing import Any
 from uuid import uuid4
 
 from src.application.utilities.results import ImportResultData, ResultFactory
+from src.config import get_logger
 from src.domain.entities import OperationResult, TrackPlay
-from src.infrastructure.config import get_logger
 from src.infrastructure.persistence.repositories.track import TrackRepositories
 
 logger = get_logger(__name__)

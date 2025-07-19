@@ -24,7 +24,7 @@ from attrs import define, field
 import backoff
 import musicbrainzngs
 
-from src.infrastructure.config import get_config, get_logger, resilient_operation
+from src.config import get_config, get_logger, resilient_operation
 from src.infrastructure.connectors.base_connector import BatchProcessor
 
 # Get contextual logger with service binding

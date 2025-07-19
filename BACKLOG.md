@@ -1,11 +1,30 @@
 
 # Project Narada Backlog
 
-**Current Version**: 0.2.3 ✅ **COMPLETE**  
-**Status**: Clean Architecture initiative 100% complete with sophisticated playlist update system, ready for advanced feature development
+**Current Development Version**: 0.2.4
+**Current Initiative**: Playlist Workflow Expansion
 
-## Overview
-Narada has successfully transformed from a simple music sync tool into a sophisticated workflow platform with world-class Clean Architecture foundations. We've completed cross-service synchronization, play history imports, comprehensive architectural modernization, matcher system transformation, and sophisticated playlist update capabilities. The complete Clean Architecture initiative positions us perfectly for advanced workflow capabilities, web API development, and modern music platform features.
+This document is a high level overview of Project Narada's development backlog/roadmap. It's mean to primarily explain the why, at a product manager level, of our future features. It also includes high level architectural decisions, with a focus on the why of those descriptions.
+
+[[SCRATCHPAD]] - The SRACTHPAD.md file is where full detail of development tasks are tracked, vs BACKLOG.md (this document), which is for strategic and high level architectural roadmap.
+
+## Reference Guide 📋
+
+### Effort Estimates
+| Size    | Complexity Factors           | Criteria                                                                       |
+| ------- | ---------------------------- | ------------------------------------------------------------------------------ |
+| **XS**  | Well known, isolated         | Minimal unknowns, fits existing components, no dependencies                    |
+| **S**   | A little integration         | Simple feature, 1–2 areas touched, low risk, clear requirements                |
+| **M**   | Cross-module feature         | 3–4 areas involved, small unknowns, minor dependencies                         |
+| **L**   | Architectural impact         | ≥3 subsystems, integrations, external APIs, moderate unknowns                  |
+| **XL**  | High unknowns & coordination | Cross-team, backend + frontend + infra, regulatory/security concerns           |
+| **XXL** | High risk & exploration      | New platform, performance/security domains, prototype-first, many dependencies |
+
+### Status Options
+- Not Started
+- In Progress
+- Blocked
+- Completed
 
 ## Completed Milestones ✅
 
@@ -28,25 +47,18 @@ Narada has successfully transformed from a simple music sync tool into a sophist
 - ✅ **Future-Ready**: Foundation for web APIs and modern frameworks
 
 **Clean Architecture Initiative Completed**:
-- ✅ **Phase 0: Project Structure Migration**: Migrated from legacy `/narada` to modern `/src` structure with consistent import paths
-- ✅ **Phase 1: Repository Interface Consolidation**: Unified repository contracts in domain layer, eliminated 5 duplicate protocols
-- ✅ **Phase 2: Service Layer Reorganization**: Moved business logic to application layer, deleted 7 redundant files, established proper CLI → Application → Domain flow
-- ✅ **Phase 3: Architecture Compliance & Quality**: Verified Clean Architecture principles, updated to Python 3.13 patterns, maintained full test coverage
-- ✅ **Phase 4: Modern Testing Architecture**: Replaced heavy async mocking with lightweight dependency injection, achieved 332/332 tests passing
-- ✅ **Phase 5: Matcher System Modernization**: Transformed 961-line monolithic matcher into modular provider pattern with comprehensive test coverage
-- ✅ **Phase 6: Workflow Node Architecture**: Created SavePlaylistUseCase with Command/Strategy patterns, simplified workflow nodes to delegators
-- ✅ **Phase 7: Sophisticated Playlist Updates**: Implemented differential UpdatePlaylistUseCase with 29 comprehensive tests and full workflow integration
+- ✅ **Epic 0: Project Structure Migration**: Migrated from legacy `/narada` to modern `/src` structure with consistent import paths
+- ✅ **Epic 1: Repository Interface Consolidation**: Unified repository contracts in domain layer, eliminated 5 duplicate protocols
+- ✅ **Epic 2: Service Layer Reorganization**: Moved business logic to application layer, deleted 7 redundant files, established proper CLI → Application → Domain flow
+- ✅ **Epic 3: Architecture Compliance & Quality**: Verified Clean Architecture principles, updated to Python 3.13 patterns, maintained full test coverage
+- ✅ **Epic 4: Modern Testing Architecture**: Replaced heavy async mocking with lightweight dependency injection, achieved 332/332 tests passing
+- ✅ **Epic 5: Matcher System Modernization**: Transformed 961-line monolithic matcher into modular provider pattern with comprehensive test coverage
+- ✅ **Epic 6: Workflow Node Architecture**: Created SavePlaylistUseCase with Command/Strategy patterns, simplified workflow nodes to delegators
+- ✅ **Epic 7: Sophisticated Playlist Updates**: Implemented differential UpdatePlaylistUseCase with 29 comprehensive tests and full workflow integration
 
-**Detailed Migration Results**:
-        - ✅ **Future-Ready**: Foundation established for FastAPI web interface with zero business logic changes needed
-        - ✅ **Migration Complete**: Successfully migrated all imports from `narada.*` to `src.*` structure
-        - ✅ **Old Code Removed**: Deleted legacy `/narada` directory after comprehensive verification
-        - ✅ **Core Tests Passing**: 314/332 tests passing for CLI and integration functionality
-        - **Result**: Clean Architecture migration complete, ready for web interface development
+#### Clean Architecture Epics:
 
-**Remaining Clean Architecture Work**:
-
-- [x] **Modern Testing Architecture** (Phase 4)
+- [x] **Modern Testing Architecture** (Epic 4)
     - Effort: M
     - What: Replace heavy async mocking with lightweight dependency injection patterns
     - Why: Brittle workflow tests were blocking progress due to complex mocking anti-patterns. Clean dependency injection enables fast, maintainable tests while preserving architectural boundaries.
@@ -57,7 +69,7 @@ Narada has successfully transformed from a simple music sync tool into a sophist
         - **Performance**: <10 second test runtime achieved
         - **Approach**: Function-level dependency injection with pytest fixtures
 
-- [x] **Matcher System Modernization** (Phase 5)
+- [x] **Matcher System Modernization** (Epic 5)
     - Effort: L
     - What: Decompose monolithic matcher into modular provider pattern
     - Why: Current 961-line matcher violates Single Responsibility Principle, mixing domain logic with service-specific API calls. Clean Architecture separation enables easier testing, maintenance, and extension to new music services.
@@ -70,7 +82,7 @@ Narada has successfully transformed from a simple music sync tool into a sophist
         - **Test Coverage**: 19 comprehensive tests (11 domain + 8 Prefect progress)
         - **Performance**: Maintained batch processing efficiency with zero breaking changes
 
-- [x] **Workflow Node Architecture** (Phase 6)
+- [x] **Workflow Node Architecture** (Epic 6)
     - Effort: M
     - What: Extract playlist persistence logic into reusable Application Use Cases
     - Why: Current workflow nodes contain complex business logic that should live in Application layer. Proper separation prepares for modern workflow engines and web interface integration.
@@ -83,7 +95,7 @@ Narada has successfully transformed from a simple music sync tool into a sophist
         - **Test Coverage**: 11 comprehensive unit tests + integration tests
         - **Zero Functionality Loss**: All existing APIs maintain backward compatibility
 
-- [x] **Sophisticated Playlist Updates** (Phase 7)
+- [x] **Sophisticated Playlist Updates** (Epic 7)
     - Effort: L
     - What: Create UpdatePlaylistUseCase for differential playlist updates with minimal operations
     - Why: Need ability to update existing playlists while preserving Spotify track addition timestamps through smart add/remove/reorder operations
@@ -100,16 +112,14 @@ Narada has successfully transformed from a simple music sync tool into a sophist
 ### 🎉 Clean Architecture Migration: COMPLETE
 
 **Date Completed**: 2025-07-16  
-**Duration**: 7 phases completed with zero breaking changes  
-**Result**: World-class Python codebase ready for advanced features
 
 **Key Achievements**:
-- ✅ **100% Clean Architecture Compliance**: Proper Domain/Application/Infrastructure separation
-- ✅ **Zero Technical Debt**: Ruthlessly DRY implementation with single responsibility principle
-- ✅ **Modern Python 3.13 Patterns**: Future-ready codebase with advanced type safety
-- ✅ **Comprehensive Test Coverage**: 29 new tests for playlist updates + existing coverage maintained
-- ✅ **Production-Ready Features**: Sophisticated playlist update system exceeding commercial platforms
-- ✅ **Proven Infrastructure**: Leverages existing spotipy, rate limiting, and resilient operation patterns
+- **100% Clean Architecture Compliance**: Proper Domain/Application/Infrastructure separation
+- **Zero Technical Debt**: Ruthlessly DRY implementation with single responsibility principle
+- **Modern Python 3.13 Patterns**: Future-ready codebase with advanced type safety
+- **Comprehensive Test Coverage**: 29 new tests for playlist updates + existing coverage maintained
+- **Production-Ready Features**: Sophisticated playlist update system exceeding commercial platforms
+- **Proven Infrastructure**: Leverages existing spotipy, rate limiting, and resilient operation patterns
 
 **Strategic Benefits Delivered**:
 1. **Developer Productivity**: Clear separation of concerns enables rapid feature development
@@ -118,21 +128,106 @@ Narada has successfully transformed from a simple music sync tool into a sophist
 4. **Quality Assurance**: Comprehensive test coverage ensures reliability
 5. **Future-Ready**: Foundation for FastAPI web interface, microservices, and modern deployment
 
-**Next Phase Ready**: Advanced features development can begin immediately on this solid foundation.
+**Next Phase Ready**: Advanced workflow features development can begin immediately on this solid foundation.
 
 ---
 
 ## Planned Roadmap 🚀
 
-### v0.2.4: Play History Workflow Integration
-**Goal**: Enable advanced play-based filtering and discovery workflows
+### v0.2.4: Playlist Workflow Expansion
+**Goal**: Enable advanced playlist workflows, including using plays for filtering and discovery workflows
 
-#### Play History Analysis Capabilities
-- [ ] **Play History Filter and Sort Extensions**
+#### Foundational Architectural Refinements (Pre-Feature Work)
+**Goal**: Solidify the Clean Architecture implementation to ensure new features are built on a stable, testable, and maintainable foundation. This work must be completed before new feature development begins.  
+**Note**: The 'Refactor Use Cases' task is the prerequisite for the other two refactorings and should be tackled first.
+
+#### Technical Debt Resolution (Critical Pre-Feature Work)
+**Goal**: Address identified technical debt markers and temporary implementations to maintain code quality and architectural integrity before adding new features.
+
+- [ ] **Refactor Use Cases for True Dependency Inversion**
     - Effort: M
-    - What: Extend existing filter and sorter node categories to support play history metrics
+    - What: Refactor all Application Use Cases (e.g., `SavePlaylistUseCase`, `UpdatePlaylistUseCase`) to be pure orchestrators. They must receive repository and strategy *interfaces* (protocols) via dependency injection instead of creating concrete instances or accessing the database session directly.
+    - Why: This is the most critical step to fully realize the benefits of Clean Architecture. It will make our business logic 100% independent of the database, dramatically improving testability (no more mocking `get_session`), and making the system more adaptable to future changes. This directly addresses the "Application Layer Repository Abstractions" deferred item.
+    - Dependencies: Clean Architecture Foundation
+    - Status: Not Started
+    - Notes:
+        - Define repository and strategy protocols in the `domain` layer.
+        - Update use cases to accept these protocols in their `__init__` methods.
+        - Wire up concrete implementations (e.g., `SQLAlchemyTrackRepository`) at the outermost layer (CLI command or workflow node).
+
+- [ ] **Clarify Enrichment vs. Matching Data Flow**
+    - Effort: M
+    - What: Decouple the expensive process of *identity resolution* (matching new, unknown tracks) from the cheap process of *metadata enrichment* (refreshing data for known tracks).
+    - Why: The current `MatcherService` blurs these two distinct concerns. A clear separation will make the system more efficient (avoids re-matching known tracks), easier to reason about, and simplifies the data flow for both new and existing tracks.
+    - Dependencies: Clean Architecture Foundation
+    - Status: Not Started
+    - Notes:
+        - Refactor `MatcherService` to only handle *identity resolution* for unknown tracks.
+        - Create a new, simple `EnricherService` or use case to refresh metadata for known tracks based on a `last_updated` timestamp.
+        - This simplifies components like `MetadataFreshnessController` and makes the data flow more explicit and efficient.
+
+- [ ] **Consolidate Playlist Persistence Logic**
+    - Effort: S
+    - What: Give `SavePlaylistUseCase` and `UpdatePlaylistUseCase` single, non-overlapping responsibilities. `SavePlaylistUseCase` should only persist to the *internal* database, while `UpdatePlaylistUseCase` handles the *differential update* against external services.
+    - Why: The current `SavePlaylistUseCase` handles both creation and updates, which is confusing and not DRY. Clarifying these roles will make the system's command patterns cleaner and easier for new developers to understand.
+    - Dependencies: Clean Architecture Foundation
+    - Status: Not Started
+    - Notes:
+        - Rename `SavePlaylistUseCase` to `PersistPlaylistUseCase` to better reflect its new, single responsibility.
+        - `PersistPlaylistUseCase` will only handle writing a `Playlist` domain object to the internal database.
+        - `UpdatePlaylistUseCase` will be the sole component responsible for calculating and executing differential updates against external services.
+
+- [ ] **Complete UpdatePlaylistUseCase Implementation**
+    - Effort: L
+    - What: Replace placeholder implementations and simplified logic with production-ready Spotify API operations and sophisticated reordering algorithms.
+    - Why: Current implementation contains TODOs for critical features including sophisticated reordering logic, ISRC/metadata matching strategies, and actual Spotify API operations (currently creates new playlists instead of updating existing ones).
+    - Dependencies: Clean Architecture Foundation
+    - Status: Not Started
+    - Notes:
+        - **TODO(#123)**: Implement sophisticated reordering logic for playlist updates
+        - **TODO(#124)**: Implement ISRC and metadata matching strategies beyond simple Spotify ID matching
+        - **TODO(#125)**: Replace placeholder with actual Spotify API operations (add/remove/reorder tracks)
+        - Address "simplified positioning for now" and "move operations simplified for now" in differential algorithm
+        - File: `src/application/use_cases/update_playlist.py:261,266,292,512,549`
+
+- [ ] **Repository Interface Type Safety**
+    - Effort: S
+    - What: Replace `Any` type usage in domain repository interfaces with proper domain entity types to eliminate type safety warnings.
+    - Why: Current domain layer uses `Any` types to avoid circular imports, violating type safety principles and reducing IDE support and error detection.
+    - Dependencies: None
+    - Status: Not Started  
+    - Notes:
+        - File: `src/domain/repositories/interfaces.py:11`
+        - Use forward references or restructure imports to avoid circular dependencies
+        - Ensure all repository protocols are properly typed with domain entities
+
+- [ ] **Workflow Context Architecture Cleanup**
+    - Effort: M
+    - What: Replace the acknowledged "hack" in LazyRepositoryProvider with proper Clean Architecture dependency injection patterns.
+    - Why: Current workflow context uses a self-described "hack" for repository provisioning that creates technical debt and violates Clean Architecture dependency inversion principles.
+    - Dependencies: Refactor Use Cases for True Dependency Inversion
+    - Status: Not Started
+    - Notes:
+        - File: `src/application/workflows/context.py:166`
+        - Implement proper dependency injection container for workflow execution
+        - Align with Clean Architecture patterns established in use case refactoring
+        - Remove session management responsibility from workflow context
+
+#### Play History Analysis Epics
+- [x] **Informative and Easy-to-use CLI**
+    - Effort: S
+    - What: Improve usability of the CLI while ensuring we won't need to refactor when creating the web interface vie FastAPI
+    - Why: Before we add more functionality, we need to ensure our CLI is up to the task of handling more options. users should clearly see what they can do, and be able to accomplish those things with minimal typing.
+    - Dependencies: n/a
+    - Status: Done
+    - Notes:
+        - 
+
+- [ ] **Play History Filter and Sort**
+    - Effort: M
+    - What: Extend existing filter and sorter node categories to support play history metrics based on narada's database of plays
     - Why: Users need granular control over finding tracks based on listening behavior - frequently/rarely played tracks, seasonal patterns, discovery gaps, and listening recency for advanced playlist curation
-    - Dependencies: v0.2.3
+    - Dependencies: n/a
     - Status: Not Started
     - Notes:
         - Leverage existing filter/sorter architecture in `TRANSFORM_REGISTRY`
@@ -142,6 +237,31 @@ Narada has successfully transformed from a simple music sync tool into a sophist
         - Include relative time periods (last 30 days, past week, this month)
         - Build on existing metric-based filtering patterns
 
+- [ ] **Advanced Transformer Workflow nodes**
+    - Effort: M
+    - What: Implement additional transformer nodes for workflow system
+    - Why: More transformation options enable more powerful workflows
+    - Dependencies: None
+    - Status: Not Started
+    - Notes:
+        - Implement combining operations with different strategies
+        - Add time-based transformers (seasonal, time of day)
+        - Include randomization with optional weighting for sorting a playlist
+        - Include selection of just the first X or last X from a tracklist
+
+- [ ] **Enhanced Playlist Naming**
+    - Effort: M
+    - What: Add update and parameterization capability to destination nodes that create playlists
+    - Why: Enable dynamic playlist naming and descriptions
+    - Dependencies: None 
+    - Status: Not Started
+    - Notes:
+        - Support template parameters in playlist names
+        - Allow using source playlist names in new playlist names/descriptions
+        - Add the ability to append date/time to names and descriptions
+        - Implement metadata insertion into descriptions
+        - Add validation to prevent invalid characters
+    
 - [ ] **Discovery Workflow Templates**
     - Effort: S
     - What: Create pre-built workflow templates leveraging new play history capabilities
@@ -156,7 +276,7 @@ Narada has successfully transformed from a simple music sync tool into a sophist
 ### v0.3.0: Playlist Ownership & Management
 **Goal**: Empower users with full ownership and control over their Spotify playlists through a secure, local backup and an intelligent synchronization system.
 
-#### Core Playlist Management
+#### Core Playlist Management Epics
 - [ ] **Discover Spotify Playlists**
     - Effort: M
     - What: Add a `narada spotify playlists --list` command to display a user's Spotify playlists, including name, owner (self/other), and track count.
@@ -186,13 +306,13 @@ Narada has successfully transformed from a simple music sync tool into a sophist
     - Why: Maintains up-to-date backups, protecting against data loss and powering downstream workflows. Efficiency is key for user experience.
     - CLI Design:
         - Use `snapshot_id` to minimize API calls: compare local and remote IDs, fetching full track lists only when necessary.
-        - Provide concise feedback: "Synced <playlist_name> (<changes>), ...".
+        - Provide concise feedback: `"Synced <playlist_name> (<changes>), ..."`.
         - Implement a `--force` option to bypass `snapshot_id` check and force a full refresh.
         - Web UI Consideration: This sync operation could be triggered by a "Sync Now" button in the web UI, or run periodically in the background.
     - Dependencies: Track Spotify Playlists
     - Status: Not Started
 
-#### Future Enhancements (Consider for later milestones)
+#### Future Enhancement Epics (Consider for later milestones)
 - [ ] **Two-Way Playlist Sync (Advanced)**
     - Effort: XL
     - What: Explore and design a system for true two-way synchronization of playlists, handling potential conflicts between local and Spotify versions.
@@ -205,21 +325,10 @@ Narada has successfully transformed from a simple music sync tool into a sophist
     - Why: Empowers users to manage complex playlist evolution scenarios.
     - Notes: This could be a valuable addition in conjunction with a two-way sync system or as a standalone feature.
 
-### v0.3.0: User Experience & Reliability
+### v0.3.1: User Experience and Reliability
 **Goal**: Polish the user experience and improve system reliability
 
-#### Enhanced CLI Experience  
-- [ ] **Enhanced Error Handling**
-    - Effort: M
-    - What: Improve error handling across workflow execution and API operations
-    - Why: Better user experience with actionable error messages
-    - Dependencies: v0.2.4
-    - Status: Not Started
-    - Notes:
-        - Add retry logic for transient API failures
-        - Provide specific guidance for common error scenarios
-        - Implement graceful degradation for partial failures
-        - Add error context and suggestions
+#### Enhanced CLI Experience Epic
 
 - [ ] **Shell Completion Support**
     - Effort: S
@@ -245,10 +354,10 @@ Narada has successfully transformed from a simple music sync tool into a sophist
 
 ---
 
-### v0.5.0: Core Functionality Improvements
+### v0.4.0: Core Functionality Improvements
 **Goal**: Essential functionality improvements based on user feedback
 
-#### Enhanced Capabilities
+#### Enhanced Capabilities Epics
 - [ ] **Manual Entity Resolution Override**
     - Effort: M
     - What: Add ability for users to manually create and edit track matches
@@ -275,38 +384,12 @@ Narada has successfully transformed from a simple music sync tool into a sophist
         - Report service-specific rate limiting information
         - Include estimated completion time
 
-- [ ] **Enhanced Destination Nodes**
-    - Effort: M
-    - What: Add update and parameterization capability to destination nodes
-    - Why: Enable dynamic playlist naming and descriptions
-    - Dependencies: None 
-    - Status: Not Started
-    - Notes:
-        - Support template parameters in playlist names
-        - Allow using source playlist names in new playlist names/descriptions
-        - Add date/time formatting options
-        - Implement track count and metadata insertion
-        - Add validation to prevent invalid characters
-        - Create nodes that update Spotify and internal playlists with append/replace options
-
-- [ ] **Advanced Transformers**
-    - Effort: M
-    - What: Implement additional transformer nodes for workflow system
-    - Why: More transformation options enable more powerful workflows
-    - Dependencies: None
-    - Status: Not Started
-    - Notes:
-        - Implement merging operations with different strategies
-        - Add time-based transformers (seasonal, time of day)
-        - Support user preference learning
-        - Include randomization with weighting
-
 ---
 
-### v0.7.0: API-First Interface with Workflow Visualization  
+### v0.5.0: API-First Interface with Workflow Visualization  
 **Goal**: Transform Narada into a service-oriented platform with elegant workflow visualization
 
-#### Modern Web Interface Foundation
+#### Modern Web Interface Foundation Epics
 - [ ] **FastAPI Service Implementation**
     - Effort: M
     - What: Create FastAPI service exposing core workflow operations
@@ -401,15 +484,15 @@ Narada has successfully transformed from a simple music sync tool into a sophist
 
 ---
 
-### v0.8.0: Interactive Workflow Editor
+### v0.6.0: Interactive Workflow Editor
 **Goal**: Full editing capabilities with intuitive graphical interface
 
-#### Interactive Editing System
+#### Interactive Editing System Epics
 - [ ] **Drag-and-Drop Node Creation**
     - Effort: M
     - What: Implement drag-and-drop node creation from node palette
     - Why: Need intuitive workflow creation experience
-    - Dependencies: v0.5.0
+    - Dependencies: fastapi
     - Status: Not Started
     - Notes:
         - Create node palette component
@@ -422,7 +505,7 @@ Narada has successfully transformed from a simple music sync tool into a sophist
     - Effort: L
     - What: Create dynamic configuration panel for node parameters
     - Why: Users need to configure node behavior without JSON editing
-    - Dependencies: v0.5.0
+    - Dependencies: fastapi
     - Status: Not Started
     - Notes:
         - Generate form from node schema
@@ -472,15 +555,15 @@ Narada has successfully transformed from a simple music sync tool into a sophist
 
 ---
 
-### v0.9.0: LLM-Assisted Workflow Creation
+### v0.7.0: LLM-Assisted Workflow Creation
 **Goal**: Natural language workflow creation with LLM integration
 
-#### AI-Powered Creation
+#### AI-Powered Creation Epics
 - [ ] **LLM Integration Endpoint**
     - Effort: M
     - What: Create API endpoint for LLM-assisted workflow generation
     - Why: Foundation for natural language workflow creation
-    - Dependencies: v0.6.0
+    - Dependencies: fastapi implementaiton
     - Status: Not Started
     - Notes:
         - Implement secure LLM API wrapper
@@ -546,12 +629,12 @@ Narada has successfully transformed from a simple music sync tool into a sophist
 ### v1.0.0: Production-Ready Workflow Platform
 **Goal**: Transform into production-ready platform with robust user management
 
-#### Production Infrastructure
+#### Production Infrastructure Epics
 - [ ] **User Authentication System**
     - Effort: M
     - What: Implement secure authentication with JWT and role-based access
     - Why: Need proper user management for multi-user support
-    - Dependencies: v0.7.0
+    - Dependencies: tbd
     - Status: Not Started
     - Notes:
         - Add JWT authentication
@@ -603,7 +686,7 @@ Narada has successfully transformed from a simple music sync tool into a sophist
 
 ## Future Considerations 💭
 
-### Quality of Life Improvements
+### Quality of Life Improvement Epics
 - [ ] **Background Sync Capabilities**
     - Effort: M
     - What: Enable scheduled background synchronization of play history and likes
@@ -661,18 +744,19 @@ Narada has successfully transformed from a simple music sync tool into a sophist
 
 ---
 
-## Reference Guide 📋
+## Deferred Clean Architecture Improvements
 
-### Effort Estimates
-- XS: < 1 day
-- S: 1-2 days
-- M: 3-5 days
-- L: 1-2 weeks
-- XL: 2-4 weeks
-- XXL: 1+ months
+### Future 0.2.x Development Items (Deferred)
+- [ ] **Domain Layer Logging Abstraction**
+    - Effort: S
+    - What: Create domain logging interface to remove infrastructure dependency from domain layer
+    - Why: Current domain layer imports infrastructure logging, violating Clean Architecture
+    - Dependencies: None
+    - Status: Deferred
+    - Notes:
+        - Create `src/domain/interfaces/logger.py` protocol
+        - Update `src/domain/transforms/core.py` to use dependency injection
+        - Create infrastructure logger adapter
+        - Not critical for current functionality, defer to focus on performance issues
 
-### Status Options
-- Not Started
-- In Progress
-- Blocked
-- Completed
+---

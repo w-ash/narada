@@ -10,8 +10,8 @@ Clean Architecture compliant - uses dependency injection for external concerns.
 from collections.abc import Awaitable, Callable
 
 from src.application.use_cases.match_tracks import match_tracks
+from src.config import get_logger
 from src.domain.entities.track import TrackList
-from src.infrastructure.config import get_logger
 from src.infrastructure.connectors import CONNECTORS
 
 from .destination_nodes import DESTINATION_HANDLERS
@@ -166,7 +166,6 @@ class WorkflowNodeFactory:
             connector_instance = enricher_config["factory"](node_config)
 
             # Create repository instance for matcher (short-lived for workflow execution)
-            from src.application.use_cases.match_tracks import match_tracks
             from src.infrastructure.persistence.database.db_connection import (
                 get_session,
             )
@@ -369,6 +368,10 @@ def create_enricher_node(config: dict) -> NodeFn:
         ctx = NodeContext(context)
         tracklist = ctx.extract_tracklist()
 
+        logger.info(
+            f"Starting {enricher_type} enrichment for {len(tracklist.tracks)} tracks"
+        )
+
         # Initialize connector instance
         connector_instance = enricher_config["factory"](node_config)
 
@@ -379,64 +382,39 @@ def create_enricher_node(config: dict) -> NodeFn:
         async with get_session() as session:
             track_repos = TrackRepositories(session)
 
-            # Resolve track identities through matcher service
-            match_results = await match_tracks(
+            # Get freshness configuration for this enricher
+            max_age_hours = node_config.get("max_age_hours")
+            if max_age_hours is None:
+                # Get default freshness requirement from config
+                from src.config import get_config
+
+                config_key = f"ENRICHER_DATA_FRESHNESS_{enricher_type.upper()}"
+                max_age_hours = get_config(config_key)
+
+            if max_age_hours is not None:
+                logger.info(
+                    f"Using data freshness requirement: {max_age_hours} hours for {enricher_type}"
+                )
+
+            # Use the new TrackMetadataEnricher for clean separation of concerns
+            from src.infrastructure.services.track_metadata_enricher import (
+                TrackMetadataEnricher,
+            )
+
+            enricher = TrackMetadataEnricher(track_repos)
+
+            enriched, metrics = await enricher.enrich_tracks(
                 tracklist,
                 enricher_type,
                 connector_instance,
-                track_repos,
+                enricher_config["extractors"],
+                max_age_hours,
             )
-
-        # Extract configured metrics from match results
-        metrics = {}
-
-        for attr in config.get("attributes", []):
-            extractor = enricher_config["extractors"].get(attr)
-            values = {}
-
-            # Extract metrics from successful matches
-            for track_id, result in match_results.items():
-                if not result.success or track_id is None:
-                    continue
-
-                try:
-                    # Extract value using the appropriate method based on the attribute
-                    if attr in result.service_data:
-                        # Direct access from service_data if available there
-                        value = result.service_data.get(attr)
-                    elif extractor:
-                        # Use configured extractor for standard attributes
-                        value = extractor(result)
-                    else:
-                        # Skip if no extractor and not in service_data
-                        continue
-
-                    if value is not None:
-                        # Use integer track IDs consistently
-                        values[track_id] = value
-                except Exception as e:
-                    logger.debug(
-                        f"Failed to extract attribute '{attr}' for track {track_id}: {e}"
-                    )
-
-            if values:
-                metrics[attr] = values
-
-        # Attach metrics to tracklist
-        if metrics:
-            current_metrics = tracklist.metadata.get("metrics", {})
-            enriched = tracklist.with_metadata(
-                "metrics",
-                {**current_metrics, **metrics},
-            )
-        else:
-            enriched = tracklist
 
         return {
             "tracklist": enriched,
-            "match_results": match_results,
             "operation": f"{enricher_type}_enrichment",
-            "metrics_count": len(metrics),
+            "metrics_count": sum(len(values) for values in metrics.values()),
         }
 
     return node_impl
