@@ -16,7 +16,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, TypeVar, cast
 
-from toolz import compose_left, curry
+from toolz import compose_left, curry, get_in
 
 from src.config import get_logger
 
@@ -660,3 +660,283 @@ def set_description(
         )
 
     return transform(playlist) if playlist is not None else transform
+
+
+# === Play History Filtering ===
+
+
+@curry
+def time_range_predicate(
+    days_back: int | None = None,
+    after_date: datetime | None = None,
+    before_date: datetime | None = None,
+) -> Callable[[datetime | None], bool]:
+    """Create time-based predicates using toolz functional utilities.
+
+    Args:
+        days_back: Number of days back from current time (overrides after_date)
+        after_date: Include items after this date (inclusive)
+        before_date: Include items before this date (exclusive)
+
+    Returns:
+        Predicate function that tests if a datetime falls within the range
+    """
+    from datetime import timedelta
+
+    # Determine time boundaries
+    if days_back is not None:
+        start_time = datetime.now(UTC) - timedelta(days=days_back)
+        end_time = before_date or datetime.now(UTC)
+    else:
+        start_time = after_date
+        end_time = before_date
+
+    def time_predicate(dt: datetime | None) -> bool:
+        if dt is None:
+            return False
+        if start_time and dt < start_time:
+            return False
+        return not (end_time and dt >= end_time)
+
+    return time_predicate
+
+
+@curry
+def filter_by_time_criteria(
+    metadata_key: str,
+    days_back: int | None = None,
+    after_date: datetime | None = None,
+    before_date: datetime | None = None,
+    include_missing: bool = True,
+    tracklist: TrackList | None = None,
+) -> Callable[[TrackList], TrackList] | TrackList:
+    """Filter tracks by time-based criteria using existing predicate pattern.
+
+    Args:
+        metadata_key: Key in tracklist metadata containing time data (e.g. "last_played_dates")
+        days_back: Number of days back from current time (overrides after_date)
+        after_date: Include tracks with time after this date
+        before_date: Include tracks with time before this date
+        include_missing: Whether to include tracks without time data
+        tracklist: Optional tracklist to transform immediately
+
+    Returns:
+        Transformation function or transformed tracklist if provided
+    """
+
+    # Create time predicate using toolz
+    time_pred: Callable[[datetime | None], bool] = time_range_predicate(
+        days_back, after_date, before_date
+    )  # type: ignore[assignment]
+
+    def track_time_predicate(track: Track, current_tracklist: TrackList) -> bool:
+        if not track.id:
+            return include_missing
+
+        # Use toolz get_in for safer nested access
+        time_data = get_in([metadata_key, track.id], current_tracklist.metadata)
+
+        if time_data is None:
+            return include_missing
+
+        # Handle string to datetime conversion with robust parsing
+        if isinstance(time_data, str):
+            try:
+                # Try ISO format first (most common)
+                time_data = datetime.fromisoformat(time_data)
+            except ValueError:
+                try:
+                    # Try parsing as timestamp
+                    timestamp = float(time_data)
+                    time_data = datetime.fromtimestamp(timestamp, tz=UTC)
+                except (ValueError, TypeError):
+                    logger.debug(
+                        "Failed to parse time data",
+                        time_data=time_data,
+                        metadata_key=metadata_key,
+                    )
+                    return include_missing
+        elif not isinstance(time_data, datetime):
+            logger.debug(
+                "Invalid time data type",
+                time_data_type=type(time_data),
+                metadata_key=metadata_key,
+            )
+            return include_missing
+
+        return time_pred(time_data)
+
+    def transform(t: TrackList) -> TrackList:
+        """Apply time-based filtering using existing predicate infrastructure."""
+
+        # Create predicate function that captures current tracklist
+        def predicate_with_tracklist(track: Track) -> bool:
+            return track_time_predicate(track, t)
+
+        # Use existing filter_by_predicate with our time predicate
+        filter_func: Transform = filter_by_predicate(predicate_with_tracklist)  # type: ignore[assignment]
+        result: TrackList = filter_func(t)
+
+        # Add filter metadata
+        return result.with_metadata(
+            "time_filter_applied",
+            {
+                "metadata_key": metadata_key,
+                "days_back": days_back,
+                "after_date": after_date.isoformat() if after_date else None,
+                "before_date": before_date.isoformat() if before_date else None,
+                "include_missing": include_missing,
+                "original_count": len(t.tracks),
+                "filtered_count": len(result.tracks),
+                "removed_count": len(t.tracks) - len(result.tracks),
+            },
+        )
+
+    return transform(tracklist) if tracklist is not None else transform
+
+
+@curry
+def filter_by_play_history(
+    min_plays: int | None = None,
+    max_plays: int | None = None,
+    after_date: datetime | None = None,
+    before_date: datetime | None = None,
+    days_back: int | None = None,
+    days_forward: int | None = None,
+    include_missing: bool = False,
+    tracklist: TrackList | None = None,
+) -> Transform | TrackList:
+    """Filter tracks by play count and/or listening date constraints.
+
+    Unified filter that combines play count filtering with flexible date range options.
+    Supports both absolute dates and relative time ranges from current time.
+
+    Args:
+        min_plays: Minimum play count (inclusive)
+        max_plays: Maximum play count (inclusive)
+        after_date: Include tracks last played after this date
+        before_date: Include tracks last played before this date
+        days_back: Override after_date with relative time (days from now)
+        days_forward: Override before_date with relative time (days from now)
+        include_missing: Whether to include tracks with no play data
+        tracklist: Optional tracklist to transform immediately
+
+    Returns:
+        Transformation function or transformed tracklist if provided
+
+    Examples:
+        # Tracks played 5+ times in last month
+        filter_by_play_history(min_plays=5, days_back=30)
+
+        # Tracks played 1-3 times between specific dates
+        filter_by_play_history(
+            min_plays=1, max_plays=3,
+            after_date=datetime(2024, 1, 1),
+            before_date=datetime(2024, 3, 31)
+        )
+
+        # Never played tracks from last 6 months
+        filter_by_play_history(max_plays=0, days_back=180)
+    """
+    from datetime import timedelta
+
+    # Validate at least one constraint is specified
+    constraints = [
+        min_plays is not None,
+        max_plays is not None,
+        after_date is not None,
+        before_date is not None,
+        days_back is not None,
+        days_forward is not None,
+    ]
+    if not any(constraints):
+        raise ValueError(
+            "Must specify at least one constraint: "
+            "min_plays, max_plays, after_date, before_date, days_back, or days_forward"
+        )
+
+    def transform(t: TrackList) -> TrackList:
+        """Apply unified play history filtering."""
+        # Calculate effective date range
+        effective_after = None
+        effective_before = None
+
+        if days_back is not None:
+            effective_after = datetime.now(UTC) - timedelta(days=days_back)
+        elif after_date is not None:
+            effective_after = after_date
+
+        if days_forward is not None:
+            effective_before = datetime.now(UTC) + timedelta(days=days_forward)
+        elif before_date is not None:
+            effective_before = before_date
+
+        # Get play data from metadata (try both nested and flat structure)
+        play_counts = t.metadata.get("total_plays", {}) or t.metadata.get(
+            "metrics", {}
+        ).get("total_plays", {})
+        last_played_dates = t.metadata.get("last_played_dates", {}) or t.metadata.get(
+            "metrics", {}
+        ).get("last_played_dates", {})
+
+        def meets_play_history_criteria(track: Track) -> bool:
+            if not track.id:
+                return include_missing
+
+            # Apply play count constraints
+            if min_plays is not None or max_plays is not None:
+                play_count = play_counts.get(track.id, 0)
+
+                if min_plays is not None and play_count < min_plays:
+                    return False
+                if max_plays is not None and play_count > max_plays:
+                    return False
+
+            # Apply date constraints
+            if effective_after is not None or effective_before is not None:
+                last_played = last_played_dates.get(track.id)
+
+                if last_played is None:
+                    return include_missing
+
+                # Convert string to datetime if needed
+                if isinstance(last_played, str):
+                    try:
+                        last_played = datetime.fromisoformat(last_played)
+                    except ValueError:
+                        return include_missing
+
+                if effective_after is not None and last_played < effective_after:
+                    return False
+                if effective_before is not None and last_played >= effective_before:
+                    return False
+
+            return True
+
+        filtered_tracks = [
+            track for track in t.tracks if meets_play_history_criteria(track)
+        ]
+        result = t.with_tracks(filtered_tracks)
+
+        # Add comprehensive filter metadata
+        filter_metadata = {
+            "type": "unified_play_history",
+            "min_plays": min_plays,
+            "max_plays": max_plays,
+            "effective_after_date": effective_after.isoformat()
+            if effective_after
+            else None,
+            "effective_before_date": effective_before.isoformat()
+            if effective_before
+            else None,
+            "days_back": days_back,
+            "days_forward": days_forward,
+            "include_missing": include_missing,
+            "original_count": len(t.tracks),
+            "filtered_count": len(filtered_tracks),
+            "removed_count": len(t.tracks) - len(filtered_tracks),
+        }
+
+        return result.with_metadata("play_filter_applied", filter_metadata)
+
+    return transform(tracklist) if tracklist is not None else transform

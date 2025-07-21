@@ -4,7 +4,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from src.application.use_cases.match_tracks import match_tracks
 from src.application.utilities.results import ImportResultData, ResultFactory
 from src.config import get_logger
 from src.domain.entities import (
@@ -19,6 +18,7 @@ from src.domain.entities import (
 from src.infrastructure.connectors.lastfm import LastFMConnector
 from src.infrastructure.persistence.repositories.track import TrackRepositories
 from src.infrastructure.services.base_import import BaseImportService
+from src.infrastructure.services.track_identity_resolver import TrackIdentityResolver
 
 logger = get_logger(__name__)
 
@@ -474,13 +474,13 @@ class LastfmImportService(BaseImportService):
         if not tracks_for_matching:
             return {}
 
-        # Use existing matcher system to resolve tracks
+        # Use TrackIdentityResolver for clean architecture
         track_list = TrackList(tracks=tracks_for_matching)
-        match_results = await match_tracks(
+        identity_resolver = TrackIdentityResolver(self.repositories)
+        match_results = await identity_resolver.resolve_track_identities(
             track_list=track_list,
             connector="lastfm",
             connector_instance=self.lastfm_connector,
-            track_repos=self.repositories,
         )
 
         # Build index-based mapping

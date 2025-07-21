@@ -63,6 +63,7 @@ class TrackRepositories:
         from src.infrastructure.persistence.repositories.playlist import (
             PlaylistRepositories,
         )
+
         return PlaylistRepositories(self.session)
 
     async def get_track(self, id_type: str, id_value: str):

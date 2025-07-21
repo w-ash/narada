@@ -1,0 +1,52 @@
+{
+  "id": "test_play_history",
+  "name": "Test Play History Intelligence",
+  "description": "Test workflow demonstrating play history enrichment and filtering",
+  "version": "1.0",
+  "tasks": [
+    {
+      "id": "source_test_tracks",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "14GT9ahKyAR9SObC7GdwtO"
+      }
+    },
+    {
+      "id": "enrich_play_history",
+      "type": "enricher.play_history", 
+      "config": {
+        "metrics": ["total_plays", "last_played_dates", "period_plays"],
+        "period_days": 30
+      },
+      "upstream": ["source_test_tracks"]
+    },
+    {
+      "id": "filter_recently_played_tracks",
+      "type": "filter.by_play_history",
+      "config": {
+        "min_plays": 1,
+        "days_back": 7,
+        "include_missing": false
+      },
+      "upstream": ["enrich_play_history"]
+    },
+    {
+      "id": "sort_by_play_count",
+      "type": "sorter.by_metric",
+      "config": {
+        "metric_name": "total_plays",
+        "reverse": true
+      },
+      "upstream": ["filter_recently_played_tracks"]
+    },
+    {
+      "id": "limit_results",
+      "type": "selector.limit_tracks",
+      "config": {
+        "count": 10,
+        "method": "first"
+      },
+      "upstream": ["sort_by_play_count"]
+    }
+  ]
+}

@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 from prefect import flow, tags, task
 from prefect.artifacts import create_progress_artifact, update_progress_artifact
+from prefect.cache_policies import NONE
 from prefect.logging import get_run_logger
 
 # Prefect logging is configured through dependency injection in WorkflowContext
@@ -77,6 +78,7 @@ class TaskResult(TypedDict):
     retries=3,
     retry_delay_seconds=30,
     tags=["node"],
+    cache_policy=NONE,  # Disable caching due to non-serializable context objects
 )
 async def execute_node(node_type: str, context: dict, config: dict) -> dict:
     """Execute a single workflow node as a Prefect task."""
@@ -187,80 +189,102 @@ def build_flow(workflow_def: dict) -> Any:
         # Emit simple workflow started event for CLI feedback
         _emit_simple_event("workflow_started", {"workflow_name": flow_name})
 
-        # Initialize execution context with parameters
-        context = {"parameters": parameters}
-        task_results = {}
+        # Create workflow context with all required providers
+        from src.infrastructure.persistence.database.db_connection import get_session
 
-        # Execute tasks in dependency order
-        for task_def in sorted_tasks:
-            task_id = task_def["id"]
-            node_type = task_def["type"]
+        from .context import SharedSessionProvider, create_workflow_context
 
-            # Log the task start
-            flow_logger.info(f"Starting task: {task_id} (type: {node_type})")
+        # Create a single shared session for the entire workflow execution
+        async with get_session() as shared_session:
+            # Create shared session provider that wraps the session
+            shared_session_provider = SharedSessionProvider(shared_session)
 
-            # Emit simple task started event for CLI feedback
-            _emit_simple_event(
-                "task_started",
-                {"task_id": task_id, "task_name": task_id, "task_type": node_type},
-            )
+            # Create workflow context with shared session
+            workflow_context = create_workflow_context(shared_session)
 
-            # Resolve configuration with current context
-            config = task_def.get("config", {})
+            # Initialize execution context with shared session provider
+            context = {
+                "parameters": parameters,
+                "use_cases": workflow_context.use_cases,
+                "connectors": workflow_context.connectors,
+                "config": workflow_context.config,
+                "logger": workflow_context.logger,
+                "session_provider": shared_session_provider,  # Use shared session
+                "repositories": workflow_context.repositories,  # Legacy compatibility
+                "shared_session": shared_session,  # Direct access for nodes that need it
+            }
+            task_results = {}
 
-            # Create task-specific context with upstream results
-            task_context = context.copy()
+            # Execute tasks in dependency order
+            for task_def in sorted_tasks:
+                task_id = task_def["id"]
+                node_type = task_def["type"]
 
-            if task_def.get("upstream"):
-                if len(task_def["upstream"]) == 1:
-                    # Single upstream case
-                    task_context["upstream_task_id"] = task_def["upstream"][0]
-                else:
-                    # Multiple upstream case - first one is primary by convention
-                    # (unless config specifies a primary_input)
-                    primary_input = config.get("primary_input")
-                    if primary_input and primary_input in task_def["upstream"]:
-                        task_context["upstream_task_id"] = primary_input
-                    else:
+                # Log the task start
+                flow_logger.info(f"Starting task: {task_id} (type: {node_type})")
+
+                # Emit simple task started event for CLI feedback
+                _emit_simple_event(
+                    "task_started",
+                    {"task_id": task_id, "task_name": task_id, "task_type": node_type},
+                )
+
+                # Resolve configuration with current context
+                config = task_def.get("config", {})
+
+                # Create task-specific context with upstream results
+                task_context = context.copy()
+
+                if task_def.get("upstream"):
+                    if len(task_def["upstream"]) == 1:
+                        # Single upstream case
                         task_context["upstream_task_id"] = task_def["upstream"][0]
+                    else:
+                        # Multiple upstream case - first one is primary by convention
+                        # (unless config specifies a primary_input)
+                        primary_input = config.get("primary_input")
+                        if primary_input and primary_input in task_def["upstream"]:
+                            task_context["upstream_task_id"] = primary_input
+                        else:
+                            task_context["upstream_task_id"] = task_def["upstream"][0]
 
-                # Add all upstream tasks as a list for nodes that need multiple inputs
-                task_context["upstream_task_ids"] = task_def["upstream"]
+                    # Add all upstream tasks as a list for nodes that need multiple inputs
+                    task_context["upstream_task_ids"] = task_def["upstream"]
 
-                # Copy upstream task results into context
-                for upstream_id in task_def["upstream"]:
-                    if upstream_id in task_results:
-                        task_context[upstream_id] = task_results[upstream_id]
+                    # Copy upstream task results into context
+                    for upstream_id in task_def["upstream"]:
+                        if upstream_id in task_results:
+                            task_context[upstream_id] = task_results[upstream_id]
 
-            # Execute node with Prefect's native progress tracking
-            result = await execute_node(node_type, task_context, config)
+                # Execute node with Prefect's native progress tracking
+                result = await execute_node(node_type, task_context, config)
 
-            # Store result in context and task_results
-            context[task_id] = result
-            task_results[task_id] = result
+                # Store result in context and task_results
+                context[task_id] = result
+                task_results[task_id] = result
 
-            # Also store in context under node-specified result key if present
-            if result_key := task_def.get("result_key"):
-                flow_logger.debug(f"Storing result under key: {result_key}")
-                context[result_key] = result
+                # Also store in context under node-specified result key if present
+                if result_key := task_def.get("result_key"):
+                    flow_logger.debug(f"Storing result under key: {result_key}")
+                    context[result_key] = result
 
-            # Emit simple task completed event for CLI feedback
-            _emit_simple_event(
-                "task_completed",
-                {
-                    "task_id": task_id,
-                    "task_name": task_id,
-                    "task_type": node_type,
-                    "result": result,
-                },
-            )
+                # Emit simple task completed event for CLI feedback
+                _emit_simple_event(
+                    "task_completed",
+                    {
+                        "task_id": task_id,
+                        "task_name": task_id,
+                        "task_type": node_type,
+                        "result": result,
+                    },
+                )
 
-        flow_logger.info("Workflow completed successfully")
+            flow_logger.info("Workflow completed successfully")
 
-        # Emit simple workflow completed event for CLI feedback
-        _emit_simple_event("workflow_completed", {"workflow_name": flow_name})
+            # Emit simple workflow completed event for CLI feedback
+            _emit_simple_event("workflow_completed", {"workflow_name": flow_name})
 
-        return context
+            return context
 
     # Return the decorated flow function
     return workflow_flow
@@ -272,6 +296,7 @@ def build_flow(workflow_def: dict) -> Any:
 @task(
     name="extract_workflow_result",
     description="Extract workflow result with metrics",
+    cache_policy=NONE,  # Disable caching due to non-serializable context objects
 )
 async def extract_workflow_result(  # noqa: RUF029
     workflow_def: dict,

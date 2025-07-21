@@ -10,7 +10,6 @@ from src.application.use_cases.save_playlist import (
     EnrichmentConfig,
     PersistenceOptions,
     SavePlaylistCommand,
-    SavePlaylistUseCase,
 )
 from src.config import get_logger
 from src.domain.entities.track import Track, TrackList
@@ -23,7 +22,7 @@ logger = get_logger(__name__)
 
 
 async def spotify_playlist_source(
-    _context: dict, config: dict, spotify_connector: SpotifyConnector | None = None
+    context: dict, config: dict, spotify_connector: SpotifyConnector | None = None
 ) -> dict[str, Any]:
     """Fetch Spotify playlist and convert to TrackList using bulk operations."""
     playlist_id = config.get("playlist_id")
@@ -88,7 +87,13 @@ async def spotify_playlist_source(
         ),
     )
 
-    use_case = SavePlaylistUseCase()
+    # Get use cases from context (Clean Architecture compliance)
+    use_cases = context.get("use_cases")
+    if not use_cases:
+        raise ValueError("Use case provider not found in context")
+
+    # Get SavePlaylistUseCase with proper dependency injection
+    use_case = await use_cases.get_save_playlist_use_case()
     result = await use_case.execute(save_command)
 
     return {

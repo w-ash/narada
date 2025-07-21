@@ -4,13 +4,17 @@ This service handles fetching, storing, and retrieving connector-specific track 
 It focuses solely on metadata operations without any identity resolution or freshness decisions.
 """
 
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from src.config import get_logger
 from src.domain.matching.types import MatchResultsById
 from src.infrastructure.persistence.repositories.track import TrackRepositories
 
 logger = get_logger(__name__)
+
+# Type alias for batch track info method
+BatchTrackInfoMethod = Callable[..., Awaitable[dict[int, Any]]]
 
 
 class ConnectorMetadataManager:
@@ -202,69 +206,94 @@ class ConnectorMetadataManager:
                 )
                 return
 
-            # Process metrics for ALL tracks with fresh metadata (not just those with existing mappings)
-            updates_count = 0
+            # SQLALCHEMY 2.0 COMPLIANT: Use nested transactions for batch operations
+            # This allows granular error handling without interfering with parent transaction
+            session = self.track_repos.connector.session
+            logger.debug("Starting batch processing with nested transactions")
+
+            # Step 1: Batch process all metrics using nested transaction
             metrics_processed_count = 0
-
-            for track_id, metadata in fresh_metadata.items():
-                logger.debug(
-                    f"Processing track {track_id}, metadata keys: {list(metadata.keys()) if isinstance(metadata, dict) else type(metadata)}"
-                )
-
+            try:
+                # Begin nested transaction (savepoint)
+                nested_transaction = await session.begin_nested()
                 try:
-                    # ALWAYS process metrics from fresh metadata (regardless of mapping status)
                     from src.infrastructure.persistence.repositories.track.metrics import (
                         process_metrics_for_track,
                     )
 
-                    metrics_result = await process_metrics_for_track(
-                        session=self.track_repos.connector.session,
-                        track_id=track_id,
-                        connector=connector,
-                        metadata={track_id: metadata},
-                    )
                     logger.debug(
-                        f"Processed {len(metrics_result)} metrics for track {track_id}"
+                        f"Batch processing metrics for {len(fresh_metadata)} tracks"
                     )
-                    metrics_processed_count += 1
+                    await process_metrics_for_track(
+                        session=session,
+                        track_id=None,  # Signal batch mode
+                        connector=connector,
+                        metadata=fresh_metadata,  # Pass all metadata at once
+                    )
 
-                    # Update connector mapping metadata (only if mapping exists)
-                    if (
-                        track_id in existing_mappings
-                        and connector in existing_mappings[track_id]
-                    ):
-                        connector_id = existing_mappings[track_id][connector]
-                        logger.debug(
-                            f"Found mapping for track {track_id} -> connector_id {connector_id}"
-                        )
+                    metrics_processed_count = len(fresh_metadata)
+                    logger.debug(
+                        f"Successfully batch processed metrics for {metrics_processed_count} tracks"
+                    )
+                    await nested_transaction.commit()  # Commit savepoint
+                except Exception as inner_e:
+                    await nested_transaction.rollback()  # Rollback savepoint
+                    raise inner_e
 
-                        # Update the connector track metadata
+            except Exception as e:
+                logger.error(f"Error in batch metrics processing: {e}", exc_info=True)
+                # Continue with mapping updates even if metrics fail
+
+            # Step 2: Batch update connector tracks and mappings using nested transaction
+            updates_count = 0
+            mapping_updates = []
+
+            # Collect all updates first
+            for track_id, metadata in fresh_metadata.items():
+                if (
+                    track_id in existing_mappings
+                    and connector in existing_mappings[track_id]
+                ):
+                    connector_id = existing_mappings[track_id][connector]
+                    mapping_updates.append({
+                        "track_id": track_id,
+                        "connector_id": connector_id,
+                        "metadata": metadata,
+                    })
+
+            # Step 3: Execute mapping updates in nested transaction
+            if mapping_updates:
+                logger.debug(
+                    f"Batch updating {len(mapping_updates)} mapping confidences"
+                )
+                try:
+                    # Begin nested transaction (savepoint) for mapping updates
+                    nested_transaction = await session.begin_nested()
+                    try:
+                        for update in mapping_updates:
+                            await self.track_repos.connector.save_mapping_confidence(
+                                track_id=update["track_id"],
+                                connector=connector,
+                                connector_id=update["connector_id"],
+                                confidence=80,  # Keep existing confidence
+                                metadata=update["metadata"],
+                            )
+                            updates_count += 1
+
                         logger.debug(
-                            f"Calling save_mapping_confidence for track {track_id}"
+                            f"Successfully batch updated {updates_count} mapping confidences"
                         )
-                        await self.track_repos.connector.save_mapping_confidence(
-                            track_id=track_id,
-                            connector=connector,
-                            connector_id=connector_id,
-                            confidence=80,  # Keep existing confidence
-                            metadata=metadata,
-                        )
-                        updates_count += 1
-                        logger.debug(
-                            f"Successfully updated metadata for track {track_id}"
-                        )
-                    else:
-                        logger.debug(
-                            f"No mapping found for track {track_id}, but metrics still processed"
-                        )
+                        await nested_transaction.commit()  # Commit savepoint
+                    except Exception as inner_e:
+                        await nested_transaction.rollback()  # Rollback savepoint
+                        raise inner_e
 
                 except Exception as e:
-                    logger.error(
-                        f"Error processing track {track_id}: {e}", exc_info=True
-                    )
+                    logger.error(f"Error in batch mapping updates: {e}", exc_info=True)
 
+            # Let parent session (get_session() context manager) handle final commit
             logger.info(
-                f"Successfully stored fresh metadata for {updates_count} tracks and processed metrics for {metrics_processed_count} tracks"
+                f"Batch operation completed: stored fresh metadata for {updates_count} tracks and processed metrics for {metrics_processed_count} tracks"
             )
 
     def _convert_track_info_results(
@@ -383,7 +412,9 @@ class ConnectorMetadataManager:
                     return {}
 
                 # Use batch method for all operations (batch-first design)
-                batch_method = connector_instance.batch_get_track_info
+                batch_method = cast(
+                    "BatchTrackInfoMethod", connector_instance.batch_get_track_info
+                )
                 track_info_results = await batch_method(
                     tracks_for_api, **additional_options
                 )

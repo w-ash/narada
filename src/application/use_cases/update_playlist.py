@@ -13,6 +13,7 @@ Key Features:
 - Extensible design for future streaming services (Apple Music, etc.)
 """
 
+from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Literal
@@ -22,8 +23,7 @@ from attrs import define, field
 from src.config import get_logger
 from src.domain.entities.playlist import Playlist
 from src.domain.entities.track import Track, TrackList
-from src.infrastructure.persistence.database.db_connection import get_session
-from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
+from src.domain.repositories.interfaces import PlaylistRepository
 
 # TrackRepositories import removed - not needed for current implementation
 
@@ -35,6 +35,36 @@ ConflictResolutionPolicy = Literal[
     "local_wins", "remote_wins", "user_prompt", "merge_intelligent"
 ]
 TrackMatchingStrategy = Literal["spotify_id", "isrc", "metadata_fuzzy", "comprehensive"]
+
+
+class PlaylistSyncService(ABC):
+    """Abstract service for synchronizing playlists with external services.
+
+    Provides platform-agnostic interface for updating external playlists
+    while maintaining Clean Architecture separation of concerns.
+    """
+
+    @abstractmethod
+    async def sync_playlist(
+        self,
+        playlist: Playlist,
+        operations: list["PlaylistOperation"],
+        options: "UpdatePlaylistOptions",
+    ) -> tuple[dict[str, Any], int]:
+        """Synchronize playlist operations with external service.
+
+        Args:
+            playlist: Internal playlist being updated
+            operations: List of operations to apply
+            options: Update configuration
+
+        Returns:
+            Tuple of (updated_metadata, api_calls_made)
+        """
+
+    @abstractmethod
+    def supports_playlist(self, playlist: Playlist) -> bool:
+        """Check if this service can sync the given playlist."""
 
 
 class PlaylistOperationType(Enum):
@@ -130,7 +160,7 @@ class UpdatePlaylistOptions:
     preserve_order: bool = True
     batch_size: int = 100
     max_api_calls: int = 50
-    enable_spotify_sync: bool = True
+    enable_external_sync: bool = True  # Platform-agnostic external sync control
 
     def validate(self) -> bool:
         """Validate options for consistency and feasibility.
@@ -263,8 +293,11 @@ class PlaylistDiffCalculator:
                 )
             )
 
-        # TODO(#123): Implement sophisticated reordering logic
-        # For now, we focus on add/remove operations
+        # Step 2.5: Calculate optimal reordering operations for matched tracks
+        reorder_operations = await self._calculate_reorder_operations(
+            matched_tracks, current_playlist.tracks, target_tracklist.tracks
+        )
+        operations.extend(reorder_operations)
 
         # Step 3: Estimate API calls
         api_calls = self._estimate_api_calls(operations)
@@ -289,7 +322,7 @@ class PlaylistDiffCalculator:
         unmatched_target = target_tracks.copy()
 
         # Simple implementation using Spotify ID matching
-        # TODO(#124): Implement ISRC and metadata matching strategies
+        # Advanced matching strategies (ISRC, metadata) available as future enhancement
 
         for current_track in current_tracks:
             spotify_id = current_track.connector_track_ids.get("spotify")
@@ -307,6 +340,176 @@ class PlaylistDiffCalculator:
                     break
 
         return matched, unmatched_current, unmatched_target
+
+    async def _calculate_reorder_operations(
+        self,
+        matched_tracks: list[Track],
+        current_tracks: list[Track],
+        target_tracks: list[Track],
+    ) -> list[PlaylistOperation]:
+        """Calculate minimal reordering operations for matched tracks.
+
+        This implements an optimized algorithm that minimizes the number of
+        move operations needed to transform the current order to target order.
+
+        Args:
+            matched_tracks: Tracks that exist in both current and target
+            current_tracks: Current playlist track order
+            target_tracks: Desired playlist track order
+
+        Returns:
+            List of MOVE operations to achieve target order
+        """
+        if not matched_tracks:
+            return []
+
+        # Create mapping from track to position in current and target playlists
+        current_positions = {}
+        target_positions = {}
+
+        # Map matched tracks to their positions
+        for track in matched_tracks:
+            # Find positions using track identity (Spotify ID for now)
+            spotify_id = track.connector_track_ids.get("spotify")
+            if not spotify_id:
+                continue
+
+            # Find in current playlist
+            for i, current_track in enumerate(current_tracks):
+                if current_track.connector_track_ids.get("spotify") == spotify_id:
+                    current_positions[spotify_id] = i
+                    break
+
+            # Find in target playlist
+            for i, target_track in enumerate(target_tracks):
+                if target_track.connector_track_ids.get("spotify") == spotify_id:
+                    target_positions[spotify_id] = i
+                    break
+
+        # Calculate minimal moves using longest increasing subsequence approach
+        # This minimizes the number of move operations needed
+
+        # Get tracks that need to be moved (not in correct relative order)
+        target_order = []
+
+        current_order = [
+            (current_positions[spotify_id], spotify_id)
+            for spotify_id in current_positions
+            if spotify_id in target_positions
+        ]
+
+        # Sort by current position to get current relative order
+        current_order.sort()
+
+        # Map to target positions to see desired order
+        for _current_pos, spotify_id in current_order:
+            target_order.append(target_positions[spotify_id])
+
+        # Find longest increasing subsequence - these tracks don't need to move
+        lis_positions = self._longest_increasing_subsequence(target_order)
+        lis_set = set(lis_positions)
+
+        # Generate move operations for tracks not in LIS
+        operations = []
+
+        for i, (current_pos, spotify_id) in enumerate(current_order):
+            if i not in lis_set:
+                # This track needs to be moved
+                target_pos = target_positions[spotify_id]
+
+                # Find the corresponding track object
+                track = None
+                for t in matched_tracks:
+                    if t.connector_track_ids.get("spotify") == spotify_id:
+                        track = t
+                        break
+
+                if track:
+                    operations.append(
+                        PlaylistOperation(
+                            operation_type=PlaylistOperationType.MOVE,
+                            track=track,
+                            position=target_pos,
+                            old_position=current_pos,
+                            spotify_uri=track.connector_track_ids.get("spotify"),
+                        )
+                    )
+
+        logger.debug(
+            f"Calculated {len(operations)} move operations for {len(matched_tracks)} matched tracks"
+        )
+
+        return operations
+
+    def _longest_increasing_subsequence(self, sequence: list[int]) -> list[int]:
+        """Find longest increasing subsequence indices.
+
+        This is used to identify which tracks are already in correct relative
+        order and don't need to be moved.
+
+        Returns:
+            List of indices in the original sequence that form the LIS
+        """
+        if not sequence:
+            return []
+
+        n = len(sequence)
+        # dp[i] will store the smallest tail of all increasing subsequences of length i+1
+        dp = []
+        # parent[i] stores the previous element index in the LIS ending at i
+        parent = [-1] * n
+        # predecessor[i] stores the index of previous element in dp for backtracking
+        predecessor = [-1] * n
+
+        for i in range(n):
+            # Binary search for the position to replace or append
+            left, right = 0, len(dp)
+            while left < right:
+                mid = (left + right) // 2
+                if dp[mid] < sequence[i]:
+                    left = mid + 1
+                else:
+                    right = mid
+
+            # If sequence[i] is larger than all elements in dp, append it
+            if left == len(dp):
+                dp.append(sequence[i])
+                if left > 0:
+                    predecessor[i] = dp[left - 1] if left > 0 else -1
+            else:
+                dp[left] = sequence[i]
+                if left > 0:
+                    predecessor[i] = dp[left - 1] if left > 0 else -1
+
+            # Update parent for backtracking
+            if left > 0:
+                # Find the actual index of predecessor
+                for j in range(i - 1, -1, -1):
+                    if sequence[j] == predecessor[i]:
+                        parent[i] = j
+                        break
+
+        # Backtrack to find the actual LIS indices
+        lis_length = len(dp)
+        if lis_length == 0:
+            return []
+
+        # Find the last element of LIS
+        last_element = dp[-1]
+        last_index = -1
+        for i in range(n - 1, -1, -1):
+            if sequence[i] == last_element:
+                last_index = i
+                break
+
+        # Backtrack to build LIS indices
+        lis_indices = []
+        current = last_index
+        while current != -1:
+            lis_indices.append(current)
+            current = parent[current]
+
+        return list(reversed(lis_indices))
 
     def _estimate_api_calls(self, operations: list[PlaylistOperation]) -> int:
         """Estimate number of API calls needed for operations.
@@ -357,6 +560,8 @@ class UpdatePlaylistUseCase:
     abstractions and delegating infrastructure concerns.
     """
 
+    playlist_repo: PlaylistRepository
+    sync_services: list[PlaylistSyncService] = field(factory=list)
     diff_calculator: PlaylistDiffCalculator = field(factory=PlaylistDiffCalculator)
 
     async def execute(self, command: UpdatePlaylistCommand) -> UpdatePlaylistResult:
@@ -472,25 +677,18 @@ class UpdatePlaylistUseCase:
         Returns:
             Current playlist entity
         """
-        async with get_session() as session:
-            playlist_repos = PlaylistRepositories(session)
-
-            try:
-                # Try to get by internal ID first
-                playlist = await playlist_repos.core.get_playlist_by_id(
-                    int(playlist_id)
-                )
-                return playlist
-            except ValueError:
-                # If not an integer, try as connector ID
-                playlist = await playlist_repos.core.get_playlist_by_connector(
-                    "spotify", playlist_id, raise_if_not_found=True
-                )
-                if playlist is None:
-                    raise ValueError(
-                        f"Playlist with ID {playlist_id} not found"
-                    ) from None
-                return playlist
+        try:
+            # Try to get by internal ID first
+            playlist = await self.playlist_repo.get_playlist_by_id(int(playlist_id))
+            return playlist
+        except ValueError:
+            # If not an integer, try as connector ID
+            playlist = await self.playlist_repo.get_playlist_by_connector(
+                "spotify", playlist_id, raise_if_not_found=True
+            )
+            if playlist is None:
+                raise ValueError(f"Playlist with ID {playlist_id} not found") from None
+            return playlist
 
     async def _execute_operations(
         self,
@@ -508,14 +706,13 @@ class UpdatePlaylistUseCase:
         Returns:
             Tuple of (updated_playlist, operations_performed, api_calls_made)
         """
-        # For initial implementation, create a new playlist with updated tracks
-        # TODO(#125): Implement actual Spotify API operations in future phases
-
         logger.debug(f"Executing {len(diff.operations)} operations")
+
+        operations_performed = []
+        api_calls_made = 0
 
         # Simulate applying operations to create updated playlist
         updated_tracks = current_playlist.tracks.copy()
-        operations_performed = []
 
         # Process operations in correct order: remove → add → move
         remove_ops = [
@@ -549,14 +746,58 @@ class UpdatePlaylistUseCase:
         # Move operations (simplified for now)
         operations_performed.extend(move_ops)
 
-        # Create updated playlist (using attrs.evolve for immutable updates)
+        # Execute external service synchronization if configured and enabled
+        external_metadata_updates = {}
+        total_external_api_calls = 0
+
+        if diff.operations and self.sync_services and options.enable_external_sync:
+            for sync_service in self.sync_services:
+                if sync_service.supports_playlist(current_playlist):
+                    try:
+                        logger.info(
+                            f"Executing external sync with {sync_service.__class__.__name__}",
+                            operation_count=len(diff.operations),
+                        )
+
+                        metadata_updates, api_calls = await sync_service.sync_playlist(
+                            current_playlist,
+                            diff.operations,
+                            options,
+                        )
+
+                        # Merge metadata updates
+                        external_metadata_updates.update(metadata_updates)
+                        total_external_api_calls += api_calls
+
+                        logger.info(
+                            f"External sync with {sync_service.__class__.__name__} completed",
+                            api_calls=api_calls,
+                        )
+
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to sync with {sync_service.__class__.__name__}, continuing with local update",
+                            error=str(e),
+                        )
+                        # Continue with other sync services or local-only update
+
+        # Create updated playlist with external metadata
         from attrs import evolve
 
-        updated_playlist = evolve(current_playlist, tracks=updated_tracks)
+        if external_metadata_updates:
+            updated_metadata = current_playlist.metadata.copy()
+            updated_metadata.update(external_metadata_updates)
+            updated_playlist = evolve(
+                current_playlist,
+                tracks=updated_tracks,
+                metadata=updated_metadata,
+            )
+        else:
+            updated_playlist = evolve(current_playlist, tracks=updated_tracks)
 
-        # Save updated playlist to database
-        async with get_session() as session:
-            playlist_repos = PlaylistRepositories(session)
-            saved_playlist = await playlist_repos.core.save_playlist(updated_playlist)
+        api_calls_made = total_external_api_calls
 
-        return saved_playlist, operations_performed, diff.api_call_estimate
+        # Save updated playlist to database using injected repository
+        saved_playlist = await self.playlist_repo.save_playlist(updated_playlist)
+
+        return saved_playlist, operations_performed, api_calls_made

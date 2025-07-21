@@ -13,7 +13,6 @@ from functools import wraps
 from typing import Any, ParamSpec, Protocol, TypeVar
 
 from src.domain.entities.operations import OperationResult
-from src.domain.repositories.interfaces import RepositoryProvider
 
 from .progress import (
     ProgressProvider,
@@ -158,85 +157,122 @@ def with_progress(
     return decorator
 
 
-def with_db_progress(
-    description: str,
-    success_text: str = "Operation completed!",
-    display_title: str | None = None,
-    next_step_message: str | None = None,
-    console: Console | None = None,
-    session_factory: Callable[[], SessionProvider] | None = None,
-    repository_factory: Callable[[Any], RepositoryProvider] | None = None,
-    ui_provider: UIProvider | None = None,
-) -> Callable[
-    [Callable[..., Awaitable[OperationResult]]], Callable[..., OperationResult]
-]:
-    """Progress decorator for database operations with result display.
+class DatabaseProgressContext:
+    """Async context manager for database operations with progress tracking.
 
-    Combines progress tracking with database session management
-    and result display following Clean Architecture patterns.
+    Prevents SQLite lock errors by using session-per-operation pattern instead
+    of holding sessions for entire operation duration like @with_db_progress.
 
-    Args:
-        description: Operation description
-        success_text: Success message
-        display_title: Optional title for result display
-        next_step_message: Optional next step hint
-        console: Console for output (injected dependency)
-        session_factory: Factory for database sessions (injected dependency)
-        repository_factory: Factory for repositories (injected dependency)
-        ui_provider: UI provider for result display (injected dependency)
+    Maintains all progress tracking and result display functionality while
+    following SQLAlchemy 2.0 async best practices.
+
+    Usage:
+        async with DatabaseProgressContext(
+            description="Importing tracks...",
+            display_title="Import Results"
+        ) as progress:
+            # Each repository call gets its own short-lived session
+            # Sessions released immediately after each operation
+            # Progress tracked separately from database lifecycle
     """
 
-    def decorator(
-        func: Callable[..., Awaitable[OperationResult]],
-    ) -> Callable[..., OperationResult]:
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> OperationResult:
-            async def run_with_session_and_progress() -> OperationResult:
-                if not session_factory:
-                    raise ValueError(
-                        "session_factory is required for db_progress decorator"
-                    )
-                if not repository_factory:
-                    raise ValueError(
-                        "repository_factory is required for db_progress decorator"
-                    )
+    def __init__(
+        self,
+        description: str,
+        success_text: str = "Operation completed!",
+        display_title: str | None = None,
+        next_step_message: str | None = None,
+        console: Console | None = None,
+        ui_provider: UIProvider | None = None,
+    ):
+        """Initialize progress context.
 
-                async with session_factory() as session:
-                    repositories = repository_factory(session)
-                    kwargs["repositories"] = repositories
+        Args:
+            description: Operation description for progress display
+            success_text: Success message to show on completion
+            display_title: Optional title for result display
+            next_step_message: Optional next step hint
+            console: Optional console for output (injected dependency)
+            ui_provider: Optional UI provider for result display
+        """
+        self.description = description
+        self.success_text = success_text
+        self.display_title = display_title
+        self.next_step_message = next_step_message
+        self.console = console
+        self.ui_provider = ui_provider
 
-                    # Create and start progress operation
-                    operation = create_operation(description)
-                    provider = get_progress_provider()
-                    operation_id = provider.start_operation(operation)
+        self._operation_id: str | None = None
+        self._provider: ProgressProvider | None = None
+        self._result: OperationResult | None = None
 
-                    try:
-                        result = await func(*args, **kwargs)
-                        provider.complete_operation(operation_id)
-                        return result
-                    except Exception:
-                        provider.complete_operation(operation_id)
-                        raise
+    async def __aenter__(self) -> "DatabaseProgressContext":
+        """Start progress tracking and return context for operations."""
+        # Create and start progress operation
+        operation = create_operation(self.description)
+        self._provider = get_progress_provider()
+        self._operation_id = self._provider.start_operation(operation)
 
-            # Execute with progress
-            result = asyncio.run(run_with_session_and_progress())
+        return self
 
-            # Display success and results with injected dependencies
-            if console:
-                console.print(f"[green]✓ {success_text}[/green]")
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        """Complete progress tracking and display results."""
+        # Complete progress operation
+        if self._provider and self._operation_id:
+            self._provider.complete_operation(self._operation_id)
 
-            if ui_provider:
-                ui_provider.display_operation_result(
-                    result=result,
-                    title=display_title,
-                    next_step_message=next_step_message,
+        # Display success message and results only if no exception
+        if exc_type is None:
+            if self.console:
+                self.console.print(f"[green]✓ {self.success_text}[/green]")
+
+            if self.ui_provider and self._result:
+                self.ui_provider.display_operation_result(
+                    result=self._result,
+                    title=self.display_title,
+                    next_step_message=self.next_step_message,
                 )
 
+    def set_result(self, result: OperationResult) -> None:
+        """Set the operation result for display on exit."""
+        self._result = result
+
+    async def run_with_repositories(
+        self, operation_func: Callable[..., Awaitable[OperationResult]], *args, **kwargs
+    ) -> OperationResult:
+        """Execute an operation with fresh repository instances.
+
+        Creates repositories with session-per-operation pattern to prevent
+        SQLite locks that occur with long-held sessions.
+
+        Args:
+            operation_func: Async function that takes repositories as first arg
+            *args: Additional positional arguments
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            Operation result
+        """
+        # Import here to avoid circular imports
+        from src.infrastructure.persistence.database import get_session
+        from src.infrastructure.persistence.repositories.track import TrackRepositories
+
+        # Create fresh session and repositories for this operation
+        async with get_session() as session:
+            repositories = TrackRepositories(session)
+
+            # Execute operation with repositories
+            result = await operation_func(repositories, *args, **kwargs)
+
+            # Store result for display on context exit
+            self.set_result(result)
+
             return result
-
-        return wrapper
-
-    return decorator
 
 
 def batch_progress_wrapper(

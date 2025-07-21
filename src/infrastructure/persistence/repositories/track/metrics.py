@@ -204,28 +204,96 @@ class TrackMetricsRepository(BaseRepository[DBTrackMetric, dict[str, Any]]):
 
 async def process_metrics_for_track(
     session: AsyncSession,
-    track_id: int,
+    track_id: int | None,
     connector: str,
     metadata: dict[int, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Process and save metrics for a track within an existing transaction.
+    """Process and save metrics for track(s) within an existing transaction.
 
-    This version is designed to be called within an existing transaction,
-    using the same session to maintain transaction integrity.
+    This version supports both single-track and batch processing to prevent SQLite locks.
+    When track_id=None, it processes all tracks in the metadata dict as a batch.
 
     Args:
         session: The active SQLAlchemy session (within an existing transaction)
-        track_id: The track ID to process metrics for
+        track_id: The track ID to process metrics for, or None for batch mode
         connector: The connector name (spotify, lastfm, etc.)
-        metadata: Optional pre-fetched metadata (to avoid redundant lookups)
+        metadata: Pre-fetched metadata (required for batch mode)
 
     Returns:
-        Dictionary mapping metric names to values
+        Dictionary mapping metric names to values (for single track) or summary results
     """
     if connector not in connector_metrics or not connector_metrics[connector]:
         return {}
 
-    # Track metrics to avoid redundant lookups
+    # BATCH MODE: Process multiple tracks at once
+    if track_id is None:
+        if not metadata:
+            logger.warning("Batch mode requires metadata to be provided")
+            return {}
+
+        logger.debug(f"Batch processing metrics for {len(metadata)} tracks")
+        batch_results = {}
+        all_metric_batch = []
+
+        # Collect all metrics for all tracks
+        for current_track_id, track_metadata in metadata.items():
+            track_metric_batch = []
+
+            # Extract metric values for this track
+            for metric_name in connector_metrics[connector]:
+                if metric_name not in metric_resolvers:
+                    continue
+
+                # Get field name from resolver
+                resolver = metric_resolvers[metric_name]
+                resolver_impl = resolver  # type: ignore
+                field_name = getattr(resolver_impl, "FIELD_MAP", {}).get(metric_name)
+
+                if not field_name:
+                    continue
+
+                # Extract and convert value
+                value = track_metadata.get(field_name)
+                if value is None:
+                    continue
+
+                try:
+                    float_value = float(value)
+                    metric_tuple = (
+                        current_track_id,
+                        connector,
+                        metric_name,
+                        float_value,
+                    )
+                    track_metric_batch.append(metric_tuple)
+                    all_metric_batch.append(metric_tuple)
+                except (ValueError, TypeError):
+                    logger.warning(f"Cannot convert {value} to float for {metric_name}")
+
+            batch_results[current_track_id] = len(track_metric_batch)
+
+        # Batch save ALL metrics at once
+        if all_metric_batch:
+            try:
+                metrics_repo = TrackMetricsRepository(session)
+
+                # Use smaller batch sizes to prevent SQLite locks with large datasets
+                max_batch_size = 10
+                for i in range(0, len(all_metric_batch), max_batch_size):
+                    batch_slice = all_metric_batch[i : i + max_batch_size]
+                    await metrics_repo.save_track_metrics(batch_slice)
+
+                logger.debug(
+                    f"Batch saved {len(all_metric_batch)} metrics for {len(metadata)} tracks",
+                    connector=connector,
+                    tracks=list(metadata.keys()),
+                )
+            except Exception as e:
+                logger.error(f"Error in batch metrics processing: {e}", exc_info=True)
+
+        return batch_results
+
+    # SINGLE TRACK MODE: Original behavior
     results = {}
     metric_batch = []
 

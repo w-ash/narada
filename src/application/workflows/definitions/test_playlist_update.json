@@ -1,0 +1,46 @@
+{
+  "id": "test_playlist_update",
+  "name": "Test Playlist Update",
+  "description": "Simple workflow to test playlist update functionality with the test playlist",
+  "version": "1.0",
+  "tasks": [
+    {
+      "id": "source_test_tracks",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "14GT9ahKyAR9SObC7GdwtO"
+      }
+    },
+    {
+      "id": "limit_tracks",
+      "type": "selector.limit_tracks",
+      "config": {
+        "count": 5,
+        "method": "first"
+      },
+      "upstream": ["source_test_tracks"]
+    },
+    {
+      "id": "sort_by_popularity",
+      "type": "sorter.by_metric",
+      "config": {
+        "metric_name": "spotify_popularity",
+        "reverse": true
+      },
+      "upstream": ["limit_tracks"]
+    },
+    {
+      "id": "update_test_playlist",
+      "type": "destination.update_playlist",
+      "config": {
+        "playlist_id": "14GT9ahKyAR9SObC7GdwtO",
+        "operation_type": "update_spotify",
+        "conflict_resolution": "local_wins",
+        "dry_run": false,
+        "preserve_order": true,
+        "enable_external_sync": true
+      },
+      "upstream": ["sort_by_popularity"]
+    }
+  ]
+}

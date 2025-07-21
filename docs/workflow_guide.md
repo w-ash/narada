@@ -66,7 +66,9 @@ A workflow is defined in JSON as a directed acyclic graph (DAG) of tasks:
 
 | Node Type | Description | Configuration |
 |----------------|-------------|--------------|
-| `enricher.resolve_lastfm` | Resolves tracks to Last.fm and fetches play counts | `username`: Optional Last.fm username<br>`batch_size`: Optional batch size for requests<br>`concurrency`: Optional concurrency limit |
+| `enricher.lastfm` | Resolves tracks to Last.fm and fetches play counts | `username`: Optional Last.fm username<br>`batch_size`: Optional batch size for requests<br>`concurrency`: Optional concurrency limit |
+| `enricher.spotify` | Enriches tracks with Spotify popularity and explicit flags | `max_age_hours`: Optional freshness requirement for cached data |
+| `enricher.play_history` | Enriches tracks with play counts and listening history from internal database | `metrics`: Array of metrics to include ["total_plays", "last_played_dates", "period_plays"]<br>`period_days`: Number of days back for period-based metrics |
 
 ### Filter Nodes
 
@@ -77,6 +79,7 @@ A workflow is defined in JSON as a directed acyclic graph (DAG) of tasks:
 | `filter.by_tracks` | Excludes tracks from input that are present in exclusion source | `exclusion_source`: Task ID of exclusion source |
 | `filter.by_artists` | Excludes tracks whose artists appear in exclusion source | `exclusion_source`: Task ID of exclusion source<br>`exclude_all_artists`: Boolean, if true, excludes tracks if any artist is present in the exclusion source |
 | `filter.by_metric` | Filters tracks based on metric value range | `metric_name`: Metric to filter by<br>`min_value`: Minimum value (inclusive)<br>`max_value`: Maximum value (inclusive)<br>`include_missing`: Whether to include tracks without the metric |
+| `filter.by_play_history` | **Advanced play history filtering with flexible date and play count constraints** | `min_plays`: Minimum play count (inclusive)<br>`max_plays`: Maximum play count (inclusive)<br>`after_date`: Earliest date for play history (absolute)<br>`before_date`: Latest date for play history (absolute)<br>`days_back`: Number of days back from now (relative)<br>`days_forward`: Number of days forward from now (relative)<br>`include_missing`: Include tracks with no play history<br>**Note**: At least one constraint required. Relative dates take precedence over absolute dates. |
 
 ### Sorter Nodes
 
@@ -203,6 +206,80 @@ The node-based architecture allows for system extension through the transform re
 4. Create workflows that leverage the new node
 
 This extensibility model enables continuous evolution without increasing architectural complexity.
+
+## Example: Play History Intelligence Workflow
+
+This example demonstrates the new play history enrichment and filtering capabilities:
+
+```json
+{
+  "id": "rediscover_forgotten_favorites",
+  "name": "Rediscover Forgotten Favorites",
+  "description": "Find tracks you loved but haven't played recently",
+  "version": "1.0",
+  "tasks": [
+    {
+      "id": "source",
+      "type": "source.spotify_playlist",
+      "config": {
+        "playlist_id": "YOUR_LIKED_SONGS_ID"
+      }
+    },
+    {
+      "id": "enrich_history",
+      "type": "enricher.play_history",
+      "config": {
+        "metrics": ["total_plays", "last_played_dates"],
+        "period_days": 365
+      },
+      "upstream": ["source"]
+    },
+    {
+      "id": "filter_old_favorites",
+      "type": "filter.by_play_history",
+      "config": {
+        "min_plays": 10,
+        "days_back": 180,
+        "include_missing": false
+      },
+      "upstream": ["enrich_history"]
+    },
+    {
+      "id": "sort_by_total_plays",
+      "type": "sorter.by_metric",
+      "config": {
+        "metric_name": "total_plays",
+        "reverse": true
+      },
+      "upstream": ["filter_old_favorites"]
+    },
+    {
+      "id": "limit_selection",
+      "type": "selector.limit_tracks",
+      "config": {
+        "count": 25,
+        "method": "first"
+      },
+      "upstream": ["sort_by_total_plays"]
+    },
+    {
+      "id": "create_rediscovery_playlist",
+      "type": "destination.create_spotify_playlist",
+      "config": {
+        "name": "Rediscovered Favorites",
+        "description": "Tracks you loved but haven't played in 6+ months"
+      },
+      "upstream": ["limit_selection"]
+    }
+  ]
+}
+```
+
+This workflow demonstrates:
+- **Play History Enrichment**: Adds comprehensive listening data to track metadata
+- **Flexible Time Filtering**: Finds tracks not played in the last 180 days but with high historical play counts
+- **Intelligence-Driven Discovery**: Uses your own listening patterns to surface forgotten favorites
+- **Automated Curation**: Creates a new playlist ready for immediate listening
 
 ## Example: Discovery Mix Workflow
 

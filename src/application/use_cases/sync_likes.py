@@ -72,9 +72,7 @@ class LikeService:
         """
 
         # Direct call - progress is handled by CLI decorator
-        return await self._import_spotify_likes_internal(
-            user_id, limit, max_imports
-        )
+        return await self._import_spotify_likes_internal(user_id, limit, max_imports)
 
     async def export_likes_to_lastfm(
         self,

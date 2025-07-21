@@ -16,9 +16,7 @@ from attrs import define, field
 from src.config import get_logger
 from src.domain.entities.playlist import Playlist
 from src.domain.entities.track import Track, TrackList
-from src.infrastructure.persistence.database.db_connection import get_session
-from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
-from src.infrastructure.persistence.repositories.track import TrackRepositories
+from src.domain.repositories.interfaces import PlaylistRepository, TrackRepository
 
 logger = get_logger(__name__)
 
@@ -163,13 +161,13 @@ class TrackUpsertEnrichmentStrategy:
     This ensures all tracks have database IDs for downstream processing.
     """
 
-    def __init__(self, track_repos: TrackRepositories):
-        """Initialize with track repositories.
+    def __init__(self, track_repo: TrackRepository):
+        """Initialize with track repository interface.
 
         Args:
-            track_repos: Repository container for track operations
+            track_repo: Repository interface for track operations
         """
-        self.track_repos = track_repos
+        self.track_repo = track_repo
 
     async def enrich_tracks(
         self, tracks: list[Track], config: EnrichmentConfig
@@ -200,7 +198,7 @@ class TrackUpsertEnrichmentStrategy:
         for track in tracks:
             try:
                 # Repository handles upsert automatically via Spotify ID
-                saved_track = await self.track_repos.core.save_track(track)
+                saved_track = await self.track_repo.save_track(track)
                 enriched_tracks.append(saved_track)
 
                 if saved_track.id != track.id:
@@ -230,6 +228,8 @@ class SavePlaylistUseCase:
     abstractions (protocols) and delegating infrastructure concerns.
     """
 
+    track_repo: TrackRepository
+    playlist_repo: PlaylistRepository
     enrichment_strategy: TrackEnrichmentStrategy | None = field(default=None)
 
     async def execute(self, command: SavePlaylistCommand) -> SavePlaylistResult:
@@ -308,19 +308,17 @@ class SavePlaylistUseCase:
 
         # Set up enrichment strategy if not provided
         if self.enrichment_strategy is None:
-            # Create database session and repositories for track upsert
-            async with get_session() as session:
-                track_repos = TrackRepositories(session)
-                strategy = TrackUpsertEnrichmentStrategy(track_repos)
+            # Use injected track repository for upsert enrichment
+            strategy = TrackUpsertEnrichmentStrategy(self.track_repo)
 
-                logger.debug(
-                    f"Using TrackUpsertEnrichmentStrategy to enrich {len(command.tracklist.tracks)} tracks",
-                    provider=command.enrichment_config.primary_provider,
-                )
+            logger.debug(
+                f"Using TrackUpsertEnrichmentStrategy to enrich {len(command.tracklist.tracks)} tracks",
+                provider=command.enrichment_config.primary_provider,
+            )
 
-                return await strategy.enrich_tracks(
-                    command.tracklist.tracks, command.enrichment_config
-                )
+            return await strategy.enrich_tracks(
+                command.tracklist.tracks, command.enrichment_config
+            )
         else:
             # Use provided strategy
             logger.debug(
@@ -346,54 +344,41 @@ class SavePlaylistUseCase:
         """
         options = command.persistence_options
 
-        # Use async session context manager for transaction safety
-        async with get_session() as session:
-            track_repos = TrackRepositories(session)
-            playlist_repos = PlaylistRepositories(session)
+        # Step 1: Persist all tracks in bulk using repository
+        logger.debug(f"Persisting {len(enriched_tracks)} tracks")
+        persisted_tracks = []
 
-            # Step 1: Persist all tracks in bulk
-            logger.debug(f"Persisting {len(enriched_tracks)} tracks")
-            persisted_tracks = []
+        for track in enriched_tracks:
+            try:
+                saved_track = await self.track_repo.save_track(track)
+                persisted_tracks.append(saved_track)
+            except Exception as e:
+                if options.fail_on_track_error:
+                    raise
+                logger.warning(f"Failed to persist track {track.title}: {e}")
+                persisted_tracks.append(track)  # Keep original if persist fails
 
-            for track in enriched_tracks:
-                try:
-                    saved_track = await track_repos.core.save_track(track)
-                    persisted_tracks.append(saved_track)
-                except Exception as e:
-                    if options.fail_on_track_error:
-                        raise
-                    logger.warning(f"Failed to persist track {track.title}: {e}")
-                    persisted_tracks.append(track)  # Keep original if persist fails
+        # Step 2: Create playlist based on operation type
+        if options.operation_type == "create_internal":
+            playlist = await self._create_internal_playlist(options, persisted_tracks)
+        elif options.operation_type == "create_spotify":
+            playlist = await self._create_spotify_playlist(options, persisted_tracks)
+        elif options.operation_type == "update_spotify":
+            playlist = await self._update_spotify_playlist(options, persisted_tracks)
+        else:
+            raise ValueError(f"Unsupported operation type: {options.operation_type}")
 
-            # Step 2: Create playlist based on operation type
-            if options.operation_type == "create_internal":
-                playlist = await self._create_internal_playlist(
-                    options, persisted_tracks, playlist_repos
-                )
-            elif options.operation_type == "create_spotify":
-                playlist = await self._create_spotify_playlist(
-                    options, persisted_tracks, playlist_repos
-                )
-            elif options.operation_type == "update_spotify":
-                playlist = await self._update_spotify_playlist(
-                    options, persisted_tracks, playlist_repos
-                )
-            else:
-                raise ValueError(
-                    f"Unsupported operation type: {options.operation_type}"
-                )
+        logger.debug(
+            "Successfully persisted playlist",
+            playlist_id=playlist.id,
+            operation_type=options.operation_type,
+            track_count=len(persisted_tracks),
+        )
 
-            logger.debug(
-                "Successfully persisted playlist",
-                playlist_id=playlist.id,
-                operation_type=options.operation_type,
-                track_count=len(persisted_tracks),
-            )
-
-            return playlist
+        return playlist
 
     async def _create_internal_playlist(
-        self, options: PersistenceOptions, tracks: list[Track], playlist_repos
+        self, options: PersistenceOptions, tracks: list[Track]
     ) -> Playlist:
         """Create new internal playlist."""
         from src.domain.workflows.playlist_operations import create_playlist_operation
@@ -409,10 +394,10 @@ class SavePlaylistUseCase:
         )
 
         # Save to database
-        return await playlist_repos.core.save_playlist(playlist)
+        return await self.playlist_repo.save_playlist(playlist)
 
     async def _create_spotify_playlist(
-        self, options: PersistenceOptions, tracks: list[Track], playlist_repos
+        self, options: PersistenceOptions, tracks: list[Track]
     ) -> Playlist:
         """Create new Spotify-connected playlist."""
         from src.domain.workflows.playlist_operations import (
@@ -436,10 +421,10 @@ class SavePlaylistUseCase:
         )
 
         # Save to database
-        return await playlist_repos.core.save_playlist(playlist)
+        return await self.playlist_repo.save_playlist(playlist)
 
     async def _update_spotify_playlist(
-        self, options: PersistenceOptions, tracks: list[Track], playlist_repos
+        self, options: PersistenceOptions, tracks: list[Track]
     ) -> Playlist:
         """Update existing Spotify playlist."""
         from src.domain.workflows.playlist_operations import (
@@ -452,9 +437,14 @@ class SavePlaylistUseCase:
             )
 
         # Get existing playlist
-        existing = await playlist_repos.core.get_playlist_by_connector(
+        existing = await self.playlist_repo.get_playlist_by_connector(
             "spotify", options.spotify_playlist_id, raise_if_not_found=True
         )
+
+        if existing is None:
+            raise ValueError(
+                f"Playlist with Spotify ID {options.spotify_playlist_id} not found"
+            )
 
         # Update playlist using domain logic
         updated = update_playlist_tracks_operation(
@@ -464,4 +454,4 @@ class SavePlaylistUseCase:
         # Save updated playlist
         if existing.id is None:
             raise ValueError("Existing playlist has no ID")
-        return await playlist_repos.core.update_playlist(existing.id, updated)
+        return await self.playlist_repo.update_playlist(existing.id, updated)

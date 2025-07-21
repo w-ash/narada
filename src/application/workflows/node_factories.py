@@ -9,7 +9,7 @@ Clean Architecture compliant - uses dependency injection for external concerns.
 
 from collections.abc import Awaitable, Callable
 
-from src.application.use_cases.match_tracks import match_tracks
+# match_tracks import removed - modern enricher uses TrackMetadataEnricher directly
 from src.config import get_logger
 from src.domain.entities.track import TrackList
 from src.infrastructure.connectors import CONNECTORS
@@ -119,111 +119,10 @@ class WorkflowNodeFactory:
 
     # === ENRICHER FACTORY ===
 
-    def create_enricher_node(self, config: dict) -> NodeFn:
-        """Create an enricher node for metadata extraction and attachment.
-
-        Architectural separation of concerns:
-        - Matcher: Resolves identity ("Is internal track X the same as connector track X?")
-        - Integration: Handles external API communication
-        - Repository: Manages persistence of identified tracks
-        - Enricher: Coordinates the process and extracts/attaches metadata
-
-        This clean architecture ensures:
-        1. Each component has a single responsibility
-        2. Components can evolve independently
-        3. Testing can be performed in isolation
-
-        Workflow steps:
-        1. Extract tracks from input tracklist
-        2. Resolve track identity across services via matcher
-        3. Extract valuable metadata attributes
-        4. Attach metrics to tracklist for downstream operations
-
-        Args:
-            config: Configuration dictionary containing:
-                - connector: Service to extract data from (e.g., "lastfm", "spotify")
-                - attributes: Metadata fields to extract and attach
-
-        Returns:
-            Workflow node function with standard (context, config) -> dict signature
-        """
-        enricher_type = config.get("connector")
-        if not enricher_type:
-            raise ValueError("Connector type is required")
-        if enricher_type not in CONNECTORS:
-            raise ValueError(f"Unsupported connector: {enricher_type}")
-
-        # Retrieve connector configuration once at creation time
-        enricher_config = CONNECTORS[enricher_type]
-
-        # Get connector from registry via dependency injection
-
-        async def node_impl(context: dict, node_config: dict) -> dict:
-            ctx = NodeContext(context)
-            tracklist = ctx.extract_tracklist()
-
-            # Initialize connector instance
-            connector_instance = enricher_config["factory"](node_config)
-
-            # Create repository instance for matcher (short-lived for workflow execution)
-            from src.infrastructure.persistence.database.db_connection import (
-                get_session,
-            )
-            from src.infrastructure.persistence.repositories.track import (
-                TrackRepositories,
-            )
-
-            async with get_session() as session:
-                track_repos = TrackRepositories(session)
-
-                # Resolve track identities through matcher service
-                match_results = await match_tracks(
-                    tracklist,
-                    enricher_type,
-                    connector_instance,
-                    track_repos,
-                )
-
-            # Extract configured metrics from match results
-            metrics = {}
-
-            for attr in config.get("attributes", []):
-                extractor = enricher_config["extractors"].get(attr)
-                if not extractor:
-                    continue
-
-                values = {}
-
-                # Extract metrics from successful matches
-                for track_id, result in match_results.items():
-                    if not result.success or track_id is None:
-                        continue
-
-                    value = extractor(result.service_data)
-                    if value is not None:
-                        values[track_id] = value
-
-                if values:
-                    metrics[attr] = values
-
-            # Attach metrics to tracklist
-            if metrics:
-                current_metrics = tracklist.metadata.get("metrics", {})
-                enriched = tracklist.with_metadata(
-                    "metrics",
-                    {**current_metrics, **metrics},
-                )
-            else:
-                enriched = tracklist
-
-            return {
-                "tracklist": enriched,
-                "match_results": match_results,
-                "operation": f"{enricher_type}_enrichment",
-                "metrics_count": len(metrics),
-            }
-
-        return node_impl
+    # === LEGACY ENRICHER IMPLEMENTATION REMOVED ===
+    # The create_enricher_node method has been removed in favor of the
+    # standalone create_enricher_node function that uses the modern
+    # TrackMetadataEnricher with clean architecture separation.
 
 
 # === DESTINATION FACTORY ===
@@ -375,46 +274,101 @@ def create_enricher_node(config: dict) -> NodeFn:
         # Initialize connector instance
         connector_instance = enricher_config["factory"](node_config)
 
-        # Create repository instance for matcher (short-lived for workflow execution)
-        from src.infrastructure.persistence.database.db_connection import get_session
+        # Create repository instance using shared session from workflow context
         from src.infrastructure.persistence.repositories.track import TrackRepositories
 
-        async with get_session() as session:
-            track_repos = TrackRepositories(session)
+        # Use the shared session from workflow context to prevent database locks
+        shared_session = context.get("shared_session")
+        if not shared_session:
+            raise ValueError("No shared session available in workflow context")
 
-            # Get freshness configuration for this enricher
-            max_age_hours = node_config.get("max_age_hours")
-            if max_age_hours is None:
-                # Get default freshness requirement from config
-                from src.config import get_config
+        track_repos = TrackRepositories(shared_session)
 
-                config_key = f"ENRICHER_DATA_FRESHNESS_{enricher_type.upper()}"
-                max_age_hours = get_config(config_key)
+        # Get freshness configuration for this enricher
+        max_age_hours = node_config.get("max_age_hours")
+        if max_age_hours is None:
+            # Get default freshness requirement from config
+            from src.config import get_config
 
-            if max_age_hours is not None:
-                logger.info(
-                    f"Using data freshness requirement: {max_age_hours} hours for {enricher_type}"
-                )
+            config_key = f"ENRICHER_DATA_FRESHNESS_{enricher_type.upper()}"
+            max_age_hours = get_config(config_key)
 
-            # Use the new TrackMetadataEnricher for clean separation of concerns
-            from src.infrastructure.services.track_metadata_enricher import (
-                TrackMetadataEnricher,
+        if max_age_hours is not None:
+            logger.info(
+                f"Using data freshness requirement: {max_age_hours} hours for {enricher_type}"
             )
 
-            enricher = TrackMetadataEnricher(track_repos)
+        # Use the new TrackMetadataEnricher for clean separation of concerns
+        from src.infrastructure.services.track_metadata_enricher import (
+            TrackMetadataEnricher,
+        )
 
-            enriched, metrics = await enricher.enrich_tracks(
-                tracklist,
-                enricher_type,
-                connector_instance,
-                enricher_config["extractors"],
-                max_age_hours,
-            )
+        enricher = TrackMetadataEnricher(track_repos)
+
+        enriched, metrics = await enricher.enrich_tracks(
+            tracklist,
+            enricher_type,
+            connector_instance,
+            enricher_config["extractors"],
+            max_age_hours,
+        )
 
         return {
             "tracklist": enriched,
             "operation": f"{enricher_type}_enrichment",
             "metrics_count": sum(len(values) for values in metrics.values()),
+        }
+
+    return node_impl
+
+
+def create_play_history_enricher_node() -> NodeFn:
+    """Create a play history enricher node following Clean Architecture principles.
+
+    This node enriches tracklists with play history data from the internal database,
+    using dependency injection for repository access and proper separation of concerns.
+
+    Returns:
+        Workflow node function with standard (context, config) -> dict signature
+    """
+
+    async def node_impl(context: dict, config: dict) -> dict:
+        from src.application.services.play_history_enricher import PlayHistoryEnricher
+        from src.infrastructure.persistence.repositories.track import TrackRepositories
+
+        ctx = NodeContext(context)
+        tracklist = ctx.extract_tracklist()
+
+        # Get configuration
+        metrics = config.get("metrics", ["total_plays", "last_played_dates"])
+        period_days = config.get("period_days")
+
+        logger.info(
+            f"Starting play history enrichment for {len(tracklist.tracks)} tracks"
+        )
+
+        # Use shared session from workflow context to prevent database locks
+        shared_session = context.get("shared_session")
+        if not shared_session:
+            raise ValueError("No shared session available in workflow context")
+
+        track_repos = TrackRepositories(shared_session)
+        enricher = PlayHistoryEnricher(track_repos)
+
+        enriched = await enricher.enrich_with_play_history(
+            tracklist=tracklist,
+            metrics=metrics,
+            period_days=period_days,
+        )
+
+        play_metrics = enriched.metadata.get("metrics", {})
+        metrics_count = sum(len(values) for values in play_metrics.values())
+
+        return {
+            "tracklist": enriched,
+            "operation": "play_history_enrichment",
+            "metrics_count": metrics_count,
+            "enriched_metrics": list(play_metrics.keys()),
         }
 
     return node_impl

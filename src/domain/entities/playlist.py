@@ -47,6 +47,8 @@ class Playlist:
     id: int | None = field(default=None)
     # External service IDs (spotify, apple_music, etc) - NOT for internal DB ID
     connector_playlist_ids: dict[str, str] = field(factory=dict)
+    # Additional metadata for playlist management (snapshot IDs, sync state, etc.)
+    metadata: dict[str, Any] = field(factory=dict)
 
     def with_tracks(self, tracks: list[Track]) -> "Playlist":
         """Create a new playlist with the given tracks."""
@@ -56,6 +58,7 @@ class Playlist:
             description=self.description,
             id=self.id,
             connector_playlist_ids=self.connector_playlist_ids.copy(),
+            metadata=self.metadata.copy(),
         )
 
     def with_connector_playlist_id(
@@ -84,6 +87,7 @@ class Playlist:
             description=self.description,
             id=self.id,
             connector_playlist_ids=new_ids,
+            metadata=self.metadata.copy(),
         )
 
     def with_id(self, db_id: int) -> "Playlist":
@@ -102,6 +106,7 @@ class Playlist:
             description=self.description,
             id=db_id,
             connector_playlist_ids=self.connector_playlist_ids.copy(),
+            metadata=self.metadata.copy(),
         )
 
 

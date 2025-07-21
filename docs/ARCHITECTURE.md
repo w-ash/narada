@@ -137,8 +137,8 @@ Declarative transformation pipelines.
 
 #### SQLite + SQLAlchemy 2.0
 **Why**: Zero configuration, atomic transactions, rich relationships
-**Usage**: Local database with async ORM patterns
-**Benefits**: No server setup, data integrity, complex queries
+**Usage**: Local database with async ORM patterns and specialized session management
+**Benefits**: No server setup, data integrity, complex queries, concurrent operation support
 
 #### Prefect (Workflow Engine)
 **Why**: Robust execution, minimal overhead, progress tracking
@@ -416,6 +416,87 @@ To ensure architectural compliance:
 4. **Cross-service operations work through database mappings**
 
 This database-first approach is fundamental to Narada's ability to provide unified operations across music services while maintaining data consistency and enabling sophisticated cross-service workflows.
+
+## Database Session Management Architecture
+
+Narada implements a sophisticated session management strategy to handle SQLite's concurrency limitations while maintaining Clean Architecture principles and preventing database locks.
+
+### Session Management Patterns
+
+#### 1. Workflow-Scoped Sessions
+**Pattern**: Single shared session per workflow execution
+**Implementation**: `SharedSessionProvider` in `prefect.py`
+**Usage**: All Prefect workflow tasks share one session to prevent concurrent write conflicts
+
+```python
+# Create a single shared session for the entire workflow execution
+async with get_session() as shared_session:
+    # Create shared session provider that wraps the session
+    shared_session_provider = SharedSessionProvider(shared_session)
+    
+    # All workflow tasks use the same session
+    context = {
+        "session_provider": shared_session_provider,
+        "shared_session": shared_session,  
+    }
+```
+
+**Benefits**: Eliminates SQLite "database is locked" errors, ensures ACID properties across workflow operations, simplifies transaction management.
+
+#### 2. Session-Per-Operation Pattern
+**Pattern**: Fresh session for each discrete operation
+**Implementation**: `DatabaseProgressContext.run_with_repositories()`
+**Usage**: CLI operations and use cases that don't run within workflows
+
+```python
+async with DatabaseProgressContext(...) as progress:
+    # Each operation gets its own short-lived session
+    async def _import_operation(repositories: TrackRepositories) -> OperationResult:
+        # Session created and closed automatically
+        return await service.import_tracks(...)
+    
+    return await progress.run_with_repositories(_import_operation)
+```
+
+**Benefits**: Prevents long-held sessions, follows SQLAlchemy best practices, maintains Clean Architecture boundaries.
+
+#### 3. Isolated Sessions for Metrics
+**Pattern**: Specialized sessions for operations needing isolation
+**Implementation**: `get_isolated_session()` 
+**Usage**: Metrics operations that may conflict with main operations
+
+```python
+async with get_isolated_session() as session:
+    # Optimized session settings for metrics operations
+    # - autoflush=False to avoid implicit I/O
+    # - isolated transaction boundaries
+```
+
+**Benefits**: Prevents metrics operations from interfering with main workflows, optimized for specific use cases.
+
+### SQLite Configuration
+
+**Connection Pooling**: Uses `NullPool` for SQLite to create/close connections on demand, eliminating pooling-related locks.
+
+**Pragmas Applied**:
+- `journal_mode=WAL`: Write-ahead logging for concurrent read access
+- `busy_timeout=30000`: 30-second timeout for lock conflicts
+- `synchronous=NORMAL`: Balanced safety/performance
+- `foreign_keys=ON`: Enforce referential integrity
+
+**Event Listeners**: Automatically apply pragmas on each connection creation to ensure consistent database behavior.
+
+### Anti-Patterns to Avoid
+
+❌ **Multiple Concurrent Sessions in Workflows**: Creates SQLite lock conflicts
+❌ **Long-Held Sessions**: Blocks other operations unnecessarily  
+❌ **Direct Session Creation**: Bypasses configured pragmas and pooling strategy
+❌ **Session Sharing Across Components**: Violates Clean Architecture boundaries
+
+✅ **Use Workflow-Scoped Sessions**: For Prefect workflows
+✅ **Use Session-Per-Operation**: For CLI and use case operations
+✅ **Use Context Managers**: Ensure proper session lifecycle management
+✅ **Follow Injection Patterns**: Maintain Clean Architecture compliance
 
 ## Development Philosophy
 

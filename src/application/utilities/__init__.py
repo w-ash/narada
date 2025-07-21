@@ -17,8 +17,8 @@ from .progress import (
     set_progress_provider,
 )
 from .progress_integration import (
+    DatabaseProgressContext,
     batch_progress_wrapper,
-    with_db_progress,
     with_progress,
 )
 from .results import (
@@ -31,6 +31,7 @@ __all__ = [
     "BatchProcessor",
     "BatchResult",
     "BatchStrategy",
+    "DatabaseProgressContext",
     "ImportResultData",
     "ImportStrategy",
     "MatchStrategy",
@@ -44,6 +45,5 @@ __all__ = [
     "create_operation",
     "get_progress_provider",
     "set_progress_provider",
-    "with_db_progress",
     "with_progress",
 ]

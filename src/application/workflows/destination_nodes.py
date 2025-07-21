@@ -18,12 +18,10 @@ from src.application.use_cases.save_playlist import (
     EnrichmentConfig,
     PersistenceOptions,
     SavePlaylistCommand,
-    SavePlaylistUseCase,
 )
 from src.application.use_cases.update_playlist import (
     UpdatePlaylistCommand,
     UpdatePlaylistOptions,
-    UpdatePlaylistUseCase,
 )
 from src.config import get_logger
 from src.domain.entities.track import TrackList
@@ -38,7 +36,7 @@ logger = get_logger(__name__)
 async def handle_internal_destination(
     tracklist: TrackList,
     config: dict,
-    _context: dict,  # Kept for consistent interface
+    context: dict,  # Now used for repository access
 ) -> dict:
     """Create a playlist in the internal database using SavePlaylistUseCase."""
     # Create command for internal playlist creation
@@ -52,8 +50,13 @@ async def handle_internal_destination(
         ),
     )
 
-    # Execute using SavePlaylistUseCase
-    use_case = SavePlaylistUseCase()
+    # Get use cases from context (Clean Architecture compliance)
+    use_cases = context.get("use_cases")
+    if not use_cases:
+        raise ValueError("Use case provider not found in context")
+
+    # Get SavePlaylistUseCase with proper dependency injection
+    use_case = await use_cases.get_save_playlist_use_case()
     result = await use_case.execute(command)
 
     # Return result in expected format for backward compatibility
@@ -73,7 +76,7 @@ async def handle_internal_destination(
 async def handle_spotify_destination(
     tracklist: TrackList,
     config: dict,
-    _context: dict,  # Kept for consistent interface
+    context: dict,  # Now used for repository access
 ) -> dict:
     """Create a new Spotify playlist using SavePlaylistUseCase."""
     # Infrastructure: create playlist in Spotify via external API
@@ -99,8 +102,13 @@ async def handle_spotify_destination(
         ),
     )
 
-    # Execute using SavePlaylistUseCase
-    use_case = SavePlaylistUseCase()
+    # Get use cases from context (Clean Architecture compliance)
+    use_cases = context.get("use_cases")
+    if not use_cases:
+        raise ValueError("Use case provider not found in context")
+
+    # Get SavePlaylistUseCase with proper dependency injection
+    use_case = await use_cases.get_save_playlist_use_case()
     result = await use_case.execute(command)
 
     # Return result in expected format for backward compatibility
@@ -120,7 +128,7 @@ async def handle_spotify_destination(
 async def handle_update_spotify_destination(
     tracklist: TrackList,
     config: dict,
-    _context: dict,  # Kept for consistent interface
+    context: dict,  # Now used for repository access
 ) -> dict:
     """Update an existing Spotify playlist using SavePlaylistUseCase."""
     spotify_id = config.get("playlist_id")
@@ -144,8 +152,13 @@ async def handle_update_spotify_destination(
         ),
     )
 
-    # Execute using SavePlaylistUseCase
-    use_case = SavePlaylistUseCase()
+    # Get use cases from context (Clean Architecture compliance)
+    use_cases = context.get("use_cases")
+    if not use_cases:
+        raise ValueError("Use case provider not found in context")
+
+    # Get SavePlaylistUseCase with proper dependency injection
+    use_case = await use_cases.get_save_playlist_use_case()
     result = await use_case.execute(command)
 
     # Infrastructure: update Spotify via external API
@@ -167,7 +180,7 @@ async def handle_update_spotify_destination(
 async def handle_update_playlist_destination(
     tracklist: TrackList,
     config: dict,
-    _context: dict,  # Kept for consistent interface
+    context: dict,  # Now used for repository access
 ) -> dict:
     """Update an existing playlist using UpdatePlaylistUseCase.
 
@@ -210,7 +223,7 @@ async def handle_update_playlist_destination(
             preserve_order=config.get("preserve_order", True),
             batch_size=min(config.get("batch_size", 100), 100),  # Enforce Spotify limit
             max_api_calls=config.get("max_api_calls", 50),
-            enable_spotify_sync=config.get("enable_spotify_sync", True),
+            enable_external_sync=config.get("enable_external_sync", True),
         ),
         metadata={
             "workflow_source": "destination_node",
@@ -218,8 +231,13 @@ async def handle_update_playlist_destination(
         },
     )
 
-    # Execute using UpdatePlaylistUseCase
-    use_case = UpdatePlaylistUseCase()
+    # Get use cases from context (Clean Architecture compliance)
+    use_cases = context.get("use_cases")
+    if not use_cases:
+        raise ValueError("Use case provider not found in context")
+
+    # Get UpdatePlaylistUseCase with proper dependency injection
+    use_case = await use_cases.get_update_playlist_use_case()
     result = await use_case.execute(command)
 
     # Return result in expected format for backward compatibility

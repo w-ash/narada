@@ -1,7 +1,12 @@
 """Track repository for play operations."""
 
+from datetime import datetime
+from typing import Any
+
 from attrs import define
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from toolz import groupby
 
 from src.config import get_logger
 from src.domain.entities import TrackPlay
@@ -25,7 +30,7 @@ class TrackPlayMapper(BaseModelMapper[DBTrackPlay, TrackPlay]):
         return []  # Don't eagerly load track by default for performance
 
     @staticmethod
-    async def to_domain(db_model: DBTrackPlay) -> TrackPlay:
+    async def to_domain(db_model: DBTrackPlay) -> TrackPlay | None:
         """Convert database play to domain model."""
         if not db_model:
             return None
@@ -104,3 +109,125 @@ class TrackPlayRepository(BaseRepository[DBTrackPlay, TrackPlay]):
             self.model_class.import_batch_id == import_batch_id,
             self.model_class.is_deleted == False,  # noqa: E712
         ])
+
+    @db_operation("get_play_aggregations")
+    async def get_play_aggregations(
+        self,
+        track_ids: list[int],
+        metrics: list[str],
+        period_start: datetime | None = None,
+        period_end: datetime | None = None,
+    ) -> dict[str, dict[int, Any]]:
+        """Get aggregated play data for specified tracks and metrics.
+
+        Args:
+            track_ids: List of track IDs to get play data for
+            metrics: List of metrics to calculate ["total_plays", "last_played_dates", "period_plays"]
+            period_start: Start date for period-based metrics (optional)
+            period_end: End date for period-based metrics (optional)
+
+        Returns:
+            Dictionary mapping metric names to {track_id: value} dictionaries
+        """
+        if not track_ids or not metrics:
+            logger.debug(
+                "Empty track_ids or metrics provided",
+                track_count=len(track_ids),
+                metric_count=len(metrics),
+            )
+            return {}
+
+        logger.debug(
+            "Getting play aggregations",
+            track_count=len(track_ids),
+            metrics=metrics,
+            period_start=period_start,
+            period_end=period_end,
+        )
+
+        result = {}
+
+        # Build base query
+        base_query = select(DBTrackPlay).where(
+            DBTrackPlay.track_id.in_(track_ids),
+            DBTrackPlay.is_deleted == False,  # noqa: E712
+        )
+
+        # Execute query to get all relevant plays
+        query_result = await self.session.execute(base_query)
+        plays = query_result.scalars().all()
+
+        # Use toolz for efficient aggregation
+        plays_by_track = groupby(lambda p: p.track_id, plays)
+
+        # Calculate total plays if requested
+        if "total_plays" in metrics:
+            result["total_plays"] = {
+                track_id: len(track_plays)
+                for track_id, track_plays in plays_by_track.items()
+            }
+
+        # Calculate last played dates if requested
+        if "last_played_dates" in metrics:
+
+            def get_last_played(track_plays):
+                if not track_plays:
+                    return None
+                return max(play.played_at for play in track_plays)
+
+            result["last_played_dates"] = {
+                track_id: get_last_played(track_plays)
+                for track_id, track_plays in plays_by_track.items()
+            }
+
+        # Calculate period plays if requested
+        if "period_plays" in metrics and period_start and period_end:
+
+            def count_period_plays(track_plays):
+                return len([
+                    play
+                    for play in track_plays
+                    if period_start <= play.played_at <= period_end
+                ])
+
+            result["period_plays"] = {
+                track_id: count_period_plays(track_plays)
+                for track_id, track_plays in plays_by_track.items()
+            }
+
+        # Ensure all requested track_ids are present in results
+        for metric_name in result:
+            for track_id in track_ids:
+                if track_id not in result[metric_name]:
+                    if metric_name == "total_plays" or metric_name == "period_plays":
+                        result[metric_name][track_id] = 0
+                    else:  # last_played_dates
+                        result[metric_name][track_id] = None
+
+        return result
+
+    @db_operation("get_total_play_counts")
+    async def get_total_play_counts(self, track_ids: list[int]) -> dict[int, int]:
+        """Get total play counts for specified tracks."""
+        aggregations = await self.get_play_aggregations(track_ids, ["total_plays"])
+        return aggregations.get("total_plays", {})
+
+    @db_operation("get_last_played_dates")
+    async def get_last_played_dates(
+        self, track_ids: list[int]
+    ) -> dict[int, datetime | None]:
+        """Get last played dates for specified tracks."""
+        aggregations = await self.get_play_aggregations(
+            track_ids, ["last_played_dates"]
+        )
+        return aggregations.get("last_played_dates", {})
+
+    @db_operation("get_period_play_counts")
+    async def get_period_play_counts(
+        self, track_ids: list[int], start_date: datetime, end_date: datetime
+    ) -> dict[int, int]:
+        """Get play counts within a specific time period."""
+        aggregations = await self.get_play_aggregations(
+            track_ids, ["period_plays"], start_date, end_date
+        )
+        return aggregations.get("period_plays", {})

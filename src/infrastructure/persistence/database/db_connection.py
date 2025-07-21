@@ -80,22 +80,33 @@ def create_db_engine(connection_string: str | None = None) -> AsyncEngine:
 
     # Import needed classes
     from sqlalchemy import event
+    from sqlalchemy.pool import NullPool
 
-    # Configure engine with optimizations for SQLite
-    # Using AsyncAdaptedQueuePool with reduced size for better lock management
-    engine = create_async_engine(
-        db_url,
-        # AsyncAdaptedQueuePool with small pool size to avoid lock contention
-        pool_size=1,  # Smaller pool avoids concurrent writes to SQLite
-        max_overflow=2,  # Allow only a few overflow connections
-        pool_timeout=60,  # Wait longer for connections
-        pool_recycle=3600,  # Recycle connections hourly
-        connect_args=connect_args,
-        # Validate connections before using them
-        pool_pre_ping=True,
-        # Echo SQL for debugging (disable in production)
-        echo=False,
-    )
+    # Configure engine with SQLite-appropriate connection pooling
+    # NullPool creates connections on-demand and closes them immediately for SQLite
+    if db_url.startswith("sqlite"):
+        # SQLite-specific configuration with NullPool for proper connection lifecycle
+        engine = create_async_engine(
+            db_url,
+            poolclass=NullPool,  # No connection pooling - create/close on demand
+            connect_args=connect_args,
+            # Echo SQL for debugging (disable in production)
+            echo=False,
+        )
+    else:
+        # Non-SQLite databases can use normal connection pooling
+        engine = create_async_engine(
+            db_url,
+            pool_size=5,  # More connections for concurrent databases
+            max_overflow=10,  # Allow overflow for other DB types
+            pool_timeout=60,  # Wait longer for connections
+            pool_recycle=3600,  # Recycle connections hourly
+            connect_args=connect_args,
+            # Validate connections before using them
+            pool_pre_ping=True,
+            # Echo SQL for debugging (disable in production)
+            echo=False,
+        )
 
     # Configure event listeners on the sync engine to manage SQLite connection behavior
     if db_url.startswith("sqlite"):

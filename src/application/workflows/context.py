@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.config import get_logger
+from src.domain.repositories.interfaces import PlaylistRepository, TrackRepository
 from src.infrastructure.connectors import CONNECTORS, discover_connectors
 from src.infrastructure.persistence.database.db_connection import get_session
 from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
@@ -19,6 +20,7 @@ from .protocols import (
     DatabaseSessionProvider,
     LoggerProvider,
     RepositoryProvider,
+    UseCaseProvider,
     WorkflowContext,
 )
 
@@ -92,6 +94,76 @@ class DatabaseSessionProviderImpl:
         return get_session()
 
 
+class SharedSessionProvider:
+    """Shared session provider for workflow-scoped database access.
+
+    This provider manages a single AsyncSession that is shared across
+    all workflow tasks to prevent SQLite database locks caused by
+    concurrent sessions.
+    """
+
+    def __init__(self, session):
+        """Initialize with a shared session."""
+        self._session = session
+
+    def get_session(self):
+        """Get the shared session (already opened)."""
+        return self._session
+
+    async def __aenter__(self):
+        """Async context manager entry - session already opened."""
+        return self._session
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit - do nothing, session managed by workflow."""
+
+
+class UseCaseProviderImpl:
+    """Use case provider implementation with dependency injection."""
+
+    def __init__(self, shared_session=None):
+        """Initialize with optional shared session."""
+        self._shared_session = shared_session
+
+    async def get_save_playlist_use_case(self):
+        """Get SavePlaylistUseCase with injected dependencies."""
+        from src.application.use_cases.save_playlist import SavePlaylistUseCase
+
+        if self._shared_session:
+            # Use the shared session from workflow context
+            track_repos = TrackRepositories(self._shared_session)
+            playlist_repos = PlaylistRepositories(self._shared_session)
+
+            return SavePlaylistUseCase(
+                track_repo=track_repos.core, playlist_repo=playlist_repos.core
+            )
+        else:
+            # Fallback to individual session (for non-workflow usage)
+            async with get_session() as session:
+                track_repos = TrackRepositories(session)
+                playlist_repos = PlaylistRepositories(session)
+
+                return SavePlaylistUseCase(
+                    track_repo=track_repos.core, playlist_repo=playlist_repos.core
+                )
+
+    async def get_update_playlist_use_case(self):
+        """Get UpdatePlaylistUseCase with injected dependencies."""
+        from src.application.use_cases.update_playlist import UpdatePlaylistUseCase
+
+        if self._shared_session:
+            # Use the shared session from workflow context
+            playlist_repos = PlaylistRepositories(self._shared_session)
+
+            return UpdatePlaylistUseCase(playlist_repo=playlist_repos.core)
+        else:
+            # Fallback to individual session (for non-workflow usage)
+            async with get_session() as session:
+                playlist_repos = PlaylistRepositories(session)
+
+                return UpdatePlaylistUseCase(playlist_repo=playlist_repos.core)
+
+
 class RepositoryProviderImpl:
     """Repository provider implementation."""
 
@@ -151,69 +223,88 @@ class ConcreteWorkflowContext:
     config: ConfigProvider
     logger: LoggerProvider
     connectors: ConnectorRegistry
-    repositories: RepositoryProvider
+    use_cases: UseCaseProvider
     session_provider: DatabaseSessionProvider
+    repositories: RepositoryProvider  # Legacy compatibility
 
 
-def create_workflow_context() -> WorkflowContext:
+def create_workflow_context(shared_session=None) -> WorkflowContext:
     """Create a WorkflowContext with real dependencies wired up."""
     config = ConfigProviderImpl()
     logger = LoggerProviderImpl()
     connectors = ConnectorRegistryImpl()
     session_provider = DatabaseSessionProviderImpl()
+    use_cases = UseCaseProviderImpl(shared_session)
 
-    # For repositories, we'll create a placeholder that gets the session when needed
-    # This is a bit of a hack but works for the current design
-    class LazyRepositoryProvider:
-        """Repository provider that creates repos with fresh sessions."""
+    # Create proper repository provider implementation (legacy compatibility)
+    class ProperRepositoryProvider:
+        """Repository provider that implements the RepositoryProvider interface properly."""
 
+        # For now, return None for properties we don't need yet
+        # These will be implemented when needed
         @property
         def core(self) -> Any:
-            """Core track repository."""
-            # Return a mock or placeholder - this is for workflow context
             return None
 
         @property
         def plays(self) -> Any:
-            """Track plays repository."""
             return None
 
         @property
         def likes(self) -> Any:
-            """Track likes repository."""
             return None
 
         @property
         def connector(self) -> Any:
-            """Connector repository."""
             return None
 
         @property
         def checkpoints(self) -> Any:
-            """Sync checkpoints repository."""
             return None
 
         @property
         def playlists(self) -> Any:
-            """Playlist repository."""
             return None
 
-        async def get_track_repos(self):
-            """Get track repositories with fresh session."""
-            async with get_session() as session:
-                return TrackRepositories(session)
+        async def create_repos_with_shared_session(
+            self,
+        ) -> tuple[TrackRepository, PlaylistRepository, Any]:
+            """Create track and playlist repositories sharing a single session.
 
-        async def get_playlist_repos(self):
-            """Get playlist repositories with fresh session."""
-            async with get_session() as session:
-                return PlaylistRepositories(session)
+            This ensures both repositories operate within the same transaction,
+            preventing database locking and ensuring ACID properties.
 
-    repositories = LazyRepositoryProvider()
+            Returns:
+                Tuple of (track_repo, playlist_repo, session_context)
+            """
+            session = get_session()
+            session_ctx = await session.__aenter__()
+
+            track_repos = TrackRepositories(session_ctx)
+            playlist_repos = PlaylistRepositories(session_ctx)
+
+            return track_repos.core, playlist_repos.core, session
+
+        async def create_playlist_repo_with_session(
+            self,
+        ) -> tuple[PlaylistRepository, Any]:
+            """Create playlist repository with session for UpdatePlaylistUseCase.
+
+            Returns:
+                Tuple of (playlist_repo, session_context)
+            """
+            session = get_session()
+            session_ctx = await session.__aenter__()
+            playlist_repos = PlaylistRepositories(session_ctx)
+            return playlist_repos.core, session
+
+    repositories = ProperRepositoryProvider()
 
     return ConcreteWorkflowContext(
         config=config,
         logger=logger,
         connectors=connectors,
-        repositories=repositories,
+        use_cases=use_cases,
         session_provider=session_provider,
+        repositories=repositories,  # Legacy compatibility
     )

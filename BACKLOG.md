@@ -185,7 +185,6 @@ This document is a high level overview of Project Narada's development backlog/r
     - Status: Not Started
     - Notes:
         - **TODO(#123)**: Implement sophisticated reordering logic for playlist updates
-        - **TODO(#124)**: Implement ISRC and metadata matching strategies beyond simple Spotify ID matching
         - **TODO(#125)**: Replace placeholder with actual Spotify API operations (add/remove/reorder tracks)
         - Address "simplified positioning for now" and "move operations simplified for now" in differential algorithm
         - File: `src/application/use_cases/update_playlist.py:261,266,292,512,549`
@@ -248,6 +247,19 @@ This document is a high level overview of Project Narada's development backlog/r
         - Add time-based transformers (seasonal, time of day)
         - Include randomization with optional weighting for sorting a playlist
         - Include selection of just the first X or last X from a tracklist
+
+- [ ] **Advanced Track Matching Strategies**
+    - Effort: M
+    - What: Extend playlist update matching beyond simple Spotify ID matching to include ISRC and metadata strategies
+    - Why: Enable more sophisticated track matching for playlist updates, especially useful when Spotify IDs aren't available or when handling cross-service track resolution
+    - Dependencies: Complete UpdatePlaylistUseCase Implementation
+    - Status: Not Started
+    - Notes:
+        - Implement ISRC-based matching for high-confidence identity resolution
+        - Add metadata matching (artist/title/album) with confidence scoring
+        - Support fallback strategies when primary matching fails
+        - Maintain existing Spotify ID matching as fastest path
+        - File: `src/application/use_cases/update_playlist.py` (currently uses simple Spotify ID matching)
 
 - [ ] **Enhanced Playlist Naming**
     - Effort: M

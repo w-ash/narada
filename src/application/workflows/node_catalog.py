@@ -8,6 +8,7 @@ focusing on node definition rather than implementation details.
 from .node_factories import (
     create_destination_node,
     create_enricher_node,
+    create_play_history_enricher_node,
     make_node,
 )
 from .node_registry import node
@@ -46,6 +47,14 @@ node(
         "attributes": ["popularity", "explicit"],
     }),
 )
+
+# Play history enricher
+node(
+    "enricher.play_history",
+    description="Enriches tracks with play counts and listening history from internal database",
+    input_type="tracklist",
+    output_type="tracklist",
+)(create_play_history_enricher_node())
 # === FILTER NODES ===
 node(
     "filter.deduplicate",
@@ -81,6 +90,14 @@ node(
     input_type="tracklist",
     output_type="tracklist",
 )(make_node("filter", "by_metric"))
+
+# Unified play history filter
+node(
+    "filter.by_play_history",
+    description="Filters tracks by play count and/or listening date with flexible constraints",
+    input_type="tracklist",
+    output_type="tracklist",
+)(make_node("filter", "by_play_history"))
 
 # === SORTER NODES ===
 node(

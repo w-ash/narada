@@ -352,6 +352,170 @@ class SpotifyConnector:
             logger.error(f"Spotify API error: {e}")
             raise
 
+    @resilient_operation("execute_spotify_playlist_operations")
+    @backoff.on_exception(backoff.expo, spotipy.SpotifyException, max_tries=3)
+    async def execute_playlist_operations(
+        self,
+        playlist_id: str,
+        operations: list,
+        snapshot_id: str | None = None,
+    ) -> str | None:
+        """Execute a list of differential playlist operations.
+
+        Args:
+            playlist_id: Spotify playlist ID
+            operations: List of PlaylistOperation objects to execute
+            snapshot_id: Optional snapshot ID for conflict detection
+
+        Returns:
+            New snapshot ID after operations, None if no operations performed
+        """
+        if not operations:
+            return snapshot_id
+
+        logger.info(
+            f"Executing {len(operations)} playlist operations on {playlist_id}",
+            snapshot_id=snapshot_id,
+        )
+
+        current_snapshot = snapshot_id
+
+        # Process operations in the correct order: remove → add → move
+        from src.application.use_cases.update_playlist import PlaylistOperationType
+
+        # Group operations by type
+        remove_ops = [
+            op for op in operations if op.operation_type == PlaylistOperationType.REMOVE
+        ]
+        add_ops = [
+            op for op in operations if op.operation_type == PlaylistOperationType.ADD
+        ]
+        move_ops = [
+            op for op in operations if op.operation_type == PlaylistOperationType.MOVE
+        ]
+
+        try:
+            # Step 1: Remove tracks (in reverse order to avoid index shifting)
+            if remove_ops:
+                current_snapshot = await self._execute_remove_operations(
+                    playlist_id, remove_ops, current_snapshot
+                )
+
+            # Step 2: Add tracks
+            if add_ops:
+                current_snapshot = await self._execute_add_operations(
+                    playlist_id, add_ops, current_snapshot
+                )
+
+            # Step 3: Reorder tracks
+            if move_ops:
+                current_snapshot = await self._execute_move_operations(
+                    playlist_id, move_ops, current_snapshot
+                )
+
+            logger.info(
+                f"Successfully executed all operations, new snapshot: {current_snapshot}"
+            )
+            return current_snapshot
+
+        except spotipy.SpotifyException as e:
+            logger.error(f"Spotify API error during operations: {e}")
+            raise
+
+    async def _execute_remove_operations(
+        self,
+        playlist_id: str,
+        remove_ops: list,
+        snapshot_id: str | None,
+    ) -> str | None:
+        """Execute remove operations, batched by track URI."""
+        # Group removes by track URI to optimize API calls
+        tracks_to_remove = {}
+        for op in remove_ops:
+            if op.spotify_uri:
+                if op.spotify_uri not in tracks_to_remove:
+                    tracks_to_remove[op.spotify_uri] = []
+                if op.old_position is not None:
+                    tracks_to_remove[op.spotify_uri].append(op.old_position)
+
+        # Execute removes in batches
+        items_to_remove = []
+        for uri, positions in tracks_to_remove.items():
+            if positions:
+                # Remove specific positions
+                items_to_remove.append({"uri": uri, "positions": positions})
+            else:
+                # Remove all occurrences
+                items_to_remove.append({"uri": uri})
+
+        if items_to_remove:
+            # Process in batches of 100
+            for i in range(0, len(items_to_remove), 100):
+                batch = items_to_remove[i : i + 100]
+                result = await asyncio.to_thread(
+                    self.client.playlist_remove_specific_occurrences_of_items,
+                    playlist_id=playlist_id,
+                    items=batch,
+                    snapshot_id=snapshot_id,
+                )
+                snapshot_id = result.get("snapshot_id") if result else snapshot_id
+                await asyncio.sleep(0.1)  # Rate limiting
+
+        return snapshot_id
+
+    async def _execute_add_operations(
+        self,
+        playlist_id: str,
+        add_ops: list,
+        snapshot_id: str | None,
+    ) -> str | None:
+        """Execute add operations in position order."""
+        # Sort by position to maintain order
+        sorted_adds = sorted(add_ops, key=lambda op: op.position)
+
+        # Group consecutive positions to batch when possible
+        for op in sorted_adds:
+            if op.spotify_uri:
+                await asyncio.to_thread(
+                    self.client.playlist_add_items,
+                    playlist_id=playlist_id,
+                    items=[op.spotify_uri],
+                    position=op.position,
+                )
+                # Spotify doesn't return snapshot_id from add_items, so we refresh
+                await asyncio.sleep(0.1)  # Rate limiting
+
+        # Get updated snapshot ID after all adds
+        if sorted_adds:
+            playlist_info = await asyncio.to_thread(
+                self.client.playlist, playlist_id, fields="snapshot_id"
+            )
+            snapshot_id = playlist_info.get("snapshot_id")
+
+        return snapshot_id
+
+    async def _execute_move_operations(
+        self,
+        playlist_id: str,
+        move_ops: list,
+        snapshot_id: str | None,
+    ) -> str | None:
+        """Execute move operations individually."""
+        for op in move_ops:
+            if op.old_position is not None:
+                result = await asyncio.to_thread(
+                    self.client.playlist_reorder_items,
+                    playlist_id=playlist_id,
+                    range_start=op.old_position,
+                    insert_before=op.position,
+                    range_length=1,
+                    snapshot_id=snapshot_id,
+                )
+                snapshot_id = result.get("snapshot_id") if result else snapshot_id
+                await asyncio.sleep(0.1)  # Rate limiting
+
+        return snapshot_id
+
     @resilient_operation("get_liked_tracks")
     @backoff.on_exception(backoff.expo, spotipy.SpotifyException, max_tries=3)
     async def get_liked_tracks(

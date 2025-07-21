@@ -8,7 +8,7 @@ for different import modes and service types.
 from pathlib import Path
 from typing import Literal
 
-from src.application.utilities.progress_integration import with_db_progress
+from src.application.utilities.progress_integration import DatabaseProgressContext
 from src.config import get_logger
 from src.domain.entities import OperationResult
 from src.infrastructure.persistence.repositories.track import TrackRepositories
@@ -103,22 +103,26 @@ class ImportOrchestrator:
         """Run LastFM recent plays import."""
         _ = additional_options  # Reserved for future extensibility
 
-        # Apply progress decorator for consistent UI
-
-        @with_db_progress(
+        # Use async context manager for session-per-operation pattern
+        async with DatabaseProgressContext(
             description=f"Importing {limit:,} recent Last.fm plays...",
             success_text="Recent plays imported successfully!",
             display_title="Last.fm Recent Import Results",
             next_step_message="[yellow]Tip:[/yellow] Run [cyan]narada workflows[/cyan] to create playlists",
-        )
-        async def _import_operation(repositories: TrackRepositories) -> OperationResult:
-            service = LastfmImportService(repositories)
-            if resolve_tracks:
-                return await service.import_recent_plays_with_resolution(limit=limit)
-            else:
-                return await service.import_recent_plays(limit=limit)
+        ) as progress:
 
-        return _import_operation(self.repositories)
+            async def _import_operation(
+                repositories: TrackRepositories,
+            ) -> OperationResult:
+                service = LastfmImportService(repositories)
+                if resolve_tracks:
+                    return await service.import_recent_plays_with_resolution(
+                        limit=limit
+                    )
+                else:
+                    return await service.import_recent_plays(limit=limit)
+
+            return await progress.run_with_repositories(_import_operation)
 
     async def _run_lastfm_incremental(
         self,
@@ -129,21 +133,23 @@ class ImportOrchestrator:
         """Run LastFM incremental import."""
         _ = additional_options  # Reserved for future extensibility
 
-        # Apply progress decorator for consistent UI
-
-        @with_db_progress(
+        # Use async context manager for session-per-operation pattern
+        async with DatabaseProgressContext(
             description="Running incremental Last.fm import...",
             success_text="Incremental import completed successfully!",
             display_title="Last.fm Incremental Import Results",
             next_step_message="[yellow]Tip:[/yellow] Run this regularly to stay up to date",
-        )
-        async def _import_operation(repositories: TrackRepositories) -> OperationResult:
-            service = LastfmImportService(repositories)
-            return await service.import_incremental_plays(
-                user_id=user_id, resolve_tracks=resolve_tracks
-            )
+        ) as progress:
 
-        return _import_operation(self.repositories)
+            async def _import_operation(
+                repositories: TrackRepositories,
+            ) -> OperationResult:
+                service = LastfmImportService(repositories)
+                return await service.import_incremental_plays(
+                    user_id=user_id, resolve_tracks=resolve_tracks
+                )
+
+            return await progress.run_with_repositories(_import_operation)
 
     async def _run_lastfm_full_history(
         self,
@@ -182,28 +188,33 @@ class ImportOrchestrator:
                     error_count=0,
                 )
 
-        # Apply progress decorator for consistent UI
-        @with_db_progress(
+        # Use async context manager for session-per-operation pattern
+        async with DatabaseProgressContext(
             description="Running full Last.fm history import...",
             success_text="Full history import completed successfully!",
             display_title="Last.fm Full History Import Results",
             next_step_message="[yellow]Tip:[/yellow] Use incremental imports going forward",
-        )
-        async def _import_operation(repositories: TrackRepositories) -> OperationResult:
-            service = LastfmImportService(repositories)
+        ) as progress:
 
-            # Reset checkpoint before full import
-            username = user_id or service.lastfm_connector.lastfm_username
-            if username:
-                await self._reset_lastfm_checkpoint(username)
+            async def _import_operation(
+                repositories: TrackRepositories,
+            ) -> OperationResult:
+                service = LastfmImportService(repositories)
 
-            # Use large limit for full history (API will stop when no more data)
-            if resolve_tracks:
-                return await service.import_recent_plays_with_resolution(limit=50000)
-            else:
-                return await service.import_recent_plays(limit=50000)
+                # Reset checkpoint before full import
+                username = user_id or service.lastfm_connector.lastfm_username
+                if username:
+                    await self._reset_lastfm_checkpoint(username)
 
-        return _import_operation(self.repositories)
+                # Use large limit for full history (API will stop when no more data)
+                if resolve_tracks:
+                    return await service.import_recent_plays_with_resolution(
+                        limit=50000
+                    )
+                else:
+                    return await service.import_recent_plays(limit=50000)
+
+            return await progress.run_with_repositories(_import_operation)
 
     async def _run_spotify_file(
         self, file_path: Path, **additional_options
@@ -217,29 +228,38 @@ class ImportOrchestrator:
         if not file_path.is_file():
             raise ValueError(f"Path is not a file: {file_path}")
 
-        # Apply progress decorator for consistent UI
-        @with_db_progress(
+        # Use async context manager for session-per-operation pattern
+        async with DatabaseProgressContext(
             description="Importing Spotify play history from JSON...",
             success_text="Spotify plays imported successfully!",
             display_title="Spotify JSON Import Results",
             next_step_message="[yellow]Tip:[/yellow] Run [cyan]narada workflows[/cyan] to create playlists",
-        )
-        async def _import_operation(repositories: TrackRepositories) -> OperationResult:
-            service = SpotifyImportService(repositories)
-            return await service.import_from_file(file_path)
+        ) as progress:
 
-        return _import_operation(self.repositories)
+            async def _import_operation(
+                repositories: TrackRepositories,
+            ) -> OperationResult:
+                service = SpotifyImportService(repositories)
+                return await service.import_from_file(file_path)
+
+            return await progress.run_with_repositories(_import_operation)
 
     async def _reset_lastfm_checkpoint(self, username: str) -> None:
         """Reset Last.fm checkpoint for full history import."""
         from src.domain.entities import SyncCheckpoint
+        from src.infrastructure.persistence.database import get_session
+        from src.infrastructure.persistence.repositories.track import TrackRepositories
 
         # Create a new checkpoint with no timestamp (forces full import)
         checkpoint = SyncCheckpoint(
             user_id=username, service="lastfm", entity_type="plays", last_timestamp=None
         )
 
-        await self.repositories.checkpoints.save_sync_checkpoint(checkpoint)
+        # Use session-per-operation pattern for consistency
+        async with get_session() as session:
+            repositories = TrackRepositories(session)
+            await repositories.checkpoints.save_sync_checkpoint(checkpoint)
+
         logger.info(f"Reset Last.fm checkpoint for user {username}")
 
 

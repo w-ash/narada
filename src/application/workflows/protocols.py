@@ -70,6 +70,18 @@ class DatabaseSessionProvider(Protocol):
         ...
 
 
+class UseCaseProvider(Protocol):
+    """Protocol for providing configured use cases with dependency injection."""
+
+    async def get_save_playlist_use_case(self) -> Any:
+        """Get SavePlaylistUseCase with injected dependencies."""
+        ...
+
+    async def get_update_playlist_use_case(self) -> Any:
+        """Get UpdatePlaylistUseCase with injected dependencies."""
+        ...
+
+
 class WorkflowContext(Protocol):
     """Complete workflow execution context with all dependencies."""
 
@@ -89,13 +101,19 @@ class WorkflowContext(Protocol):
         ...
 
     @property
-    def repositories(self) -> RepositoryProvider:
-        """Repository provider."""
+    def use_cases(self) -> UseCaseProvider:
+        """Use case provider with dependency injection."""
         ...
 
     @property
     def session_provider(self) -> DatabaseSessionProvider:
         """Database session provider."""
+        ...
+
+    # Legacy compatibility - will be removed
+    @property
+    def repositories(self) -> RepositoryProvider:
+        """Repository provider (deprecated - use use_cases instead)."""
         ...
 
 
