@@ -175,10 +175,12 @@ Pre-built workflow patterns leveraging play history capabilities:
 **Critical for maintainable codebase and future web interface development**
 
 1. **Clean Architecture Violations** (High Priority)
-   - **Issue**: 17+ application layer files directly import infrastructure classes
+   - **Issue**: 15+ application layer files directly import infrastructure classes
    - **Impact**: Violates dependency inversion, reduces testability, couples business logic to implementation
-   - **Files**: `import_tracks.py`, `progress_integration.py`, `workflows/context.py`, `use_cases/*.py`
+   - **Progress**: ✅ Fixed `progress_integration.py`, ✅ Partially fixed `import_tracks.py`
+   - **Remaining Files**: `workflows/context.py`, `use_cases/sync_likes.py`, `use_cases/match_tracks.py`, `services/play_history_enricher.py`, `workflows/source_nodes.py`, `workflows/destination_nodes.py`, `workflows/node_factories.py`
    - **Solution**: Use dependency injection pattern, inject repository interfaces at composition root
+   - **Pattern Established**: Session/repository factories injected at composition root (see `progress_integration.py`)
 
 2. **Session Management Consistency** (Medium Priority)  
    - **Current**: Mixed patterns (workflow shared sessions vs individual use case sessions)

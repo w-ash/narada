@@ -11,9 +11,6 @@ from typing import Literal
 from src.application.utilities.progress_integration import DatabaseProgressContext
 from src.config import get_logger
 from src.domain.entities import OperationResult
-from src.infrastructure.persistence.repositories.track import TrackRepositories
-from src.infrastructure.services.lastfm_import import LastfmImportService
-from src.infrastructure.services.spotify_import import SpotifyImportService
 
 logger = get_logger(__name__)
 
@@ -29,25 +26,11 @@ class ImportOrchestrator:
     interface for the CLI layer.
     """
 
-    def __init__(self, repositories: TrackRepositories) -> None:
+    def __init__(self, repositories=None) -> None:
         """Initialize with repository access."""
         self.repositories = repositories
         self._lastfm_service = None
         self._spotify_service = None
-
-    @property
-    def lastfm_service(self) -> LastfmImportService:
-        """Lazy-loaded LastFM import service."""
-        if self._lastfm_service is None:
-            self._lastfm_service = LastfmImportService(self.repositories)
-        return self._lastfm_service
-
-    @property
-    def spotify_service(self) -> SpotifyImportService:
-        """Lazy-loaded Spotify import service."""
-        if self._spotify_service is None:
-            self._spotify_service = SpotifyImportService(self.repositories)
-        return self._spotify_service
 
     async def run_import(
         self, service: ServiceType, mode: ImportMode, **forwarded_params
@@ -112,8 +95,11 @@ class ImportOrchestrator:
         ) as progress:
 
             async def _import_operation(
-                repositories: TrackRepositories,
+                repositories,
             ) -> OperationResult:
+                from src.infrastructure.services.lastfm_import import (
+                    LastfmImportService,
+                )
                 service = LastfmImportService(repositories)
                 if resolve_tracks:
                     return await service.import_recent_plays_with_resolution(
@@ -122,7 +108,15 @@ class ImportOrchestrator:
                 else:
                     return await service.import_recent_plays(limit=limit)
 
-            return await progress.run_with_repositories(_import_operation)
+            # Import infrastructure dependencies at composition root
+            from src.infrastructure.persistence.database import get_session
+            from src.infrastructure.persistence.repositories.track import (
+                TrackRepositories,
+            )
+            
+            return await progress.run_with_repositories(
+                _import_operation, get_session, TrackRepositories
+            )
 
     async def _run_lastfm_incremental(
         self,
@@ -142,14 +136,25 @@ class ImportOrchestrator:
         ) as progress:
 
             async def _import_operation(
-                repositories: TrackRepositories,
+                repositories,
             ) -> OperationResult:
+                from src.infrastructure.services.lastfm_import import (
+                    LastfmImportService,
+                )
                 service = LastfmImportService(repositories)
                 return await service.import_incremental_plays(
                     user_id=user_id, resolve_tracks=resolve_tracks
                 )
 
-            return await progress.run_with_repositories(_import_operation)
+            # Import infrastructure dependencies at composition root
+            from src.infrastructure.persistence.database import get_session
+            from src.infrastructure.persistence.repositories.track import (
+                TrackRepositories,
+            )
+            
+            return await progress.run_with_repositories(
+                _import_operation, get_session, TrackRepositories
+            )
 
     async def _run_lastfm_full_history(
         self,
@@ -197,8 +202,11 @@ class ImportOrchestrator:
         ) as progress:
 
             async def _import_operation(
-                repositories: TrackRepositories,
+                repositories,
             ) -> OperationResult:
+                from src.infrastructure.services.lastfm_import import (
+                    LastfmImportService,
+                )
                 service = LastfmImportService(repositories)
 
                 # Reset checkpoint before full import
@@ -214,7 +222,15 @@ class ImportOrchestrator:
                 else:
                     return await service.import_recent_plays(limit=50000)
 
-            return await progress.run_with_repositories(_import_operation)
+            # Import infrastructure dependencies at composition root
+            from src.infrastructure.persistence.database import get_session
+            from src.infrastructure.persistence.repositories.track import (
+                TrackRepositories,
+            )
+            
+            return await progress.run_with_repositories(
+                _import_operation, get_session, TrackRepositories
+            )
 
     async def _run_spotify_file(
         self, file_path: Path, **additional_options
@@ -237,12 +253,23 @@ class ImportOrchestrator:
         ) as progress:
 
             async def _import_operation(
-                repositories: TrackRepositories,
+                repositories,
             ) -> OperationResult:
+                from src.infrastructure.services.spotify_import import (
+                    SpotifyImportService,
+                )
                 service = SpotifyImportService(repositories)
                 return await service.import_from_file(file_path)
 
-            return await progress.run_with_repositories(_import_operation)
+            # Import infrastructure dependencies at composition root
+            from src.infrastructure.persistence.database import get_session
+            from src.infrastructure.persistence.repositories.track import (
+                TrackRepositories,
+            )
+            
+            return await progress.run_with_repositories(
+                _import_operation, get_session, TrackRepositories
+            )
 
     async def _reset_lastfm_checkpoint(self, username: str) -> None:
         """Reset Last.fm checkpoint for full history import."""
@@ -263,11 +290,10 @@ class ImportOrchestrator:
         logger.info(f"Reset Last.fm checkpoint for user {username}")
 
 
-# Convenience function for CLI usage
 async def run_import(
     service: ServiceType,
     mode: ImportMode,
-    repositories: TrackRepositories,
+    repositories=None,
     **forwarded_params,
 ) -> OperationResult:
     """Convenience function for running imports from CLI.

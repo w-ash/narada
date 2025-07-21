@@ -243,7 +243,12 @@ class DatabaseProgressContext:
         self._result = result
 
     async def run_with_repositories(
-        self, operation_func: Callable[..., Awaitable[OperationResult]], *args, **kwargs
+        self, 
+        operation_func: Callable[..., Awaitable[OperationResult]], 
+        session_factory: Callable, 
+        repository_factory: Callable,
+        *args, 
+        **kwargs
     ) -> OperationResult:
         """Execute an operation with fresh repository instances.
 
@@ -252,19 +257,17 @@ class DatabaseProgressContext:
 
         Args:
             operation_func: Async function that takes repositories as first arg
+            session_factory: Factory function for creating database sessions
+            repository_factory: Factory function for creating repositories
             *args: Additional positional arguments
             **kwargs: Additional keyword arguments
 
         Returns:
             Operation result
         """
-        # Import here to avoid circular imports
-        from src.infrastructure.persistence.database import get_session
-        from src.infrastructure.persistence.repositories.track import TrackRepositories
-
-        # Create fresh session and repositories for this operation
-        async with get_session() as session:
-            repositories = TrackRepositories(session)
+        # Create fresh session and repositories for this operation using injected factories
+        async with session_factory() as session:
+            repositories = repository_factory(session)
 
             # Execute operation with repositories
             result = await operation_func(repositories, *args, **kwargs)
