@@ -112,8 +112,9 @@ class TrackMetadataEnricher:
 
             # Step 3: Fetch fresh metadata for stale tracks
             fresh_metadata = {}
+            failed_fresh_track_ids = set()
             if stale_track_ids:
-                fresh_metadata = await self.metadata_manager.fetch_fresh_metadata(
+                fresh_metadata, failed_fresh_track_ids = await self.metadata_manager.fetch_fresh_metadata(
                     identity_mappings,
                     connector,
                     connector_instance,
@@ -125,9 +126,9 @@ class TrackMetadataEnricher:
                         f"Fetched fresh metadata for {len(fresh_metadata)} tracks"
                     )
 
-            # Step 4: Get all metadata (fresh + cached)
+            # Step 4: Get all metadata (fresh + cached) with intelligent fallback
             all_metadata = await self.metadata_manager.get_all_metadata(
-                mapped_track_ids, connector, fresh_metadata
+                mapped_track_ids, connector, fresh_metadata, failed_fresh_track_ids
             )
 
             # Step 5: Extract metrics using configured extractors

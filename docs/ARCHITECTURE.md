@@ -164,6 +164,7 @@ Declarative transformation pipelines.
 | **musicbrainzngs** | MusicBrainz integration | Official client, proper rate limiting |
 | **httpx** | HTTP client | Async-first, modern API, excellent performance |
 | **backoff** | Retry logic | Declarative retry patterns, exponential backoff |
+| **aiolimiter** | Rate limiting | Async rate limiting for API compliance, leaky bucket algorithm |
 | **rapidfuzz** | String matching | High-performance fuzzy matching for track resolution |
 | **toolz** | Functional utilities | Functional composition, efficient data processing |
 | **loguru** | Logging | Context-aware logging, minimal configuration |
@@ -497,6 +498,93 @@ async with get_isolated_session() as session:
 ✅ **Use Session-Per-Operation**: For CLI and use case operations
 ✅ **Use Context Managers**: Ensure proper session lifecycle management
 ✅ **Follow Injection Patterns**: Maintain Clean Architecture compliance
+
+## Clean Architecture Modernization (2025)
+
+Narada follows modern clean architecture principles with strict adherence to dependency inversion and separation of concerns. The architecture has been continuously refined to eliminate redundancy while maintaining clean boundaries.
+
+### Architecture Principles Applied
+
+#### Ruthlessly DRY
+**Principle**: Single-maintainer codebase demands zero redundancy. One implementation per concept, reused across contexts.
+
+**Implementation**:
+- ✅ **Eliminated 75+ lines of duplicate code** in workflow node factories
+- ✅ **Removed temporary adapter classes** that violated single responsibility
+- ✅ **Unified creation patterns** across all workflow components
+- ✅ **Single shared implementation** for transform node creation
+
+#### Clean Breaks, No Legacy Code
+**Principle**: When modernizing architecture, make clean breaks rather than maintaining compatibility layers.
+
+**Implementation**:
+- ✅ **Deleted adapter classes completely** (`AdapterRepositoryProvider`, `WorkflowConnectorAdapter`)
+- ✅ **Direct dependency injection** without wrapper objects
+- ✅ **No temporary compatibility code** that would accumulate technical debt
+- ✅ **Immediate cleanup** of all references to removed patterns
+
+#### Dependency Injection Without Over-Engineering
+**Principle**: Use dependency injection selectively where it provides clear benefits, avoid complex frameworks.
+
+**Implementation**:
+- ✅ **Constructor injection** for use cases and services
+- ✅ **Existing repository patterns** used directly without additional abstractions
+- ✅ **Prefect 3.0 integration** leverages built-in dependency management
+- ✅ **Type hints and protocols** for interface clarity without runtime overhead
+
+### Layer Compliance Verification
+
+#### Application Layer Independence
+The application layer maintains strict independence from infrastructure concerns:
+
+```python
+# ✅ Correct: Application uses only domain entities and injected interfaces
+class LikeService:
+    def __init__(self, repositories: Any, connector_provider: ConnectorProvider):
+        self.repositories = repositories  # Interface, not concrete implementation
+        self.connector_provider = connector_provider
+
+# ❌ Avoided: Direct infrastructure imports in application layer
+# from src.infrastructure.connectors.spotify import SpotifyConnector
+```
+
+#### Clean Dependency Flow
+Dependencies flow inward following clean architecture principles:
+
+```
+CLI → Use Cases → Domain Logic
+ ↓      ↓           ↓
+Infrastructure ← Application ← Domain
+```
+
+**Benefits Achieved**:
+- Fast unit tests (domain logic isolated)
+- Easy service integration (connector providers)
+- Clear boundaries (no circular dependencies)
+- Maintainable codebase (single responsibility)
+
+### Workflow System Architecture
+
+#### Database-First Design
+All workflow operations work exclusively on database tracks, ensuring:
+- Cross-service data consistency
+- Reliable enrichment and metrics
+- Complete audit trails
+- Sophisticated filtering capabilities
+
+#### Prefect 3.0 Integration
+Leverages modern workflow orchestration with:
+- Transactional semantics for atomic operations
+- Shared session management for SQLite compatibility
+- Built-in retry logic and error handling
+- Real-time progress tracking and artifacts
+
+#### Node System Design
+Declarative, composable workflow nodes with:
+- Single factory pattern for all node types
+- Direct connector access without adapters
+- Clean separation of transformation logic
+- Type-safe configuration and validation
 
 ## Development Philosophy
 

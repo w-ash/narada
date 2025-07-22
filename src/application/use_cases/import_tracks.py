@@ -100,6 +100,7 @@ class ImportOrchestrator:
                 from src.infrastructure.services.lastfm_import import (
                     LastfmImportService,
                 )
+
                 service = LastfmImportService(repositories)
                 if resolve_tracks:
                     return await service.import_recent_plays_with_resolution(
@@ -113,7 +114,7 @@ class ImportOrchestrator:
             from src.infrastructure.persistence.repositories.track import (
                 TrackRepositories,
             )
-            
+
             return await progress.run_with_repositories(
                 _import_operation, get_session, TrackRepositories
             )
@@ -141,6 +142,7 @@ class ImportOrchestrator:
                 from src.infrastructure.services.lastfm_import import (
                     LastfmImportService,
                 )
+
                 service = LastfmImportService(repositories)
                 return await service.import_incremental_plays(
                     user_id=user_id, resolve_tracks=resolve_tracks
@@ -151,7 +153,7 @@ class ImportOrchestrator:
             from src.infrastructure.persistence.repositories.track import (
                 TrackRepositories,
             )
-            
+
             return await progress.run_with_repositories(
                 _import_operation, get_session, TrackRepositories
             )
@@ -207,6 +209,7 @@ class ImportOrchestrator:
                 from src.infrastructure.services.lastfm_import import (
                     LastfmImportService,
                 )
+
                 service = LastfmImportService(repositories)
 
                 # Reset checkpoint before full import
@@ -227,7 +230,7 @@ class ImportOrchestrator:
             from src.infrastructure.persistence.repositories.track import (
                 TrackRepositories,
             )
-            
+
             return await progress.run_with_repositories(
                 _import_operation, get_session, TrackRepositories
             )
@@ -258,6 +261,7 @@ class ImportOrchestrator:
                 from src.infrastructure.services.spotify_import import (
                     SpotifyImportService,
                 )
+
                 service = SpotifyImportService(repositories)
                 return await service.import_from_file(file_path)
 
@@ -266,7 +270,7 @@ class ImportOrchestrator:
             from src.infrastructure.persistence.repositories.track import (
                 TrackRepositories,
             )
-            
+
             return await progress.run_with_repositories(
                 _import_operation, get_session, TrackRepositories
             )

@@ -50,8 +50,6 @@ def command_error_handler[**P, R](func: Callable[P, R]) -> Callable[P, R]:
         # Execute with logging context
         with logger.contextualize(operation=operation):
             try:
-                # Log command execution
-                logger.debug(f"Executing {operation}")
                 return func(*args, **kwargs)
 
             except typer.Exit:
@@ -254,9 +252,6 @@ def display_operation_result(
 
             for metric_name in metric_columns:
                 value = result.get_metric(track.id, metric_name, "—")
-                logger.debug(
-                    f"Display: track {track.id} (type: {type(track.id)}) {metric_name}={value}"
-                )
                 if metric_name == "sync_status" and isinstance(value, str):
                     # Add emoji for sync status
                     emoji = {

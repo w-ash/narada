@@ -17,6 +17,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar, TypeVar
 
+from aiolimiter import AsyncLimiter
 from attrs import define, field
 import backoff
 
@@ -156,12 +157,12 @@ class BaseMetricResolver:
         return cached_values
 
 
-@define(frozen=True, slots=True)
+@define(slots=True)
 class BatchProcessor[T, R]:
-    """Generic batch processor with concurrency control and backoff capabilities.
+    """Generic batch processor with concurrency control and rate limiting capabilities.
 
     This utility simplifies batch processing operations across all connectors,
-    standardizing concurrency control, batching logic and error handling.
+    standardizing concurrency control, rate limiting, batching logic and error handling.
     Uses configuration values from config.py.
 
     Attributes:
@@ -171,6 +172,7 @@ class BatchProcessor[T, R]:
         retry_base_delay: Base delay between retries (seconds)
         retry_max_delay: Maximum delay between retries (seconds)
         request_delay: Delay between individual requests (seconds)
+        rate_limiter: Optional rate limiter for controlling request start rate
         logger_instance: Logger for recording processing events
     """
 
@@ -180,6 +182,7 @@ class BatchProcessor[T, R]:
     retry_base_delay: float
     retry_max_delay: float
     request_delay: float
+    rate_limiter: AsyncLimiter | None = field(default=None)
     logger_instance: Any = field(factory=lambda: get_logger(__name__))
 
     def _on_backoff(self, details):
@@ -264,12 +267,19 @@ class BatchProcessor[T, R]:
             on_giveup=self._on_giveup,
         )
         async def process_with_backoff(item: T) -> R:
-            """Process an item with automatic backoff on failures."""
-            async with semaphore:
-                # Add delay between requests to avoid rate limits
-                if self.request_delay > 0:
-                    await asyncio.sleep(self.request_delay)
-                return await process_func(item)
+            """Process an item with automatic backoff on failures.
+            
+            Uses rate limiter if provided for controlling request start rate,
+            or falls back to semaphore-based concurrency limiting.
+            """
+            if self.rate_limiter:
+                # Use rate limiter for controlling request start rate
+                async with self.rate_limiter:
+                    return await process_func(item)
+            else:
+                # Fall back to semaphore-based concurrency limiting
+                async with semaphore:
+                    return await process_func(item)
 
         # Process in batches for memory efficiency and rate limit management
         for i in range(0, len(items), self.batch_size):

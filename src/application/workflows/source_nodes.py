@@ -13,16 +13,14 @@ from src.application.use_cases.save_playlist import (
 )
 from src.config import get_logger
 from src.domain.entities.track import Track, TrackList
-from src.infrastructure.connectors.spotify import (
-    SpotifyConnector,
-    convert_spotify_track_to_connector,
-)
+
+# Infrastructure imports removed for Clean Architecture compliance
 
 logger = get_logger(__name__)
 
 
 async def spotify_playlist_source(
-    context: dict, config: dict, spotify_connector: SpotifyConnector | None = None
+    context: dict, config: dict, spotify_connector: Any = None
 ) -> dict[str, Any]:
     """Fetch Spotify playlist and convert to TrackList using bulk operations."""
     playlist_id = config.get("playlist_id")
@@ -31,7 +29,13 @@ async def spotify_playlist_source(
 
     logger.info(f"Fetching Spotify playlist: {playlist_id}")
     if spotify_connector is None:
-        spotify_connector = SpotifyConnector()
+        # Get Spotify connector from flattened context (Clean Architecture)
+        connector_registry = context.get("connectors")
+        if not connector_registry:
+            raise ValueError("No connector registry available")
+
+        # Get connector directly - no adapter wrapper needed
+        spotify_connector = connector_registry.get_connector("spotify")
 
     # 1. Fetch playlist with its items in a single API call
     connector_playlist = await spotify_connector.get_spotify_playlist(playlist_id)
@@ -58,6 +62,9 @@ async def spotify_playlist_source(
     track_data_map = await spotify_connector.get_tracks_by_ids(track_ids)
 
     # 4. Convert all tracks to domain models
+    # Import locally to avoid top-level infrastructure dependency
+    from src.infrastructure.connectors.spotify import convert_spotify_track_to_connector
+
     domain_tracks = [
         _convert_connector_track_to_domain(
             convert_spotify_track_to_connector(track_data)

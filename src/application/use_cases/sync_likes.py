@@ -5,19 +5,42 @@ track likes between different music services. Handles progress reporting
 and checkpoint management for incremental sync operations.
 """
 
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
+
+from src.domain.entities import ConnectorTrack
 
 # attrs import removed - no longer needed with unified result classes
 from src.application.utilities.results import ResultFactory
 from src.config import get_config, get_logger
 from src.domain.entities import OperationResult, SyncCheckpoint, Track
-from src.infrastructure.connectors.lastfm import LastFMConnector
-from src.infrastructure.connectors.spotify import SpotifyConnector
-from src.infrastructure.persistence.repositories.track import TrackRepositories
 
 logger = get_logger(__name__)
+
+
+class MusicServiceConnector(Protocol):
+    """Protocol for connectors used by LikeService."""
+    
+    async def get_liked_tracks(
+        self,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> tuple[Sequence[ConnectorTrack], str | None]:
+        """Get liked tracks from the service."""
+        ...
+    
+    async def love_track(self, artist_name: str, track_title: str) -> bool:
+        """Love/like a track on the service."""
+        ...
+
+
+class ConnectorProvider(Protocol):
+    """Protocol for connector providers used by LikeService."""
+    
+    def get_connector(self, service_name: str) -> MusicServiceConnector:
+        """Get connector for specified music service."""
+        ...
 
 
 # LikeImportResult and LikeExportResult classes removed
@@ -29,26 +52,38 @@ class LikeService:
 
     Merges functionality from like_operations.py and like_sync.py to eliminate
     duplication and provide a single coherent interface for like management.
+
+    Now uses dependency injection for clean architecture compliance.
     """
 
-    def __init__(self, repositories: TrackRepositories) -> None:
-        """Initialize with repository access."""
+    def __init__(
+        self,
+        repositories: Any,  # TrackRepositories - avoiding circular import
+        connector_provider: ConnectorProvider,
+    ) -> None:
+        """Initialize with injected dependencies.
+
+        Args:
+            repositories: Repository collection (TrackRepositories or compatible)
+            connector_provider: Connector provider for music service access
+        """
         self.repositories = repositories
+        self.connector_provider = connector_provider
         self._spotify_connector = None
         self._lastfm_connector = None
 
     @property
-    def spotify_connector(self) -> SpotifyConnector:
+    def spotify_connector(self) -> MusicServiceConnector:
         """Lazy-loaded Spotify connector."""
         if self._spotify_connector is None:
-            self._spotify_connector = SpotifyConnector()
+            self._spotify_connector = self.connector_provider.get_connector("spotify")
         return self._spotify_connector
 
     @property
-    def lastfm_connector(self) -> LastFMConnector:
+    def lastfm_connector(self) -> MusicServiceConnector:
         """Lazy-loaded Last.fm connector."""
         if self._lastfm_connector is None:
-            self._lastfm_connector = LastFMConnector()
+            self._lastfm_connector = self.connector_provider.get_connector("lastfm")
         return self._lastfm_connector
 
     async def import_spotify_likes(
@@ -469,7 +504,7 @@ class LikeService:
         return results
 
     async def _love_track_on_lastfm(
-        self, track: Track, connector: LastFMConnector
+        self, track: Track, connector: MusicServiceConnector
     ) -> dict:
         """Process a single track for Last.fm loving."""
         if not track.artists:
@@ -534,24 +569,50 @@ class LikeService:
         )
 
 
-# Convenience functions for CLI usage
+# Convenience functions for CLI usage - maintain backward compatibility
 async def run_spotify_likes_import(
-    repositories: TrackRepositories,
+    repositories,  # TrackRepositories object from CLI
     user_id: str,
     limit: int | None = None,
     max_imports: int | None = None,
 ) -> OperationResult:
-    """Convenience function for Spotify likes import from CLI."""
-    service = LikeService(repositories)
+    """Convenience function for Spotify likes import from CLI.
+
+    Uses direct repository injection without adapter classes.
+    """
+    from src.infrastructure.connectors import CONNECTORS
+
+    # Create a simple inline connector provider - no complex abstractions needed
+    class DirectConnectorProvider:
+        def get_connector(self, service_name: str):
+            if service_name not in CONNECTORS:
+                raise ValueError(f"Unknown connector: {service_name}")
+            return CONNECTORS[service_name]["factory"]({})
+    
+    connector_provider = DirectConnectorProvider()
+    service = LikeService(repositories, connector_provider)
     return await service.import_spotify_likes(user_id, limit, max_imports)
 
 
 async def run_lastfm_likes_export(
-    repositories: TrackRepositories,
+    repositories,  # TrackRepositories object from CLI
     user_id: str,
     batch_size: int | None = None,
     max_exports: int | None = None,
 ) -> OperationResult:
-    """Convenience function for Last.fm likes export from CLI."""
-    service = LikeService(repositories)
+    """Convenience function for Last.fm likes export from CLI.
+
+    Uses direct repository injection without adapter classes.
+    """
+    from src.infrastructure.connectors import CONNECTORS
+
+    # Create a simple inline connector provider - no complex abstractions needed
+    class DirectConnectorProvider:
+        def get_connector(self, service_name: str):
+            if service_name not in CONNECTORS:
+                raise ValueError(f"Unknown connector: {service_name}")
+            return CONNECTORS[service_name]["factory"]({})
+    
+    connector_provider = DirectConnectorProvider()
+    service = LikeService(repositories, connector_provider)
     return await service.export_likes_to_lastfm(user_id, batch_size, max_exports)

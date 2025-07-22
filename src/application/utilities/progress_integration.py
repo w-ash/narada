@@ -243,12 +243,12 @@ class DatabaseProgressContext:
         self._result = result
 
     async def run_with_repositories(
-        self, 
-        operation_func: Callable[..., Awaitable[OperationResult]], 
-        session_factory: Callable, 
+        self,
+        operation_func: Callable[..., Awaitable[OperationResult]],
+        session_factory: Callable,
         repository_factory: Callable,
-        *args, 
-        **kwargs
+        *args,
+        **kwargs,
     ) -> OperationResult:
         """Execute an operation with fresh repository instances.
 

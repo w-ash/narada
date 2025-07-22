@@ -74,49 +74,115 @@ class MetadataFreshnessController:
                 f"Checking freshness for {len(track_ids)} tracks (max age: {max_age_hours}h)"
             )
 
-            # Get metadata with timestamps for freshness check
+            # Calculate cutoff time for freshness
+            cutoff_time = datetime.now(UTC) - timedelta(hours=max_age_hours)
+            logger.debug(f"Data older than {cutoff_time} considered stale")
+
+            # Get both metadata timestamps and metrics timestamps
             metadata_with_timestamps = (
                 await self.track_repos.connector.get_connector_metadata_with_timestamps(
                     track_ids, connector
                 )
             )
-
-            if not metadata_with_timestamps:
-                # No metadata exists, all tracks need refresh
-                logger.info(
-                    f"No metadata found for any tracks, all {len(track_ids)} need refresh"
-                )
-                return track_ids
-
-            # Calculate cutoff time for freshness
-            cutoff_time = datetime.now(UTC) - timedelta(hours=max_age_hours)
-            logger.debug(f"Metadata older than {cutoff_time} considered stale")
+            
+            # Also check track metrics timestamps for this connector
+            metrics_timestamps = await self._get_metrics_timestamps(track_ids, connector)
 
             stale_track_ids = []
 
             for track_id in track_ids:
-                if track_id not in metadata_with_timestamps:
-                    # No metadata exists for this track
-                    stale_track_ids.append(track_id)
-                    logger.debug(f"Track {track_id}: no metadata exists")
-                else:
-                    metadata_info = metadata_with_timestamps[track_id]
+                # Check both metadata and metrics timestamps to determine freshness
+                metadata_info = metadata_with_timestamps.get(track_id)
+                metrics_timestamp = metrics_timestamps.get(track_id)
+                
+                # Get the most recent timestamp from either source
+                last_updated = None
+                timestamp_source = "none"
+                
+                if metadata_info and metadata_info.get("last_updated"):
                     last_updated = metadata_info["last_updated"]
-
-                    # Ensure timezone consistency for comparison
+                    timestamp_source = "metadata"
+                    
+                    # Ensure timezone consistency - database stores UTC timestamps
+                    # If no timezone info, assume it's already UTC (our standard)
                     if last_updated and last_updated.tzinfo is None:
-                        # Convert naive datetime to UTC for comparison
                         last_updated = last_updated.replace(tzinfo=UTC)
+                
+                # If metrics timestamp is more recent, use that instead
+                if metrics_timestamp and (last_updated is None or metrics_timestamp > last_updated):
+                    last_updated = metrics_timestamp
+                    timestamp_source = "metrics"
 
-                    if not last_updated or last_updated < cutoff_time:
-                        # Metadata is stale or timestamp is missing
-                        stale_track_ids.append(track_id)
-                        logger.debug(
-                            f"Track {track_id}: stale metadata (last_updated: {last_updated})"
-                        )
+                if not last_updated or last_updated < cutoff_time:
+                    # Data is stale or timestamp is missing
+                    stale_track_ids.append(track_id)
+                    logger.debug(
+                        f"Track {track_id}: stale data (last_updated: {last_updated}, source: {timestamp_source})"
+                    )
+                else:
+                    logger.debug(
+                        f"Track {track_id}: fresh data (last_updated: {last_updated}, source: {timestamp_source})"
+                    )
 
-            logger.info(f"Found {len(stale_track_ids)} tracks with stale metadata")
+            logger.info(f"Found {len(stale_track_ids)} tracks with stale data out of {len(track_ids)} checked")
             return stale_track_ids
+
+    async def _get_metrics_timestamps(
+        self, track_ids: list[int], connector: str
+    ) -> dict[int, datetime]:
+        """Get most recent metrics collection timestamps for tracks from this connector.
+        
+        Args:
+            track_ids: Track IDs to check metrics timestamps for.
+            connector: Connector name to filter metrics by.
+            
+        Returns:
+            Dictionary mapping track_id to most recent collected_at timestamp.
+        """
+        if not track_ids:
+            return {}
+            
+        try:
+            # Get the most recent metrics timestamp for each track from this connector
+            from sqlalchemy import func, select
+
+            from src.infrastructure.persistence.database.db_models import DBTrackMetric
+            
+            # Query for the most recent collected_at timestamp for each track
+            stmt = (
+                select(
+                    DBTrackMetric.track_id,
+                    func.max(DBTrackMetric.collected_at).label("latest_collected_at")
+                )
+                .where(
+                    DBTrackMetric.track_id.in_(track_ids),
+                    DBTrackMetric.connector_name == connector,
+                    DBTrackMetric.is_deleted == False  # noqa: E712
+                )
+                .group_by(DBTrackMetric.track_id)
+            )
+            
+            result = await self.track_repos.metrics.session.execute(stmt)
+            rows = result.fetchall()
+            
+            timestamps = {}
+            for row in rows:
+                track_id = row[0]
+                collected_at = row[1]
+                
+                # Ensure UTC timezone for consistency - database stores UTC timestamps
+                # If no timezone info, assume it's already UTC (our standard)
+                if collected_at and collected_at.tzinfo is None:
+                    collected_at = collected_at.replace(tzinfo=UTC)
+                    
+                timestamps[track_id] = collected_at
+            
+            logger.debug(f"Retrieved metrics timestamps for {len(timestamps)}/{len(track_ids)} tracks from {connector}")
+            return timestamps
+            
+        except Exception as e:
+            logger.warning(f"Failed to get metrics timestamps for {connector}: {e}")
+            return {}
 
     def _get_freshness_policy(self, connector: str) -> float | None:
         """Get freshness policy for a connector from configuration.

@@ -25,7 +25,8 @@ from src.application.use_cases.update_playlist import (
 )
 from src.config import get_logger
 from src.domain.entities.track import TrackList
-from src.infrastructure.connectors.spotify import SpotifyConnector
+
+# Infrastructure imports removed for Clean Architecture compliance
 
 logger = get_logger(__name__)
 
@@ -80,7 +81,11 @@ async def handle_spotify_destination(
 ) -> dict:
     """Create a new Spotify playlist using SavePlaylistUseCase."""
     # Infrastructure: create playlist in Spotify via external API
-    spotify = SpotifyConnector()
+    # Get Spotify connector from flattened context (Clean Architecture)
+    connector_registry = context.get("connectors")
+    if not connector_registry:
+        raise ValueError("No connector registry available")
+    spotify = connector_registry.get_connector("spotify")
     spotify_id = await spotify.create_playlist(
         config.get("name", "Narada Playlist"),
         tracklist.tracks,
@@ -162,7 +167,11 @@ async def handle_update_spotify_destination(
     result = await use_case.execute(command)
 
     # Infrastructure: update Spotify via external API
-    spotify = SpotifyConnector()
+    # Get Spotify connector from flattened context (Clean Architecture)
+    connector_registry = context.get("connectors")
+    if not connector_registry:
+        raise ValueError("No connector registry available")
+    spotify = connector_registry.get_connector("spotify")
     await spotify.update_playlist(spotify_id, result.playlist, replace=not append)
 
     # Return result in expected format for backward compatibility

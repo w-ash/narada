@@ -19,7 +19,6 @@ build/
 .coverage
 htmlcov/
 .ruff_cache/
-pytest.ini
 
 # Package management
 poetry.lock
@@ -95,6 +94,5 @@ var/
 /var/**/*
 infra/
 scripts/
-tests/
 data/
 CLAUDE.md

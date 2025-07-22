@@ -25,6 +25,7 @@ from datetime import datetime
 import os
 from typing import Any, ClassVar
 
+from aiolimiter import AsyncLimiter
 from attrs import define, field
 import backoff
 import pylast
@@ -179,6 +180,7 @@ class LastFMConnector:
     lastfm_username: str | None = field(default=None)
     client: pylast.LastFMNetwork | None = field(default=None, init=False, repr=False)
     batch_processor: BatchProcessor = field(init=False, repr=False)
+    _api_rate_limiter: AsyncLimiter = field(init=False, repr=False)
     connector_name: str = "lastfm"
 
     # Constants for API communication
@@ -191,17 +193,22 @@ class LastFMConnector:
         self.api_secret = self.api_secret or os.getenv("LASTFM_SECRET")
         self.lastfm_username = self.lastfm_username or os.getenv("LASTFM_USERNAME")
 
-        # Initialize the batch processor with config values
+        # Create shared rate limiter for ALL API calls (first tries AND retries)
+        rate_limit = get_config("LASTFM_API_RATE_LIMIT", 5.0)
+        self._api_rate_limiter = AsyncLimiter(rate_limit, 1)
+        
+        # Initialize the batch processor with the shared rate limiter
         self.batch_processor = BatchProcessor[
             Track,
             tuple[int, LastFMTrackInfo | None],
         ](
-            batch_size=get_config("LASTFM_API_BATCH_SIZE"),
+            batch_size=get_config("LASTFM_API_BATCH_SIZE"), 
             concurrency_limit=get_config("LASTFM_API_CONCURRENCY"),
             retry_count=get_config("LASTFM_API_RETRY_COUNT"),
             retry_base_delay=get_config("LASTFM_API_RETRY_BASE_DELAY"),
             retry_max_delay=get_config("LASTFM_API_RETRY_MAX_DELAY"),
-            request_delay=get_config("LASTFM_API_REQUEST_DELAY"),
+            request_delay=0.0,  # No artificial delay - rate limiter handles this
+            rate_limiter=self._api_rate_limiter,  # Share rate limiter with direct calls
             logger_instance=logger,
         )
 
@@ -262,6 +269,11 @@ class LastFMConnector:
         # No valid lookup parameters
         raise ValueError("Either mbid or (artist_name + track_title) must be provided")
 
+    async def _rate_limited_api_call(self, api_func, *args, **kwargs):
+        """Execute API call with shared rate limiting for both first tries and retries."""
+        async with self._api_rate_limiter:
+            return await api_func(*args, **kwargs)
+
     @resilient_operation("get_lastfm_track_info")
     @backoff.on_exception(
         backoff.expo,
@@ -269,6 +281,7 @@ class LastFMConnector:
         max_tries=get_config("LASTFM_API_RETRY_COUNT"),
         base=get_config("LASTFM_API_RETRY_BASE_DELAY"),
         max_value=get_config("LASTFM_API_RETRY_MAX_DELAY"),
+        max_time=get_config("LASTFM_API_MAX_RETRY_TIME"),
         jitter=backoff.full_jitter,
         on_backoff=lambda details: logger.warning(
             f"LastFM API retry {details['tries']}/{get_config('LASTFM_API_RETRY_COUNT')}",
@@ -310,8 +323,10 @@ class LastFMConnector:
         )
 
         try:
-            # Fetch track using appropriate method
-            _, _, track = await self._fetch_track(mbid, artist_name, track_title)
+            # Fetch track using appropriate method with rate limiting
+            _, _, track = await self._rate_limited_api_call(
+                self._fetch_track, mbid, artist_name, track_title
+            )
 
             # Set username for user-specific data
             track.username = user
@@ -387,29 +402,48 @@ class LastFMConnector:
                 logger.warning(f"Track has no ID, skipping: {track.title}")
                 return -1, None
 
-            # Try MusicBrainz ID first, fall back to artist/title
+            # Try MusicBrainz ID first (highest confidence)
             mbid = track.connector_track_ids.get("musicbrainz")
-            artist_name = track.artists[0].name if track.artists else None
-
+            
             try:
                 if mbid:
                     result = await self.get_lastfm_track_info(
                         mbid=mbid,
                         lastfm_username=user,
                     )
-                    return track.id, result
-                elif artist_name:
-                    result = await self.get_lastfm_track_info(
-                        artist_name=artist_name,
-                        track_title=track.title,
-                        lastfm_username=user,
+                    if result and result.lastfm_url:
+                        return track.id, result
+
+                # Try each artist sequentially until we find a match
+                if track.artists:
+                    for i, artist in enumerate(track.artists):
+                        result = await self.get_lastfm_track_info(
+                            artist_name=artist.name,
+                            track_title=track.title,
+                            lastfm_username=user,
+                        )
+                        if result and result.lastfm_url:
+                            # Log which artist succeeded for debugging
+                            if i > 0:
+                                logger.debug(
+                                    f"Found LastFM match using fallback artist {i + 1}/{len(track.artists)}: {artist.name}",
+                                    track_id=track.id,
+                                    track_title=track.title,
+                                    artist_used=artist.name,
+                                )
+                            return track.id, result
+                    
+                    # No artist worked
+                    logger.debug(
+                        f"No LastFM match found after trying {len(track.artists)} artists for track {track.id}: {track.title}"
                     )
-                    return track.id, result
                 else:
                     logger.warning(
-                        f"No lookup method available for track {track.id}: {track.title}"
+                        f"No lookup method available for track {track.id}: {track.title} (no artists)"
                     )
-                    return track.id, LastFMTrackInfo.empty()
+                
+                return track.id, LastFMTrackInfo.empty()
+                    
             except Exception as e:
                 logger.error(f"Error processing track {track.id}: {e}")
                 return track.id, LastFMTrackInfo.empty()
@@ -443,7 +477,7 @@ class LastFMConnector:
     @backoff.on_exception(
         backoff.expo,
         (pylast.NetworkError, pylast.MalformedResponseError, pylast.WSError),
-        max_tries=3,
+        max_tries=get_config("LASTFM_LOVE_TRACK_RETRY_COUNT"),
         jitter=backoff.full_jitter,
     )
     async def love_track(
@@ -550,7 +584,10 @@ class LastFMConnector:
             return []
 
         # Validate limit
-        limit = min(max(1, limit), 200)
+        limit = min(
+            max(get_config("LASTFM_RECENT_TRACKS_MIN_LIMIT"), limit),
+            get_config("LASTFM_RECENT_TRACKS_MAX_LIMIT")
+        )
 
         try:
             # Get Last.fm user

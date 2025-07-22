@@ -148,25 +148,34 @@ _config: dict[str, Any] = {
         os.getenv("DEFAULT_API_REQUEST_DELAY", str(DEFAULT_REQUEST_DELAY))
     ),
     # -------------------------------------------------------------------------
-    # LastFM API Configuration (optimized for 5 req/sec rate limit)
+    # LastFM API Configuration (rate limited to 5 calls/second)
     # -------------------------------------------------------------------------
     "LASTFM_API_BATCH_SIZE": int(
         os.getenv("LASTFM_API_BATCH_SIZE", str(DEFAULT_BATCH_SIZE))
     ),
     "LASTFM_API_CONCURRENCY": int(
-        os.getenv("LASTFM_API_CONCURRENCY", "50")
-    ),  # Higher for LastFM
-    "LASTFM_API_RETRY_COUNT": int(os.getenv("LASTFM_API_RETRY_COUNT", "2")),
+        os.getenv("LASTFM_API_CONCURRENCY", "1000")
+    ),  # High concurrency for in-flight requests
+    "LASTFM_API_RATE_LIMIT": float(
+        os.getenv("LASTFM_API_RATE_LIMIT", "5.0")
+    ),  # Calls per second (rate limiter)
+    "LASTFM_API_RETRY_COUNT": int(os.getenv("LASTFM_API_RETRY_COUNT", "3")),
     "LASTFM_API_RETRY_BASE_DELAY": float(
-        os.getenv("LASTFM_API_RETRY_BASE_DELAY", "0.4")
+        os.getenv("LASTFM_API_RETRY_BASE_DELAY", "2.0")
     ),
-    "LASTFM_API_RETRY_MAX_DELAY": float(os.getenv("LASTFM_API_RETRY_MAX_DELAY", "5.0")),
-    "LASTFM_API_REQUEST_DELAY": float(os.getenv("LASTFM_API_REQUEST_DELAY", "0.15")),
-    "LASTFM_ENRICHER_BATCH_SIZE": int(
-        os.getenv("LASTFM_ENRICHER_BATCH_SIZE", str(DEFAULT_BATCH_SIZE))
+    "LASTFM_API_RETRY_MAX_DELAY": float(
+        os.getenv("LASTFM_API_RETRY_MAX_DELAY", "60.0")
     ),
-    "LASTFM_ENRICHER_CONCURRENCY": int(
-        os.getenv("LASTFM_ENRICHER_CONCURRENCY", str(DEFAULT_CONCURRENCY))
+    "LASTFM_API_MAX_RETRY_TIME": int(os.getenv("LASTFM_API_MAX_RETRY_TIME", "60")),
+    # LastFM specialized operation limits
+    "LASTFM_LOVE_TRACK_RETRY_COUNT": int(
+        os.getenv("LASTFM_LOVE_TRACK_RETRY_COUNT", "3")
+    ),
+    "LASTFM_RECENT_TRACKS_MIN_LIMIT": int(
+        os.getenv("LASTFM_RECENT_TRACKS_MIN_LIMIT", "1")
+    ),
+    "LASTFM_RECENT_TRACKS_MAX_LIMIT": int(
+        os.getenv("LASTFM_RECENT_TRACKS_MAX_LIMIT", "200")
     ),
     # -------------------------------------------------------------------------
     # Spotify API Configuration

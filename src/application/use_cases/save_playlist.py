@@ -198,10 +198,13 @@ class TrackUpsertEnrichmentStrategy:
         for track in tracks:
             try:
                 # Repository handles upsert automatically via Spotify ID
+                original_had_id = track.id is not None
                 saved_track = await self.track_repo.save_track(track)
                 enriched_tracks.append(saved_track)
 
-                if saved_track.id != track.id:
+                # Count as upserted if the track didn't have an ID before but does now
+                # (indicating it was either created or found via lookup and linked)
+                if not original_had_id and saved_track.id is not None:
                     upserted_count += 1
 
             except Exception as e:

@@ -7,9 +7,9 @@ Clean Architecture principles.
 from dataclasses import dataclass
 from typing import Any
 
+from src.infrastructure.connectors import CONNECTORS, discover_connectors
 from src.config import get_logger
 from src.domain.repositories.interfaces import PlaylistRepository, TrackRepository
-from src.infrastructure.connectors import CONNECTORS, discover_connectors
 from src.infrastructure.persistence.database.db_connection import get_session
 from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
 from src.infrastructure.persistence.repositories.track import TrackRepositories
@@ -63,22 +63,24 @@ class LoggerProviderImpl:
         self._logger.error(message, **kwargs)
 
 
+# WorkflowConnectorAdapter removed - violates 2025 clean architecture principles
+# Connectors are now injected directly without wrapper adapters
+
+
 class ConnectorRegistryImpl:
-    """Connector registry implementation."""
+    """Connector registry implementation using direct connector access."""
 
     def __init__(self):
         """Initialize connector registry."""
-        # Ensure connectors are discovered
         discover_connectors()
         self._connectors = CONNECTORS
 
     def get_connector(self, name: str):
-        """Get connector by name."""
+        """Get connector by name - direct access without provider wrapper."""
         if name not in self._connectors:
             raise ValueError(f"Unknown connector: {name}")
-
+        
         connector_config = self._connectors[name]
-        # Create instance using factory with empty config
         return connector_config["factory"]({})
 
     def list_connectors(self) -> list[str]:
@@ -202,6 +204,13 @@ class RepositoryProviderImpl:
         return self._track_repos.connector
 
     @property
+    def metrics(self):
+        """Track metrics repository."""
+        if self._track_repos is None:
+            self._track_repos = TrackRepositories(self._session)
+        return self._track_repos.metrics
+
+    @property
     def checkpoints(self):
         """Sync checkpoints repository."""
         if self._track_repos is None:
@@ -236,69 +245,61 @@ def create_workflow_context(shared_session=None) -> WorkflowContext:
     session_provider = DatabaseSessionProviderImpl()
     use_cases = UseCaseProviderImpl(shared_session)
 
-    # Create proper repository provider implementation (legacy compatibility)
-    class ProperRepositoryProvider:
-        """Repository provider that implements the RepositoryProvider interface properly."""
+    # Create repository provider with real implementations using shared session
+    if shared_session:
+        # Use shared session for workflow execution - ensures transaction consistency
+        repositories = RepositoryProviderImpl(shared_session)
+    else:
+        # Fallback: Create placeholder for non-workflow usage (backwards compatibility)
+        class PlaceholderRepositoryProvider:
+            """Placeholder provider for non-workflow usage."""
+            
+            @property
+            def core(self) -> Any:
+                return None
 
-        # For now, return None for properties we don't need yet
-        # These will be implemented when needed
-        @property
-        def core(self) -> Any:
-            return None
+            @property
+            def plays(self) -> Any:
+                return None
 
-        @property
-        def plays(self) -> Any:
-            return None
+            @property
+            def likes(self) -> Any:
+                return None
 
-        @property
-        def likes(self) -> Any:
-            return None
+            @property
+            def connector(self) -> Any:
+                return None
 
-        @property
-        def connector(self) -> Any:
-            return None
+            @property
+            def checkpoints(self) -> Any:
+                return None
 
-        @property
-        def checkpoints(self) -> Any:
-            return None
+            @property
+            def playlists(self) -> Any:
+                return None
 
-        @property
-        def playlists(self) -> Any:
-            return None
+            async def create_repos_with_shared_session(
+                self,
+            ) -> tuple[TrackRepository, PlaylistRepository, Any]:
+                """Create track and playlist repositories sharing a single session."""
+                session = get_session()
+                session_ctx = await session.__aenter__()
 
-        async def create_repos_with_shared_session(
-            self,
-        ) -> tuple[TrackRepository, PlaylistRepository, Any]:
-            """Create track and playlist repositories sharing a single session.
+                track_repos = TrackRepositories(session_ctx)
+                playlist_repos = PlaylistRepositories(session_ctx)
 
-            This ensures both repositories operate within the same transaction,
-            preventing database locking and ensuring ACID properties.
+                return track_repos.core, playlist_repos.core, session
 
-            Returns:
-                Tuple of (track_repo, playlist_repo, session_context)
-            """
-            session = get_session()
-            session_ctx = await session.__aenter__()
-
-            track_repos = TrackRepositories(session_ctx)
-            playlist_repos = PlaylistRepositories(session_ctx)
-
-            return track_repos.core, playlist_repos.core, session
-
-        async def create_playlist_repo_with_session(
-            self,
-        ) -> tuple[PlaylistRepository, Any]:
-            """Create playlist repository with session for UpdatePlaylistUseCase.
-
-            Returns:
-                Tuple of (playlist_repo, session_context)
-            """
-            session = get_session()
-            session_ctx = await session.__aenter__()
-            playlist_repos = PlaylistRepositories(session_ctx)
-            return playlist_repos.core, session
-
-    repositories = ProperRepositoryProvider()
+            async def create_playlist_repo_with_session(
+                self,
+            ) -> tuple[PlaylistRepository, Any]:
+                """Create playlist repository with session for UpdatePlaylistUseCase."""
+                session = get_session()
+                session_ctx = await session.__aenter__()
+                playlist_repos = PlaylistRepositories(session_ctx)
+                return playlist_repos.core, session
+        
+        repositories = PlaceholderRepositoryProvider()
 
     return ConcreteWorkflowContext(
         config=config,

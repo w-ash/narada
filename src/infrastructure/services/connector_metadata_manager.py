@@ -46,7 +46,7 @@ class ConnectorMetadataManager:
         connector_instance: Any,
         track_ids_to_refresh: list[int],
         **additional_options: Any,
-    ) -> dict[int, dict[str, Any]]:
+    ) -> tuple[dict[int, dict[str, Any]], set[int]]:
         """Fetch fresh metadata from connector API for specific tracks.
 
         Args:
@@ -57,10 +57,12 @@ class ConnectorMetadataManager:
             **additional_options: Options forwarded to connector.
 
         Returns:
-            Dictionary mapping track IDs to fresh metadata.
+            Tuple of:
+            - Dictionary mapping track IDs to fresh metadata for successful fetches
+            - Set of track IDs that failed to fetch fresh metadata (for fallback to cached)
         """
         if not track_ids_to_refresh:
-            return {}
+            return {}, set()
 
         with logger.contextualize(
             operation="fetch_fresh_metadata",
@@ -79,10 +81,11 @@ class ConnectorMetadataManager:
             }
 
             if not tracks_to_refresh:
+                failed_track_ids = set(track_ids_to_refresh)
                 logger.warning(
-                    "No valid identity mappings found for tracks needing refresh"
+                    f"No valid identity mappings found for {len(failed_track_ids)} tracks needing refresh"
                 )
-                return {}
+                return {}, failed_track_ids
 
             # CRITICAL FIX: Use direct metadata fetch for mapped tracks instead of expensive matching
             # All connectors should use direct API calls when we have existing mappings
@@ -90,11 +93,23 @@ class ConnectorMetadataManager:
                 tracks_to_refresh, connector, connector_instance, **additional_options
             )
 
+            # Calculate which tracks failed to fetch fresh metadata
+            successfully_fetched = set(fresh_metadata.keys())
+            requested_tracks = set(track_ids_to_refresh)
+            failed_track_ids = requested_tracks - successfully_fetched
+
+            # Log results for observability 
+            if failed_track_ids:
+                failure_rate = len(failed_track_ids) / len(requested_tracks) * 100
+                logger.warning(
+                    f"Fresh metadata fetch: {len(successfully_fetched)}/{len(requested_tracks)} successful, {len(failed_track_ids)} failed ({failure_rate:.1f}% failure rate) - will use cached metadata for failed tracks"
+                )
+
             # Store fresh metadata in database
             if fresh_metadata:
                 await self._store_fresh_metadata(fresh_metadata, connector)
 
-            return fresh_metadata
+            return fresh_metadata, failed_track_ids
 
     async def get_cached_metadata(
         self,
@@ -135,13 +150,15 @@ class ConnectorMetadataManager:
         track_ids: list[int],
         connector: str,
         fresh_metadata: dict[int, dict[str, Any]] | None = None,
+        failed_fresh_track_ids: set[int] | None = None,
     ) -> dict[int, dict[str, Any]]:
-        """Get all metadata for tracks, combining fresh and cached data.
+        """Get all metadata for tracks, combining fresh and cached data with intelligent fallback.
 
         Args:
             track_ids: Track IDs to get metadata for.
             connector: Connector name.
             fresh_metadata: Fresh metadata to merge with cached data.
+            failed_fresh_track_ids: Track IDs that failed fresh fetch (should use cached only).
 
         Returns:
             Dictionary mapping track IDs to complete metadata.
@@ -154,18 +171,49 @@ class ConnectorMetadataManager:
             connector=connector,
             track_count=len(track_ids),
         ):
-            # Get cached metadata
+            # Get cached metadata for all requested tracks
             cached_metadata = await self.get_cached_metadata(track_ids, connector)
 
-            # Merge with fresh metadata if provided
+            # Intelligent metadata combination with fallback preservation
             if fresh_metadata:
-                all_metadata = {**cached_metadata, **fresh_metadata}
-                logger.debug(
-                    f"Combined {len(cached_metadata)} cached + {len(fresh_metadata)} fresh = {len(all_metadata)} total metadata entries"
+                # Start with cached metadata as the base (preserves existing data)
+                all_metadata = cached_metadata.copy()
+                
+                # Overlay fresh metadata (only for successful fetches)
+                all_metadata.update(fresh_metadata)
+                
+                # Calculate detailed statistics for observability
+                fresh_count = len(fresh_metadata)
+                cached_count = len(cached_metadata)
+                failed_fresh_count = len(failed_fresh_track_ids) if failed_fresh_track_ids else 0
+                total_requested = len(track_ids)
+                
+                # Verify no data loss occurred
+                final_count = len(all_metadata)
+                expected_count = len(set(cached_metadata.keys()) | set(fresh_metadata.keys()))
+                
+                logger.info(
+                    f"Metadata combination complete: {fresh_count} fresh + {cached_count} cached = {final_count} total "
+                    f"(requested: {total_requested}, failed fresh: {failed_fresh_count})"
                 )
+                
+                if failed_fresh_count > 0:
+                    # Ensure failed fresh fetches fall back to cached metadata
+                    cached_fallback_count = sum(
+                        1 for track_id in failed_fresh_track_ids or set()
+                        if track_id in cached_metadata
+                    )
+                    logger.info(
+                        f"Cached metadata fallback: {cached_fallback_count}/{failed_fresh_count} failed tracks have cached data"
+                    )
+                
+                if final_count != expected_count:
+                    logger.warning(
+                        f"Metadata count mismatch: expected {expected_count}, got {final_count}. Possible data loss!"
+                    )
             else:
                 all_metadata = cached_metadata
-                logger.debug(f"Using {len(all_metadata)} cached metadata entries")
+                logger.debug(f"Using {len(all_metadata)} cached metadata entries only")
 
             return all_metadata
 
@@ -424,12 +472,31 @@ class ConnectorMetadataManager:
                     self._convert_track_info_results(track_info_results)
                 )
 
+                # Calculate success metrics for better observability
+                requested_count = len(tracks_for_api)
+                successful_count = len(fresh_metadata)
+                failed_count = requested_count - successful_count
+                
                 logger.info(
-                    f"Successfully fetched direct metadata for {len(fresh_metadata)} tracks"
+                    f"Metadata fetch results for {connector}: {successful_count}/{requested_count} successful, {failed_count} failed"
                 )
+                
+                if failed_count > 0:
+                    failure_rate = (failed_count / requested_count) * 100
+                    logger.warning(
+                        f"High failure rate for {connector} metadata fetch: {failure_rate:.1f}% ({failed_count}/{requested_count})"
+                    )
 
             except Exception as e:
                 logger.error(f"Error fetching direct metadata from {connector}: {e}")
-                return {}
+                # CRITICAL FIX: Return partial results instead of losing all metadata
+                # This preserves any metadata that was successfully fetched before the error
+                if fresh_metadata:
+                    logger.warning(
+                        f"Returning {len(fresh_metadata)} partial results despite error for {connector}"
+                    )
+                else:
+                    logger.error(f"No metadata could be fetched for {connector} tracks due to error")
+                # Always return fresh_metadata (could be empty or partial) instead of forcing empty dict
 
         return fresh_metadata
