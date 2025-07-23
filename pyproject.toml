@@ -29,6 +29,7 @@ prefect = "^3.3.3"
 aiosqlite = "^0.21.0"  # Async SQLite support
 rapidfuzz = "^3.13.0"  # High-performance fuzzy string matching
 aiolimiter = "^1.1.0"  # Async rate limiting for API calls
+pydantic-settings = "^2.10.1"  # Modern settings management with env loading
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.5"

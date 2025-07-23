@@ -9,12 +9,10 @@ from collections.abc import Callable, Coroutine, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
-from src.domain.entities import ConnectorTrack
-
 # attrs import removed - no longer needed with unified result classes
 from src.application.utilities.results import ResultFactory
 from src.config import get_config, get_logger
-from src.domain.entities import OperationResult, SyncCheckpoint, Track
+from src.domain.entities import ConnectorTrack, OperationResult, SyncCheckpoint, Track
 
 logger = get_logger(__name__)
 
@@ -142,7 +140,7 @@ class LikeService:
     ) -> OperationResult:
         """Internal implementation of Spotify likes import."""
         # Get optimal batch size from config
-        api_batch_size = limit or get_config("SPOTIFY_API_BATCH_SIZE", 50)
+        api_batch_size = limit or get_config("SPOTIFY_API_BATCH_SIZE", 50) or 50
 
         # Create checkpoint for tracking
         checkpoint = await self.get_or_create_checkpoint(user_id, "spotify", "likes")
@@ -288,7 +286,7 @@ class LikeService:
     ) -> OperationResult:
         """Internal implementation of Last.fm likes export."""
         # Use Last.fm specific batch size from config
-        api_batch_size = batch_size or get_config("LASTFM_API_BATCH_SIZE", 20)
+        api_batch_size = batch_size or get_config("LASTFM_API_BATCH_SIZE", 20) or 20
 
         # Create checkpoint for tracking
         checkpoint = await self.get_or_create_checkpoint(user_id, "lastfm", "likes")

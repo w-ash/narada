@@ -194,7 +194,7 @@ class LastFMConnector:
         self.lastfm_username = self.lastfm_username or os.getenv("LASTFM_USERNAME")
 
         # Create shared rate limiter for ALL API calls (first tries AND retries)
-        rate_limit = get_config("LASTFM_API_RATE_LIMIT", 5.0)
+        rate_limit = get_config("LASTFM_API_RATE_LIMIT", 5.0) or 5.0
         self._api_rate_limiter = AsyncLimiter(rate_limit, 1)
         
         # Initialize the batch processor with the shared rate limiter
@@ -202,11 +202,11 @@ class LastFMConnector:
             Track,
             tuple[int, LastFMTrackInfo | None],
         ](
-            batch_size=get_config("LASTFM_API_BATCH_SIZE"), 
-            concurrency_limit=get_config("LASTFM_API_CONCURRENCY"),
-            retry_count=get_config("LASTFM_API_RETRY_COUNT"),
-            retry_base_delay=get_config("LASTFM_API_RETRY_BASE_DELAY"),
-            retry_max_delay=get_config("LASTFM_API_RETRY_MAX_DELAY"),
+            batch_size=get_config("LASTFM_API_BATCH_SIZE") or 20, 
+            concurrency_limit=get_config("LASTFM_API_CONCURRENCY") or 5,
+            retry_count=get_config("LASTFM_API_RETRY_COUNT") or 3,
+            retry_base_delay=get_config("LASTFM_API_RETRY_BASE_DELAY") or 1.0,
+            retry_max_delay=get_config("LASTFM_API_RETRY_MAX_DELAY") or 60.0,
             request_delay=0.0,  # No artificial delay - rate limiter handles this
             rate_limiter=self._api_rate_limiter,  # Share rate limiter with direct calls
             logger_instance=logger,
@@ -585,8 +585,8 @@ class LastFMConnector:
 
         # Validate limit
         limit = min(
-            max(get_config("LASTFM_RECENT_TRACKS_MIN_LIMIT"), limit),
-            get_config("LASTFM_RECENT_TRACKS_MAX_LIMIT")
+            max(get_config("LASTFM_RECENT_TRACKS_MIN_LIMIT") or 1, limit),
+            get_config("LASTFM_RECENT_TRACKS_MAX_LIMIT") or 200
         )
 
         try:

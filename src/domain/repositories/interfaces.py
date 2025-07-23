@@ -13,10 +13,10 @@ if TYPE_CHECKING:
     from src.domain.entities import (
         ConnectorTrack,
         Playlist,
-        PlayRecord,
         SyncCheckpoint,
         Track,
         TrackLike,
+        TrackPlay,
     )
 
 
@@ -115,11 +115,11 @@ class ConnectorRepository(Protocol):
 class PlaysRepository(Protocol):
     """Repository interface for play history operations."""
 
-    async def bulk_insert_plays(self, plays: list["PlayRecord"]) -> int:
+    async def bulk_insert_plays(self, plays: list["TrackPlay"]) -> int:
         """Bulk insert plays."""
         ...
 
-    async def get_recent_plays(self, limit: int = 100) -> list["PlayRecord"]:
+    async def get_recent_plays(self, limit: int = 100) -> list["TrackPlay"]:
         """Get recent plays."""
         ...
 

@@ -1,12 +1,13 @@
 """Tests for TrackIdentityResolver service."""
 
-import pytest
 from unittest.mock import AsyncMock, Mock, patch
 
-from src.infrastructure.services.track_identity_resolver import TrackIdentityResolver
-from src.domain.entities import Track, Artist, TrackList
+import pytest
+
+from src.domain.entities import Artist, Track, TrackList
 from src.domain.matching.types import MatchResult
 from src.infrastructure.persistence.repositories.track import TrackRepositories
+from src.infrastructure.services.track_identity_resolver import TrackIdentityResolver
 
 
 @pytest.fixture
@@ -252,11 +253,10 @@ class TestTrackIdentityResolver:
         with patch(
             "src.infrastructure.services.track_identity_resolver.create_provider",
             return_value=mock_provider
-        ):
-            with pytest.raises(Exception, match="API connection failed"):
-                await identity_resolver.resolve_track_identities(
-                    sample_tracklist, "lastfm", mock_connector_instance
-                )
+        ), pytest.raises(Exception, match="API connection failed"):
+            await identity_resolver.resolve_track_identities(
+                sample_tracklist, "lastfm", mock_connector_instance
+            )
 
     @pytest.mark.asyncio
     async def test_resolve_track_identities_tracks_without_ids(

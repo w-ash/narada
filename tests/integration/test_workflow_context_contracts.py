@@ -7,8 +7,8 @@ nodes expect.
 Purpose: Catch dependency injection failures like 'NoneType' object has no attribute 'get_connector_mappings'
 """
 
+
 import pytest
-from unittest.mock import AsyncMock
 
 from src.application.workflows.context import create_workflow_context
 from src.infrastructure.persistence.database.db_connection import get_session
@@ -147,7 +147,7 @@ class TestRepositoryProviderContracts:
             # (Note: This tests the integration, not the database operations)
             try:
                 # This should not raise AttributeError
-                method = getattr(connector_repo, "get_connector_mappings")
+                method = connector_repo.get_connector_mappings
                 assert callable(method)
             except AttributeError as e:
                 pytest.fail(f"Connector repository missing required method: {e}")

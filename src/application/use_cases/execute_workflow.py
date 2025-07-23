@@ -96,12 +96,8 @@ class WorkflowExecutor:
             return WorkflowExecutionResult(
                 context={},
                 workflow_result=WorkflowResult(
-                    workflow_name=command.workflow_def.get("name", "unknown"),
-                    success=False,
-                    tracks_processed=0,
-                    playlists_created=0,
-                    execution_time_seconds=execution_time_ms / 1000,
-                    error_message=str(e),
+                    operation_name=command.workflow_def.get("name", "unknown"),
+                    execution_time=execution_time_ms / 1000,
                 ),
                 execution_time_ms=execution_time_ms,
                 success=False,

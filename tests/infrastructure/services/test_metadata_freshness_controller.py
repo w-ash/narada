@@ -1,11 +1,14 @@
 """Tests for MetadataFreshnessController service."""
 
-import pytest
-from datetime import datetime, timedelta, UTC
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 
-from src.infrastructure.services.metadata_freshness_controller import MetadataFreshnessController
+import pytest
+
 from src.infrastructure.persistence.repositories.track import TrackRepositories
+from src.infrastructure.services.metadata_freshness_controller import (
+    MetadataFreshnessController,
+)
 
 
 @pytest.fixture
@@ -13,6 +16,9 @@ def mock_track_repos():
     """Create mock track repositories."""
     repos = Mock(spec=TrackRepositories)
     repos.connector = AsyncMock()
+    # Mock the metrics repository needed for _get_metrics_timestamps
+    repos.metrics = AsyncMock()
+    repos.metrics.session = AsyncMock()
     return repos
 
 
@@ -27,74 +33,75 @@ class TestMetadataFreshnessController:
 
     @pytest.mark.asyncio
     async def test_get_stale_tracks_with_stale_metadata(self, freshness_controller, mock_track_repos):
-        """Test identifying stale tracks based on timestamp."""
+        """Test identifying stale tracks based on metrics timestamp."""
         # Setup: Current time and cutoff time (2 hours ago)
         current_time = datetime.now(UTC)
         max_age_hours = 2.0
-        cutoff_time = current_time - timedelta(hours=max_age_hours)
+        current_time - timedelta(hours=max_age_hours)
         
-        # Mock metadata with timestamps
-        metadata_with_timestamps = {
-            1: {"last_updated": current_time - timedelta(hours=3)},  # Stale (3 hours old)
-            2: {"last_updated": current_time - timedelta(hours=1)},  # Fresh (1 hour old)
-            3: {"last_updated": current_time - timedelta(hours=5)},  # Stale (5 hours old)
-            4: {"last_updated": None},  # No timestamp (considered stale)
+        # Mock metrics timestamps (now used for freshness checking)
+        metrics_timestamps = {
+            1: current_time - timedelta(hours=3),  # Stale (3 hours old)
+            2: current_time - timedelta(hours=1),  # Fresh (1 hour old)  
+            3: current_time - timedelta(hours=5),  # Stale (5 hours old)
+            # Track 4 has no metrics timestamp (considered stale)
         }
-        mock_track_repos.connector.get_connector_metadata_with_timestamps.return_value = metadata_with_timestamps
-
-        # Execute
-        with patch('src.infrastructure.services.metadata_freshness_controller.datetime') as mock_datetime:
-            mock_datetime.now.return_value = current_time
-            
-            stale_tracks = await freshness_controller.get_stale_tracks(
-                [1, 2, 3, 4], "lastfm", max_age_hours
-            )
+        
+        # Mock the _get_metrics_timestamps method
+        with patch.object(freshness_controller, '_get_metrics_timestamps', return_value=metrics_timestamps):
+            with patch('src.infrastructure.services.metadata_freshness_controller.datetime') as mock_datetime:
+                mock_datetime.now.return_value = current_time
+                
+                stale_tracks = await freshness_controller.get_stale_tracks(
+                    [1, 2, 3, 4], "lastfm", max_age_hours
+                )
 
         # Verify: Tracks 1, 3, and 4 should be stale
         assert set(stale_tracks) == {1, 3, 4}
 
     @pytest.mark.asyncio
     async def test_get_stale_tracks_all_fresh(self, freshness_controller, mock_track_repos):
-        """Test when all tracks have fresh metadata."""
+        """Test when all tracks have fresh metrics."""
         current_time = datetime.now(UTC)
         max_age_hours = 2.0
         
-        # All metadata is fresh (within 2 hours)
-        metadata_with_timestamps = {
-            1: {"last_updated": current_time - timedelta(minutes=30)},
-            2: {"last_updated": current_time - timedelta(hours=1)},
-            3: {"last_updated": current_time - timedelta(minutes=90)},
+        # All metrics are fresh (within 2 hours)
+        metrics_timestamps = {
+            1: current_time - timedelta(minutes=30),
+            2: current_time - timedelta(hours=1),
+            3: current_time - timedelta(minutes=90),
         }
-        mock_track_repos.connector.get_connector_metadata_with_timestamps.return_value = metadata_with_timestamps
-
-        # Execute
-        with patch('src.infrastructure.services.metadata_freshness_controller.datetime') as mock_datetime:
-            mock_datetime.now.return_value = current_time
-            
-            stale_tracks = await freshness_controller.get_stale_tracks(
-                [1, 2, 3], "lastfm", max_age_hours
-            )
+        
+        # Mock the _get_metrics_timestamps method
+        with patch.object(freshness_controller, '_get_metrics_timestamps', return_value=metrics_timestamps):
+            with patch('src.infrastructure.services.metadata_freshness_controller.datetime') as mock_datetime:
+                mock_datetime.now.return_value = current_time
+                
+                stale_tracks = await freshness_controller.get_stale_tracks(
+                    [1, 2, 3], "lastfm", max_age_hours
+                )
 
         # Verify: No tracks should be stale
         assert stale_tracks == []
 
     @pytest.mark.asyncio
     async def test_get_stale_tracks_no_existing_metadata(self, freshness_controller, mock_track_repos):
-        """Test when tracks have no existing metadata."""
-        # Setup: No metadata exists for any tracks
-        mock_track_repos.connector.get_connector_metadata_with_timestamps.return_value = {}
-
-        # Execute
-        stale_tracks = await freshness_controller.get_stale_tracks(
-            [1, 2, 3], "lastfm", 1.0
-        )
+        """Test when tracks have no existing metrics."""
+        # Setup: No metrics exist for any tracks
+        metrics_timestamps = {}
+        
+        # Mock the _get_metrics_timestamps method
+        with patch.object(freshness_controller, '_get_metrics_timestamps', return_value=metrics_timestamps):
+            stale_tracks = await freshness_controller.get_stale_tracks(
+                [1, 2, 3], "lastfm", 1.0
+            )
 
         # Verify: All tracks should be considered stale
         assert set(stale_tracks) == {1, 2, 3}
 
     @pytest.mark.asyncio
     async def test_get_stale_tracks_timezone_handling(self, freshness_controller, mock_track_repos):
-        """Test proper handling of timezone-naive timestamps."""
+        """Test proper handling of timezone-naive metrics timestamps."""
         current_time = datetime.now(UTC)
         max_age_hours = 1.0
         
@@ -103,19 +110,19 @@ class TestMetadataFreshnessController:
         naive_timestamp = datetime(2025, 7, 18, 4, 0, 0)  # Naive datetime, old
         aware_timestamp = current_time - timedelta(minutes=30)  # Aware datetime, recent
         
-        metadata_with_timestamps = {
-            1: {"last_updated": naive_timestamp},  # Naive - should be converted to UTC and be stale
-            2: {"last_updated": aware_timestamp},  # Aware - should work as-is and be fresh
+        metrics_timestamps = {
+            1: naive_timestamp,  # Naive - should be converted to UTC and be stale
+            2: aware_timestamp,  # Aware - should work as-is and be fresh
         }
-        mock_track_repos.connector.get_connector_metadata_with_timestamps.return_value = metadata_with_timestamps
-
-        # Execute
-        with patch('src.infrastructure.services.metadata_freshness_controller.datetime') as mock_datetime:
-            mock_datetime.now.return_value = current_time
-            
-            stale_tracks = await freshness_controller.get_stale_tracks(
-                [1, 2], "lastfm", max_age_hours
-            )
+        
+        # Mock the _get_metrics_timestamps method
+        with patch.object(freshness_controller, '_get_metrics_timestamps', return_value=metrics_timestamps):
+            with patch('src.infrastructure.services.metadata_freshness_controller.datetime') as mock_datetime:
+                mock_datetime.now.return_value = current_time
+                
+                stale_tracks = await freshness_controller.get_stale_tracks(
+                    [1, 2], "lastfm", max_age_hours
+                )
 
         # Verify: Naive timestamp should be handled properly
         # Track 1 (naive, old) should be stale, Track 2 (aware, recent) should be fresh
@@ -124,25 +131,25 @@ class TestMetadataFreshnessController:
 
     @pytest.mark.asyncio
     async def test_get_stale_tracks_edge_case_exact_cutoff(self, freshness_controller, mock_track_repos):
-        """Test behavior when timestamp exactly matches cutoff time."""
+        """Test behavior when metrics timestamp exactly matches cutoff time."""
         current_time = datetime.now(UTC)
         max_age_hours = 2.0
         exact_cutoff_time = current_time - timedelta(hours=max_age_hours)
         
-        metadata_with_timestamps = {
-            1: {"last_updated": exact_cutoff_time},  # Exactly at cutoff
-            2: {"last_updated": exact_cutoff_time + timedelta(seconds=1)},  # Just fresh
-            3: {"last_updated": exact_cutoff_time - timedelta(seconds=1)},  # Just stale
+        metrics_timestamps = {
+            1: exact_cutoff_time,  # Exactly at cutoff
+            2: exact_cutoff_time + timedelta(seconds=1),  # Just fresh
+            3: exact_cutoff_time - timedelta(seconds=1),  # Just stale
         }
-        mock_track_repos.connector.get_connector_metadata_with_timestamps.return_value = metadata_with_timestamps
-
-        # Execute
-        with patch('src.infrastructure.services.metadata_freshness_controller.datetime') as mock_datetime:
-            mock_datetime.now.return_value = current_time
-            
-            stale_tracks = await freshness_controller.get_stale_tracks(
-                [1, 2, 3], "lastfm", max_age_hours
-            )
+        
+        # Mock the _get_metrics_timestamps method
+        with patch.object(freshness_controller, '_get_metrics_timestamps', return_value=metrics_timestamps):
+            with patch('src.infrastructure.services.metadata_freshness_controller.datetime') as mock_datetime:
+                mock_datetime.now.return_value = current_time
+                
+                stale_tracks = await freshness_controller.get_stale_tracks(
+                    [1, 2, 3], "lastfm", max_age_hours
+                )
 
         # Verify: Only tracks strictly before cutoff should be stale (< cutoff, not <= cutoff)
         assert set(stale_tracks) == {3}  # Only track 3 (1 second before cutoff)
@@ -157,27 +164,26 @@ class TestMetadataFreshnessController:
         )
 
         assert stale_tracks == []
-        mock_track_repos.connector.get_connector_metadata_with_timestamps.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_get_stale_tracks_zero_max_age(self, freshness_controller, mock_track_repos):
         """Test with zero max age (all tracks should be stale)."""
         current_time = datetime.now(UTC)
         
-        # Even very recent metadata should be stale with max_age=0
-        metadata_with_timestamps = {
-            1: {"last_updated": current_time - timedelta(seconds=1)},
-            2: {"last_updated": current_time},  # Even current time should be stale
+        # Even very recent metrics should be stale with max_age=0
+        metrics_timestamps = {
+            1: current_time - timedelta(seconds=1),
+            2: current_time,  # Even current time should be stale
         }
-        mock_track_repos.connector.get_connector_metadata_with_timestamps.return_value = metadata_with_timestamps
-
-        # Execute
-        with patch('src.infrastructure.services.metadata_freshness_controller.datetime') as mock_datetime:
-            mock_datetime.now.return_value = current_time
-            
-            stale_tracks = await freshness_controller.get_stale_tracks(
-                [1, 2], "lastfm", 0.0
-            )
+        
+        # Mock the _get_metrics_timestamps method
+        with patch.object(freshness_controller, '_get_metrics_timestamps', return_value=metrics_timestamps):
+            with patch('src.infrastructure.services.metadata_freshness_controller.datetime') as mock_datetime:
+                mock_datetime.now.return_value = current_time
+                
+                stale_tracks = await freshness_controller.get_stale_tracks(
+                    [1, 2], "lastfm", 0.0
+                )
 
         # Verify: Only track 1 should be stale (track 2 exactly at current time is fresh)
         assert set(stale_tracks) == {1}
@@ -190,20 +196,20 @@ class TestMetadataFreshnessController:
         
         current_time = datetime.now(UTC)
         
-        metadata_with_timestamps = {
-            1: {"last_updated": current_time - timedelta(hours=2)},  # 2 hours old
+        metrics_timestamps = {
+            1: current_time - timedelta(hours=2),  # 2 hours old
         }
-        mock_track_repos.connector.get_connector_metadata_with_timestamps.return_value = metadata_with_timestamps
-
-        # Execute with different max_age values
-        with patch('src.infrastructure.services.metadata_freshness_controller.datetime') as mock_datetime:
-            mock_datetime.now.return_value = current_time
-            
-            # With 3 hour limit - should be fresh
-            fresh_result = await freshness_controller.get_stale_tracks([1], "lastfm", 3.0)
-            
-            # With 1 hour limit - should be stale
-            stale_result = await freshness_controller.get_stale_tracks([1], "lastfm", 1.0)
+        
+        # Mock the _get_metrics_timestamps method for both calls
+        with patch.object(freshness_controller, '_get_metrics_timestamps', return_value=metrics_timestamps):
+            with patch('src.infrastructure.services.metadata_freshness_controller.datetime') as mock_datetime:
+                mock_datetime.now.return_value = current_time
+                
+                # With 3 hour limit - should be fresh
+                fresh_result = await freshness_controller.get_stale_tracks([1], "lastfm", 3.0)
+                
+                # With 1 hour limit - should be stale
+                stale_result = await freshness_controller.get_stale_tracks([1], "lastfm", 1.0)
 
         # Verify: Same track, different results based on max_age parameter
         assert fresh_result == []

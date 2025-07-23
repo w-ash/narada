@@ -1,12 +1,11 @@
 """Tests for consolidated LikeService that merges like_operations and like_sync functionality."""
 
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.domain.entities import Track, Artist
 from src.application.use_cases.sync_likes import LikeService
+from src.domain.entities import Artist, Track
 from src.domain.entities.operations import OperationResult
 
 
@@ -59,7 +58,6 @@ class TestLikeServiceConsolidated:
         # The service should handle everything internally with the injected repositories
         
         # Arrange
-        user_id = "test_user"
         
         # Configure mock to return some connector tracks
         mock_spotify_connector.get_liked_tracks.return_value = ([], None)
@@ -74,7 +72,6 @@ class TestLikeServiceConsolidated:
         # This test verifies that duplicate batch processing patterns are eliminated
         
         # Arrange
-        user_id = "test_user"
         tracks = [
             Track(id=1, title="Test Track 1", artists=[Artist(name="Artist 1")]),
             Track(id=2, title="Test Track 2", artists=[Artist(name="Artist 2")]),

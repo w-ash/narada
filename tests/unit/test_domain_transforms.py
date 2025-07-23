@@ -3,13 +3,19 @@
 These tests verify that the transforms work correctly and have zero external dependencies.
 """
 
-import pytest
-from datetime import datetime, UTC
 
 from src.domain import (
-    Artist, Track, TrackList, Playlist,
-    create_pipeline, filter_by_predicate, filter_duplicates, 
-    sort_by_attribute, limit, concatenate, rename
+    Artist,
+    Playlist,
+    Track,
+    TrackList,
+    concatenate,
+    create_pipeline,
+    filter_by_predicate,
+    filter_duplicates,
+    limit,
+    rename,
+    sort_by_attribute,
 )
 
 
@@ -19,7 +25,7 @@ class TestDomainTransforms:
     def test_filter_by_predicate(self):
         """Test filtering tracks by predicate."""
         artists = [Artist(name=f"Artist {i}") for i in range(5)]
-        tracks = [Track(title=f"Song {i}", artists=[artists[i]]).with_id(i+1) for i in range(5)]
+        tracks = [Track(title=f"Song {i}", artists=[artists[i]]).with_id(i + 1) for i in range(5)]
         track_list = TrackList(tracks=tracks)
         
         # Filter tracks with ID >= 4
@@ -73,7 +79,7 @@ class TestDomainTransforms:
     def test_create_pipeline(self):
         """Test creating a pipeline of transformations."""
         artist = Artist(name="Artist")
-        tracks = [Track(title=f"Song {i}", artists=[artist]).with_id(i+1) for i in range(10)]
+        tracks = [Track(title=f"Song {i}", artists=[artist]).with_id(i + 1) for i in range(10)]
         track_list = TrackList(tracks=tracks)
         
         # Create pipeline: filter even IDs, then limit to 2

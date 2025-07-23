@@ -1,12 +1,10 @@
 """Comprehensive test for LastFM workflow functionality."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from src.domain.entities.track import Track, TrackList, Artist
-from src.domain.transforms.core import sort_by_attribute
-from src.domain.entities.operations import WorkflowResult
 from src.application.workflows.node_factories import create_enricher_node
 from src.application.workflows.transform_registry import TRANSFORM_REGISTRY
+from src.domain.entities.operations import WorkflowResult
+from src.domain.entities.track import Artist, Track, TrackList
+from src.domain.transforms.core import sort_by_attribute
 
 
 class TestLastFMWorkflowComprehensive:
@@ -31,7 +29,7 @@ class TestLastFMWorkflowComprehensive:
                 "metrics": {
                     "lastfm_user_playcount": {
                         1: 25,  # Track 1 has 25 plays
-                        2: 100, # Track 2 has 100 plays
+                        2: 100,  # Track 2 has 100 plays
                         3: 50,  # Track 3 has 50 plays
                     }
                 }
@@ -117,7 +115,7 @@ class TestLastFMWorkflowComprehensive:
                 "metrics": {
                     "lastfm_user_playcount": {
                         1: 50,   # Track 1 has 50 plays
-                        2: None, # Track 2 has None plays
+                        2: None,  # Track 2 has None plays
                         # Track 3 missing from metrics
                         # Track 4 has None ID
                     }
@@ -155,7 +153,7 @@ class TestLastFMWorkflowComprehensive:
             metrics={
                 "lastfm_user_playcount": {
                     1: 50,  # Integer key
-                    2: 100, # Integer key
+                    2: 100,  # Integer key
                 },
             }
         )

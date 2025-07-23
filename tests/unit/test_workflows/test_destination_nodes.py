@@ -4,9 +4,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.domain.entities.track import Track, TrackList, Artist
-from src.domain.entities.playlist import Playlist
-
 
 class TestDestinationNodes:
     """Test destination workflow nodes with TDD."""
@@ -36,15 +33,14 @@ class TestDestinationNodes:
         return context
 
 
-
-
-
 class TestSpotifyDestination(TestDestinationNodes):
     """Test Spotify destination node."""
 
     async def test_handle_update_spotify_destination_missing_playlist_id(self, mock_workflow_context, tracklist):
         """Test error handling for missing playlist_id in update."""
-        from src.application.workflows.destination_nodes import handle_update_spotify_destination
+        from src.application.workflows.destination_nodes import (
+            handle_update_spotify_destination,
+        )
         
         # Execute with missing playlist_id
         with pytest.raises(ValueError, match="Missing required playlist_id for update operation"):

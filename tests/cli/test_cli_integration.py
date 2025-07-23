@@ -23,7 +23,7 @@ class TestDataCommandIntegration:
         from src.domain.entities.operations import OperationResult
         mock_import.return_value = OperationResult(operation_name="test")
         
-        result = runner.invoke(app, ["data", "import-plays-lastfm"])
+        runner.invoke(app, ["data", "import-plays-lastfm"])
         
         # Verify the business logic handler was called
         mock_import.assert_called_once()
@@ -34,7 +34,7 @@ class TestDataCommandIntegration:
         from src.domain.entities.operations import OperationResult
         mock_import.return_value = OperationResult(operation_name="test")
         
-        result = runner.invoke(app, ["data", "import-likes-spotify"])
+        runner.invoke(app, ["data", "import-likes-spotify"])
         
         # Verify the business logic handler was called
         mock_import.assert_called_once()
@@ -45,7 +45,7 @@ class TestDataCommandIntegration:
         from src.domain.entities.operations import OperationResult
         mock_export.return_value = OperationResult(operation_name="test")
         
-        result = runner.invoke(app, ["data", "export-likes-lastfm"])
+        runner.invoke(app, ["data", "export-likes-lastfm"])
         
         # Verify the business logic handler was called
         mock_export.assert_called_once()
@@ -60,7 +60,7 @@ class TestDataCommandIntegration:
         test_file = tmp_path / "test.json"
         test_file.write_text('{"test": "data"}')
         
-        result = runner.invoke(app, ["data", "import-plays-file", str(test_file)])
+        runner.invoke(app, ["data", "import-plays-file", str(test_file)])
         
         # Verify the business logic handler was called
         mock_import.assert_called_once()
@@ -74,7 +74,7 @@ class TestPlaylistCommandIntegration:
         """Test that playlist list routes to workflow discovery."""
         mock_list.return_value = []
         
-        result = runner.invoke(app, ["playlist", "list"])
+        runner.invoke(app, ["playlist", "list"])
         
         # Verify workflow discovery was called
         mock_list.assert_called_once()
@@ -95,7 +95,7 @@ class TestPlaylistCommandIntegration:
         ]
         mock_list.return_value = mock_workflows
         
-        result = runner.invoke(app, ["playlist", "run", "test_workflow"])
+        runner.invoke(app, ["playlist", "run", "test_workflow"])
         
         # Verify workflow execution was attempted
         mock_run.assert_called_once()
@@ -110,7 +110,7 @@ class TestCriticalParameterPassing:
         from src.domain.entities.operations import OperationResult
         mock_import.return_value = OperationResult(operation_name="test")
         
-        result = runner.invoke(app, ["data", "import-plays-lastfm", "--recent", "500"])
+        runner.invoke(app, ["data", "import-plays-lastfm", "--recent", "500"])
         
         # Verify the handler was called (exact parameter inspection is fragile)
         mock_import.assert_called_once()
@@ -121,7 +121,7 @@ class TestCriticalParameterPassing:
         from src.domain.entities.operations import OperationResult
         mock_import.return_value = OperationResult(operation_name="test")
         
-        result = runner.invoke(app, ["data", "import-plays-lastfm", "--full", "--confirm"])
+        runner.invoke(app, ["data", "import-plays-lastfm", "--full", "--confirm"])
         
         # Verify the full import handler was called
         mock_import.assert_called_once()
@@ -136,7 +136,7 @@ class TestCriticalParameterPassing:
         test_file = tmp_path / "test.json"
         test_file.write_text('{"test": "data"}')
         
-        result = runner.invoke(app, ["data", "import-plays-file", str(test_file), "--batch-size", "100"])
+        runner.invoke(app, ["data", "import-plays-file", str(test_file), "--batch-size", "100"])
         
         # Verify the handler was called
         mock_import.assert_called_once()

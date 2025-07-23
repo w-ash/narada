@@ -4,33 +4,24 @@ Tests the complete playlist update workflow including command validation,
 differential algorithm, operation sequencing, and database operations using mocked dependencies.
 """
 
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime
+from unittest.mock import AsyncMock
 
 import pytest
 
 from src.application.use_cases.update_playlist import (
-    ConflictResolutionPolicy,
     PlaylistDiff,
     PlaylistDiffCalculator,
     PlaylistOperation,
     PlaylistOperationType,
     PlaylistSyncService,
-    TrackMatchingStrategy,
     UpdatePlaylistCommand,
     UpdatePlaylistOptions,
     UpdatePlaylistResult,
     UpdatePlaylistUseCase,
-    UpdateOperationType,
 )
 from src.domain.entities.playlist import Playlist
 from src.domain.entities.track import Artist, Track, TrackList
-
-
-
-
-
-
 
 
 class TestUpdatePlaylistOptions:
@@ -147,7 +138,6 @@ class TestUpdatePlaylistCommand:
 
 class TestPlaylistOperation:
     """Test PlaylistOperation functionality."""
-
 
     def test_add_operation_to_spotify_format(self, track):
         """Test converting ADD operation to Spotify API format."""
@@ -337,7 +327,7 @@ class TestPlaylistDiffCalculator:
             *[PlaylistOperation(PlaylistOperationType.REMOVE, Track(title=f"Track {i}", artists=[Artist(name="Artist")]), i) 
               for i in range(75)],
             # 3 move operations = 3 API calls (individual)
-            *[PlaylistOperation(PlaylistOperationType.MOVE, Track(title=f"Track {i}", artists=[Artist(name="Artist")]), i+10, i) 
+            *[PlaylistOperation(PlaylistOperationType.MOVE, Track(title=f"Track {i}", artists=[Artist(name="Artist")]), i + 10, i) 
               for i in range(3)]
         ]
         
@@ -386,7 +376,6 @@ class TestUpdatePlaylistUseCase:
             sync_services=[mock_sync_service],
             diff_calculator=mock_diff_calculator
         )
-
 
     @pytest.fixture
     def current_playlist(self, track):
@@ -676,7 +665,7 @@ class TestUpdatePlaylistUseCase:
         updated_playlist = Playlist(
             id=1,
             name="Test Playlist",
-            tracks=current_playlist.tracks + [operations[0].track]
+            tracks=[*current_playlist.tracks, operations[0].track]
         )
         mock_playlist_repo.save_playlist = AsyncMock(return_value=updated_playlist)
         

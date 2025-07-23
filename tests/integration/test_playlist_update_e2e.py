@@ -8,7 +8,6 @@ real API calls. They should be run carefully and not in CI/CD.
 """
 
 import os
-from datetime import UTC, datetime
 
 import pytest
 
@@ -20,7 +19,6 @@ from src.application.use_cases.update_playlist import (
 from src.domain.entities.track import Artist, Track, TrackList
 from src.infrastructure.connectors.spotify import SpotifyConnector
 from src.infrastructure.services.spotify_playlist_sync import SpotifyPlaylistSyncService
-
 
 # Skip if no Spotify credentials available
 pytestmark = pytest.mark.skipif(
@@ -260,7 +258,6 @@ class TestPlaylistUpdateE2E:
 
 if __name__ == "__main__":
     # Example of running specific E2E test manually
-    import asyncio
     
     async def run_manual_test():
         """Run a specific E2E test manually."""

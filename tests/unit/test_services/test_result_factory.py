@@ -3,15 +3,13 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-import pytest
-
-from src.domain.entities.operations import OperationResult
-from src.domain.entities import TrackPlay  # TODO: Move TrackPlay to domain
 from src.application.utilities.results import (
-    ResultFactory,
     ImportResultData,
+    ResultFactory,
     SyncResultData,
 )
+from src.domain.entities import TrackPlay  # TODO: Move TrackPlay to domain
+from src.domain.entities.operations import OperationResult
 
 
 class TestResultFactory:

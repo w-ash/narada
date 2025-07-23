@@ -4,11 +4,17 @@ Tests focus on track entity behavior, connector operations, and business rules.
 Following TDD principles - write tests first, then implement domain services.
 """
 
-import pytest
-from datetime import datetime, UTC
-from typing import Any
+from datetime import UTC, datetime
 
-from src.domain.entities.track import Track, Artist, TrackLike, TrackList, ConnectorTrackMapping
+import pytest
+
+from src.domain.entities.track import (
+    Artist,
+    ConnectorTrackMapping,
+    Track,
+    TrackLike,
+    TrackList,
+)
 
 
 class TestTrackEntity:
@@ -36,7 +42,7 @@ class TestTrackEntity:
 
     def test_track_requires_at_least_one_artist(self):
         """Test that track creation fails without artists."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Length of 'artists' must be >= 1"):
             Track(title="Test Song", artists=[])
 
     def test_track_with_connector_track_id(self):

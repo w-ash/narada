@@ -7,8 +7,8 @@ before they reach production workflows.
 Purpose: Catch interface mismatches like 'SpotifyConnector' object has no attribute '_connector'
 """
 
+
 import pytest
-from unittest.mock import patch
 
 from src.application.workflows.context import ConnectorRegistryImpl
 
@@ -33,10 +33,10 @@ class TestConnectorContracts:
         assert hasattr(connector, "update_playlist"), (
             "Spotify connector must have update_playlist method for destination nodes"  
         )
-        assert callable(getattr(connector, "create_playlist")), (
+        assert callable(connector.create_playlist), (
             "create_playlist must be callable"
         )
-        assert callable(getattr(connector, "update_playlist")), (
+        assert callable(connector.update_playlist), (
             "update_playlist must be callable"
         )
 
@@ -54,7 +54,7 @@ class TestConnectorContracts:
         assert hasattr(connector, "get_lastfm_track_info"), (
             "Last.fm connector must have get_lastfm_track_info method for enrichment"
         )
-        assert callable(getattr(connector, "get_lastfm_track_info")), (
+        assert callable(connector.get_lastfm_track_info), (
             "get_lastfm_track_info must be callable"
         )
 

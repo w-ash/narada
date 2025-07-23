@@ -5,12 +5,13 @@ and that the core business logic functions correctly.
 """
 
 import pytest
+
 from src.domain.matching import (
-    calculate_confidence,
-    calculate_title_similarity,
+    CONFIDENCE_CONFIG,
     ConfidenceEvidence,
     MatchResult,
-    CONFIDENCE_CONFIG,
+    calculate_confidence,
+    calculate_title_similarity,
 )
 
 
@@ -137,7 +138,7 @@ class TestConfidenceCalculation:
             "duration_ms": 240000,
         }
         
-        confidence, evidence = calculate_confidence(internal_data, service_data, "artist_title")
+        _confidence, evidence = calculate_confidence(internal_data, service_data, "artist_title")
         
         assert evidence.duration_score == -CONFIDENCE_CONFIG["duration_missing_penalty"]
 
@@ -155,7 +156,7 @@ class TestConfidenceCalculation:
             "duration_ms": 300000,
         }
         
-        confidence, evidence = calculate_confidence(internal_data, service_data, "artist_title")
+        confidence, _evidence = calculate_confidence(internal_data, service_data, "artist_title")
         
         assert CONFIDENCE_CONFIG["min_confidence"] <= confidence <= CONFIDENCE_CONFIG["max_confidence"]
 

@@ -4,10 +4,10 @@ Tests focus on DBTrack model operations and DBTrack ↔ Track conversion,
 following Clean Architecture where repository layer works with database models.
 """
 
-import pytest
-from datetime import UTC, datetime
 
-from src.domain.entities import Track, Artist
+import pytest
+
+from src.domain.entities import Track
 from src.infrastructure.persistence.database.db_models import DBTrack
 from src.infrastructure.persistence.repositories.track.core import TrackRepository
 
@@ -18,7 +18,7 @@ class TestTrackRepository:
     @pytest.mark.asyncio
     async def test_save_db_track_model(self, db_session, db_track_with_relationships):
         """Test saving DBTrack model to database."""
-        repository = TrackRepository(db_session)
+        TrackRepository(db_session)
         
         # Execute: Save DBTrack model
         db_session.add(db_track_with_relationships)
@@ -99,7 +99,7 @@ class TestTrackRepository:
     @pytest.mark.asyncio
     async def test_batch_save_db_tracks(self, db_session, db_tracks_with_relationships):
         """Test batch operations with multiple DBTrack models."""
-        repository = TrackRepository(db_session)
+        TrackRepository(db_session)
         
         # Execute: Save multiple DBTrack models
         for db_track in db_tracks_with_relationships:
@@ -142,7 +142,7 @@ class TestTrackRepository:
     @pytest.mark.asyncio
     async def test_repository_handles_empty_relationships(self, db_session):
         """Test repository handles DBTrack with empty relationships correctly."""
-        repository = TrackRepository(db_session)
+        TrackRepository(db_session)
         
         # Create DBTrack with minimal data and empty relationships
         db_track = DBTrack(

@@ -1,10 +1,8 @@
 """Tests for LastFM rate limiting with aiolimiter integration."""
 
-import pytest
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
 from src.infrastructure.connectors.lastfm import LastFMConnector
-from src.infrastructure.connectors.base_connector import BatchProcessor
 
 
 class TestLastFMRateLimiting:
@@ -65,7 +63,7 @@ class TestLastFMRateLimiting:
         mock_batch_processor.return_value = mock_processor
         
         # Create connector
-        connector = LastFMConnector()
+        LastFMConnector()
         
         # Verify BatchProcessor was initialized with the rate limiter
         # The call is made on the generic type subscript result

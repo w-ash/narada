@@ -2,7 +2,6 @@
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, Mock
-from uuid import uuid4
 
 import pytest
 
@@ -195,7 +194,7 @@ class TestBaseImportService:
         progress_callback = Mock()
         
         # Act: Run import with progress callback
-        result = await mock_concrete_service.import_data(progress_callback=progress_callback)
+        await mock_concrete_service.import_data(progress_callback=progress_callback)
         
         # Assert: Progress callback was called at key stages
         progress_calls = progress_callback.call_args_list

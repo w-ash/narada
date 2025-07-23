@@ -4,10 +4,10 @@ This test is designed to fail initially, showing that the enricher
 stores metrics with string keys instead of integer keys.
 """
 
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from src.domain.entities.track import Track, TrackList, Artist
+from unittest.mock import AsyncMock, MagicMock, patch
+
 from src.application.workflows.node_factories import create_enricher_node
+from src.domain.entities.track import Artist, Track, TrackList
 
 
 class TestEnricherKeyTypes:
@@ -59,7 +59,6 @@ class TestEnricherKeyTypes:
         })
         
         # Execute enricher (context, node_config) with shared session
-        from unittest.mock import MagicMock
         from src.application.workflows.context import create_workflow_context
         
         mock_session = MagicMock()
@@ -140,7 +139,6 @@ class TestEnricherKeyTypes:
         })
         
         # Execute enricher with shared session
-        from unittest.mock import MagicMock
         from src.application.workflows.context import create_workflow_context
         
         mock_session = MagicMock()
@@ -214,7 +212,6 @@ class TestEnricherKeyTypes:
         })
         
         # Execute enricher (context, node_config) with shared session
-        from unittest.mock import MagicMock
         from src.application.workflows.context import create_workflow_context
         
         mock_session = MagicMock()

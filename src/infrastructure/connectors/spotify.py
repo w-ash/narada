@@ -490,7 +490,7 @@ class SpotifyConnector:
             playlist_info = await asyncio.to_thread(
                 self.client.playlist, playlist_id, fields="snapshot_id"
             )
-            snapshot_id = playlist_info.get("snapshot_id")
+            snapshot_id = playlist_info.get("snapshot_id") if playlist_info else None
 
         return snapshot_id
 

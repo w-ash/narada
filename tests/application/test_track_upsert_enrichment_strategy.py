@@ -1,11 +1,11 @@
 """Tests for TrackUpsertEnrichmentStrategy."""
 
-import pytest
 from unittest.mock import AsyncMock, Mock
 
+import pytest
+
 from src.application.use_cases.save_playlist import TrackUpsertEnrichmentStrategy
-from src.domain.entities import Track, Artist
-from src.infrastructure.persistence.repositories.track import TrackRepositories
+from src.domain.entities import Artist, Track
 
 
 @pytest.fixture

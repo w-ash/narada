@@ -1,7 +1,6 @@
 """Tests for workflow CLI commands."""
 
 import json
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -92,7 +91,8 @@ def test_workflows_list_command_shows_discovered_workflows(runner, mock_workflow
         assert "A test workflow for CLI testing" in result.stdout
 
 
-def test_workflows_list_command_handles_empty_directory(runner, tmp_path):
+@pytest.mark.usefixtures("tmp_path")
+def test_workflows_list_command_handles_empty_directory(runner):
     """Test that workflows list handles empty definitions directory gracefully."""
     # Mock list_workflows to return empty list
     with patch('src.infrastructure.cli.workflows_commands.list_workflows') as mock_list:

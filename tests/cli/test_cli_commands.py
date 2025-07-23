@@ -1,8 +1,6 @@
 """Legacy CLI command tests - updated for new structure."""
 
 import json
-from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
@@ -105,7 +103,7 @@ def test_main_help_shows_new_structure(runner):
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "data" in result.stdout     # Data group exists
-    assert "playlist" in result.stdout # Playlist group exists
+    assert "playlist" in result.stdout  # Playlist group exists
     assert "status" in result.stdout
     assert "setup" in result.stdout
 

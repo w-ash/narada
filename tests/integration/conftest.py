@@ -5,11 +5,12 @@ Class-scoped for expensive setup while maintaining test isolation through
 proper transaction management.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from src.domain.entities.track import Artist, Track, TrackList
+import pytest
+
 from src.domain.entities.playlist import Playlist
+from src.domain.entities.track import Artist, Track
 
 
 @pytest.fixture(scope="class")
@@ -21,8 +22,10 @@ def integration_workflow_context(db_session):
     """
     from src.application.use_cases.save_playlist import SavePlaylistUseCase
     from src.application.use_cases.update_playlist import UpdatePlaylistUseCase
+    from src.infrastructure.persistence.repositories.playlist import (
+        PlaylistRepositories,
+    )
     from src.infrastructure.persistence.repositories.track import TrackRepositories
-    from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
     
     # Create real repositories with test session
     track_repos = TrackRepositories(db_session)

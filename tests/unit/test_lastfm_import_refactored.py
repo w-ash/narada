@@ -5,7 +5,13 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from src.domain.entities import Artist, OperationResult, PlayRecord, SyncCheckpoint, Track, TrackPlay
+from src.domain.entities import (
+    Artist,
+    OperationResult,
+    PlayRecord,
+    SyncCheckpoint,
+    Track,
+)
 
 
 class TestLastfmImportServiceRefactored:
@@ -134,7 +140,7 @@ class TestLastfmImportServiceRefactored:
         mock_lastfm_connector.get_recent_tracks.return_value = sample_play_records
         
         # Act: Import incrementally
-        result = await service.import_incremental_plays(user_id="testuser", resolve_tracks=False)
+        await service.import_incremental_plays(user_id="testuser", resolve_tracks=False)
         
         # Assert: Checkpoint was queried
         mock_repositories.checkpoints.get_sync_checkpoint.assert_called_once_with(
@@ -210,7 +216,7 @@ class TestLastfmImportServiceRefactored:
         mock_lastfm_connector.get_recent_tracks.return_value = sample_play_records
         
         # Act: First-time incremental import
-        result = await service.import_incremental_plays(user_id="newuser")
+        await service.import_incremental_plays(user_id="newuser")
         
         # Assert: Checkpoint was created
         mock_repositories.checkpoints.save_sync_checkpoint.assert_called_once()
@@ -245,7 +251,7 @@ class TestLastfmImportServiceRefactored:
         progress_callback = Mock()
         
         # Act: Import with progress callback
-        result = await service.import_recent_plays(progress_callback=progress_callback)
+        await service.import_recent_plays(progress_callback=progress_callback)
         
         # Assert: Progress callback was called multiple times
         assert progress_callback.call_count >= 3

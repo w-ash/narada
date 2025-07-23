@@ -1,12 +1,8 @@
 """Test source workflow nodes with comprehensive TDD coverage."""
 
 from unittest.mock import AsyncMock, MagicMock
-from datetime import UTC, datetime
 
 import pytest
-
-from src.domain.entities.track import Track, TrackList, Artist
-from src.domain.entities.playlist import Playlist
 
 
 class TestSpotifyPlaylistSource:
@@ -36,13 +32,10 @@ class TestSpotifyPlaylistSource:
         
         return context
 
-
-
     @pytest.fixture
     def sample_config(self):
         """Sample configuration for Spotify playlist source."""
         return {"playlist_id": "test_playlist_123"}
-
 
     async def test_spotify_playlist_source_empty_playlist(self, mock_workflow_context, sample_config):
         """Test handling of empty Spotify playlist."""

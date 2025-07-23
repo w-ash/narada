@@ -19,7 +19,7 @@ def setup_test_database():
     os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 async def initialize_db():
     """Initialize database schema for tests."""
     try:
@@ -37,7 +37,7 @@ async def db_session(initialize_db):
 
 
 @pytest.fixture
-async def track_repo_fixture(db_session):
+def track_repo_fixture(db_session):
     """Provide a track repository."""
     from src.infrastructure.persistence.repositories import TrackRepository
 
@@ -45,7 +45,7 @@ async def track_repo_fixture(db_session):
 
 
 @pytest.fixture
-async def playlist_repo_fixture(db_session):
+def playlist_repo_fixture(db_session):
     """Provide a playlist repository."""
     from src.infrastructure.persistence.repositories import PlaylistRepository
 

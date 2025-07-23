@@ -1,10 +1,6 @@
 """Tests for CLI autocompletion functions."""
 
 import json
-import tempfile
-from pathlib import Path
-
-import pytest
 
 from src.infrastructure.cli.completions import complete_workflow_names
 

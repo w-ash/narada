@@ -5,12 +5,15 @@ preserve data when fresh fetches fail. They test the core issue where tracks
 were losing metadata during rate limiting scenarios.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from src.infrastructure.services.connector_metadata_manager import ConnectorMetadataManager
-from src.infrastructure.services.track_metadata_enricher import TrackMetadataEnricher
+
+import pytest
+
+from src.domain.entities.track import Artist, Track
 from src.domain.matching.types import MatchResult
-from src.domain.entities.track import Track, Artist
+from src.infrastructure.services.connector_metadata_manager import (
+    ConnectorMetadataManager,
+)
 
 
 class TestRateLimitingFallback:

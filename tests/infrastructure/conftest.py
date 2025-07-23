@@ -9,11 +9,12 @@ for testing infrastructure components. Organized by infrastructure service categ
 - Database Integration: Real database sessions and repositories
 """
 
-import pytest
 from datetime import UTC, datetime
 
-from src.domain.entities import Track, Artist, TrackList
-from src.infrastructure.persistence.database.db_models import DBTrack, DBPlaylist
+import pytest
+
+from src.domain.entities import Artist, Track, TrackList
+from src.infrastructure.persistence.database.db_models import DBPlaylist, DBTrack
 
 
 @pytest.fixture
@@ -26,7 +27,9 @@ def real_track_repository(db_session):
 @pytest.fixture  
 def real_playlist_repository(db_session):
     """Real playlist repository with test database session."""
-    from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
+    from src.infrastructure.persistence.repositories.playlist import (
+        PlaylistRepositories,
+    )
     return PlaylistRepositories(db_session).core
 
 
@@ -40,7 +43,9 @@ def real_track_repositories(db_session):
 @pytest.fixture
 def real_playlist_repositories(db_session):
     """Real playlist repositories suite with test database session."""
-    from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
+    from src.infrastructure.persistence.repositories.playlist import (
+        PlaylistRepositories,
+    )
     return PlaylistRepositories(db_session)
 
 

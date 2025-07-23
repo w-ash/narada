@@ -4,11 +4,17 @@ Tests focus on the bidirectional conversion between database models (DBTrack)
 and domain entities (Track), ensuring data integrity and relationship handling.
 """
 
-import pytest
 from datetime import UTC, datetime
 
-from src.domain.entities import Track, Artist
-from src.infrastructure.persistence.database.db_models import DBTrack, DBConnectorTrack, DBTrackMapping, DBTrackLike
+import pytest
+
+from src.domain.entities import Artist, Track
+from src.infrastructure.persistence.database.db_models import (
+    DBConnectorTrack,
+    DBTrack,
+    DBTrackLike,
+    DBTrackMapping,
+)
 from src.infrastructure.persistence.repositories.track.mapper import TrackMapper
 
 

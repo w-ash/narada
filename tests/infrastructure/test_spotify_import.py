@@ -1,19 +1,17 @@
 """Integration tests for Spotify import service."""
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
-from src.domain.entities import TrackPlay
+from src.infrastructure.connectors.spotify import SpotifyConnector
 from src.infrastructure.persistence.database.db_connection import get_session
 from src.infrastructure.persistence.database.db_models import init_db
 from src.infrastructure.persistence.repositories.track import TrackRepositories
 from src.infrastructure.services.spotify_import import SpotifyImportService
 from src.infrastructure.services.spotify_play_resolver import SpotifyPlayResolver
-from src.infrastructure.connectors.spotify import SpotifyConnector
 
 
 @pytest.fixture
@@ -237,8 +235,11 @@ async def test_enhanced_resolver_with_existing_tracks():
         )
         
         # Create a small sample of records
-        from src.infrastructure.connectors.spotify_personal_data import SpotifyPlayRecord
-        from datetime import datetime, UTC
+        from datetime import UTC, datetime
+
+        from src.infrastructure.connectors.spotify_personal_data import (
+            SpotifyPlayRecord,
+        )
         
         sample_records = [
             SpotifyPlayRecord(
@@ -282,7 +283,7 @@ async def test_enhanced_resolver_with_existing_tracks():
         assert len(resolution_map) >= 0  # At least partial resolution expected
         
         # Verify any resolved tracks exist in database
-        for uri, track_id in resolution_map.items():
+        for track_id in resolution_map.values():
             assert track_id is not None
             track = await repo.core.get_by_id(track_id)
             assert track is not None

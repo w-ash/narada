@@ -4,11 +4,15 @@ These tests ensure proper async/await usage and prevent regression of
 RuntimeWarnings about unawaited coroutines.
 """
 
-import pytest
-from unittest.mock import AsyncMock, Mock, patch
-from uuid import UUID, uuid4
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
-from src.application.workflows.prefect import execute_node, _should_show_progress_for_node
+import pytest
+
+from src.application.workflows.prefect import (
+    _should_show_progress_for_node,
+    execute_node,
+)
 
 
 class TestProgressArtifacts:

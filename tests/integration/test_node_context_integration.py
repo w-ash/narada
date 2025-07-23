@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import text
 
 from src.application.workflows.context import create_workflow_context
-from src.domain.entities.track import Track, Artist, TrackList
+from src.domain.entities.track import Artist, Track, TrackList
 
 
 class TestNodeContextIntegration:

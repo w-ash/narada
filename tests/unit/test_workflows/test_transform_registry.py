@@ -1,9 +1,7 @@
 """Tests for the transform registry system."""
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-from src.domain.entities import Track, Artist, TrackList
 from src.application.workflows.transform_registry import TRANSFORM_REGISTRY
 
 

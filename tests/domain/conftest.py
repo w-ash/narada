@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from src.domain.entities.track import Artist, Track, TrackList
 from src.domain.entities.playlist import Playlist
+from src.domain.entities.track import Artist, Track, TrackList
 
 
 @pytest.fixture

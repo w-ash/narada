@@ -1,15 +1,12 @@
 """Tests for the node registry system."""
 
+
 import pytest
-from unittest.mock import MagicMock
 
 from src.application.workflows.node_registry import (
-    NodeRegistry,
-    NodeType,
-    registry,
-    node,
     get_node,
     list_nodes,
+    node,
 )
 
 
@@ -37,7 +34,7 @@ class TestNodeRegistry:
         async def test_enricher_node(context, config):
             return {"data": "enriched_data"}
         
-        node_func, metadata = get_node("test_enricher")
+        _node_func, metadata = get_node("test_enricher")
         assert metadata["description"] == "Enriches tracks with metadata"
     
     def test_register_node_with_parameters(self):
@@ -46,7 +43,7 @@ class TestNodeRegistry:
         async def test_selector_node(context, config):
             return {"data": "selected_data"}
         
-        node_func, metadata = get_node("test_selector")
+        _node_func, metadata = get_node("test_selector")
         assert metadata["input_type"] == "TrackList"
         assert metadata["output_type"] == "TrackList"
     
@@ -100,7 +97,7 @@ class TestNodeRegistry:
         
         # Verify it's accessible from different calls
         node_func1, metadata1 = get_node("singleton_test")
-        node_func2, metadata2 = get_node("singleton_test")
+        node_func2, _metadata2 = get_node("singleton_test")
         
         assert node_func1 is node_func2  # Same function reference
         assert metadata1["id"] == "singleton_test"
@@ -124,7 +121,7 @@ class TestNodeTypes:
                 pass
             
             # Should not raise an error
-            node_func, metadata = get_node(f"test_{node_type}")
+            _node_func, metadata = get_node(f"test_{node_type}")
             assert metadata["category"] == node_type
 
 

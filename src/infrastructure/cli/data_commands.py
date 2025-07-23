@@ -273,7 +273,8 @@ def _handle_spotify_plays_file(file_path: Path | None, batch_size: int | None) -
         console.print(f"[red]File not found: {file_path}[/red]")
         raise typer.Exit(1)
 
-    _run_spotify_file_import(file_path=file_path, batch_size=batch_size)
+    import asyncio
+    asyncio.run(_run_spotify_file_import(file_path=file_path, batch_size=batch_size))
 
 
 def _handle_lastfm_plays(
@@ -286,47 +287,51 @@ def _handle_lastfm_plays(
 ) -> None:
     """Handle Last.fm plays import."""
 
+    import asyncio
+    
     if full:
         # Full import
-        _run_lastfm_full_import(
+        asyncio.run(_run_lastfm_full_import(
             user_id=user_id,
             resolve_tracks=resolve_tracks,
             confirm=confirm,
-        )
+        ))
     elif recent is not None:
         # Recent import with specific limit
-        _run_lastfm_recent_import(
+        asyncio.run(_run_lastfm_recent_import(
             limit=recent,
             resolve_tracks=resolve_tracks,
-        )
+        ))
     else:
         # Default to incremental
-        _run_lastfm_incremental_import(
+        asyncio.run(_run_lastfm_incremental_import(
             user_id=user_id,
             resolve_tracks=resolve_tracks,
-        )
+        ))
 
 
 def _handle_spotify_likes(
     limit: int | None, batch_size: int | None, user_id: str | None
 ) -> None:
     """Handle Spotify likes import."""
-    _run_spotify_likes_import(
+    import asyncio
+    asyncio.run(_run_spotify_likes_import(
         user_id=user_id or "default",
         batch_size=batch_size,
         limit=limit,
-    )
+    ))
 
 
 def _handle_lastfm_loves(
     limit: int | None, batch_size: int | None, user_id: str | None
 ) -> None:
     """Handle Last.fm loves export."""
-    _run_lastfm_loves_export(
+    import asyncio
+    asyncio.run(_run_lastfm_loves_export(
         user_id=user_id or "default",
         batch_size=batch_size,
         limit=limit,
-    )
+    ))
 
 
 # Data operation handlers (preserving all existing functionality)

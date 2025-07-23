@@ -90,51 +90,47 @@ After implementing clean architecture changes, workflows were failing at runtime
 
 ---
 
-## CURRENT: LastFM Rate Limiting & Data Preservation Fix
+## CURRENT: Test Architecture Fix - Get to 0 Failing Tests
 
-**Critical Issue**: LastFM enrichment is failing silently, losing metadata for 150+ tracks due to rate limiting conflicts
+**Critical Issue**: 59 failing/erroring tests breaking development workflow
 
 ### Problem Analysis ✅
-- **Root Cause**: Double rate limiting (batch processor + individual API method backoff)
-- **Symptom**: 280 tracks → 78 fresh + 132 cached = 132 total (150 tracks lost)
-- **Impact**: Tracks show 0 playcount instead of cached values in sort_by_lastfm_user_playcount
+- **Infrastructure Breakdown**: `db_session` fixture references non-existent `_initialize_db` 
+- **Architectural Chaos**: 34/72 tests still in legacy `tests/unit/` structure
+- **Interface Mismatches**: Tests expect old interfaces (e.g., tuple returns vs. current API)
+- **Async Issues**: CLI tests have unawaited coroutines
+- **Testing Trivialities**: Many tests check implementation details vs. business value
 
-### Implementation Results ✅ COMPLETED
-- ✅ **Phase 1**: Enhanced backoff configuration with smart rate limit detection
-  - Added `@backoff.on_predicate` decorator to detect rate-limited responses
-  - Implemented `_is_rate_limited_result()` function with pattern detection
-  - Added 60s max_time limit to prevent indefinite retries
+### Phase 1: Foundation Repair ✅
+**Goal**: Fix broken test infrastructure to enable running tests
 
-- ✅ **Phase 2**: Cached metadata fallback to preserve data when fresh fetch fails
-  - Modified `fetch_fresh_metadata()` to return `(fresh_metadata, failed_track_ids)`
-  - Enhanced `get_all_metadata()` with intelligent fallback preservation
-  - Added detailed logging: "X fresh + Y cached = Z total (failed: N)"
+#### Infrastructure Fixes Applied
+- **Database Fixtures**: Fixed `db_session` fixture reference (`_initialize_db` → `initialize_db`)
+- **Return Type Alignment**: Updated 4 connector metadata manager tests for tuple unpacking from `fetch_fresh_metadata()`
+- **Async CLI Integration**: Added `asyncio.run()` to CLI handlers calling async functions
+- **Domain Validation**: Updated error message expectations to match attrs validators
 
-- ✅ **Phase 3**: Remove conflicting batch processor delays
-  - Eliminated fixed `request_delay` from base batch processor
-  - All rate limiting now handled by backoff decorators on individual methods
-  - Prevents double rate limiting conflicts
+#### Current Test Status (11 remaining issues from original 59)
 
-- ✅ **Phase 4**: Comprehensive testing with data preservation validation
-  - Created `tests/integration/test_rate_limiting_fallback.py` with 5 test scenarios
-  - Validates partial failure scenarios preserve cached metadata
-  - Tests rate limiting detection function behavior
+**Failed Tests (8)**:
+- `tests/infrastructure/services/test_connector_metadata_manager.py::TestConcurrentEnrichmentLocks::test_concurrent_multiple_store_calls_no_longer_cause_locks`
+- `tests/infrastructure/test_database_first_workflow_compliance.py::TestDatabaseFirstWorkflowCompliance::test_connector_metadata_manager_expects_track_ids`
+- `tests/integration/test_enricher_metrics_storage.py` - 3 enricher integration tests
+- `tests/unit/test_enricher_key_types.py` - 3 enricher key type validation tests
 
-**TARGET**: 🎯 **280 tracks → 280 FRESH metadata entries (100% success rate)**
+**Error Tests (3)**:
+- `tests/cli/test_workflows_cli.py` - 2 workflow CLI discovery tests
+- `tests/unit/test_repositories/test_track_repository.py::TestTrackRepository::test_find_tracks_by_ids_multiple_tracks`
 
-### Current Phase: Proper Rate Limit Matching ✅
-- **Root Cause**: Was over-engineering when simple rate matching was needed
-- **LastFM Reality**: ~5 calls/second rate limit, 3-4 second responses
-- **Solution**: Match the API's actual behavior instead of fighting it
+#### Remaining Issues Analysis
+**Primary Issue**: 6/8 failures are enricher-related, suggesting business logic changes in enricher key handling
+**Secondary Issue**: CLI workflow discovery and repository edge case handling  
+**Impact**: Core infrastructure stable, remaining issues are specific feature tests
 
-**Simple Fix Applied** ✅
-- **Concurrency**: Set to exactly 5 concurrent requests (matches ~5 calls/second)
-- **Request spacing**: 200ms between requests (5 req/second rate)  
-- **Let responses take their time**: 3-4 seconds is normal, don't fight it
-- **Reasonable backoff**: 5 attempts max, 60s max delay (not over-aggressive)
-- **Removed over-engineering**: No circuit breakers, complex retry logic, etc.
-
-**Expected Result**: Much higher success rate by working WITH LastFM's API design instead of against it
+### Next Phase: Address Remaining Business Logic Issues
+- **Enricher Key Type Consistency**: Review integer vs string key handling in metrics storage
+- **CLI Workflow Discovery**: Fix workflow file parsing and empty directory handling
+- **Repository Edge Cases**: Address track ID handling in batch operations
 
 ---
 
@@ -242,6 +238,13 @@ During codebase scan for "temporary", "TODO", "legacy", "backward compatibility"
    - Examples: `src/infrastructure/connectors/spotify.py:58`, `src/infrastructure/connectors/musicbrainz.py:43`
    - **Action**: Update docstrings to reflect clean architecture patterns
 
+7. **Type System Anti-Patterns** (Codebase-wide) 🆕
+   - Multiple files use `cast()` or `Any` to paper over typing issues instead of fixing root causes
+   - Examples: Repository interface mismatches, return type inconsistencies, protocol violations
+   - **Anti-Pattern**: Using `cast(SomeProtocol, broken_implementation)` to mask architectural issues
+   - **Impact**: Runtime errors hidden by type system, debugging made harder, architectural debt
+   - **Action**: Replace type casts with proper interface alignment and fix underlying type mismatches
+
 ### Implementation Plan
 
 #### Phase 1: Remove Legacy Compatibility (30 minutes)
@@ -258,12 +261,19 @@ During codebase scan for "temporary", "TODO", "legacy", "backward compatibility"
 7. **Update docstrings to remove wrapper/adapter references**
 8. **Ensure all comments reflect current clean architecture**
 
+#### Phase 4: Type System Cleanup (45 minutes) 🆕
+9. **Audit and remove type casts** - Find all `cast()` calls and replace with proper fixes
+10. **Fix protocol interface mismatches** - Align repository implementations with domain protocols
+11. **Replace `Any` with specific types** - Eliminate type system escape hatches where possible
+
 ### Success Criteria
 
 After cleanup:
 - ✅ Zero references to "legacy", "backward compatibility", "temporary"
 - ✅ Zero placeholder implementations in critical paths
 - ✅ All wrapper/adapter references removed from docstrings
+- ✅ Zero type casts masking architectural issues 🆕
+- ✅ All protocol interfaces properly aligned 🆕
 - ✅ Clean breaks principle fully applied
 - ✅ 98%+ test success rate maintained
 
@@ -274,6 +284,7 @@ After cleanup:
 - ✅ Direct dependency injection implemented
 - ⏳ Legacy compatibility patterns need removal
 - ⏳ Placeholder implementations need resolution
+- ⏳ Type system anti-patterns need cleanup 🆕
 
 ---
 

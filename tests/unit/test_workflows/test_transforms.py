@@ -1,7 +1,7 @@
 """Essential transform tests."""
 
-from src.domain.entities import Track, Artist, TrackList
 from src.application.workflows.transform_registry import TRANSFORM_REGISTRY
+from src.domain.entities import Artist, Track, TrackList
 
 
 class TestTransforms:

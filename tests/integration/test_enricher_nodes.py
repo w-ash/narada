@@ -11,10 +11,11 @@ Testing Strategy:
 - Validate actual data flow through enrichment pipeline
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
+
 import pytest
 
-from src.domain.entities.track import Track, TrackList, Artist
+from src.domain.entities.track import Artist, Track, TrackList
 
 
 class TestEnricherNodes:
@@ -48,7 +49,6 @@ class TestEnricherNodes:
         tracklist = TrackList([integration_sample_track])
         
         # Mock only external Last.fm API calls
-        from unittest.mock import patch
         
         # Create mock enriched tracklist with metrics attached
         mock_enriched_tracklist = tracklist.with_metadata("metrics", {
@@ -88,7 +88,7 @@ class TestEnricherNodes:
         assert "lastfm_listeners" in metrics
         
         # Verify metrics have integer keys and expected structure
-        assert all(isinstance(k, int) for k in metrics["lastfm_user_playcount"].keys())
+        assert all(isinstance(k, int) for k in metrics["lastfm_user_playcount"])
         assert len(metrics["lastfm_user_playcount"]) == 1
         assert len(metrics["lastfm_global_playcount"]) == 1
         assert len(metrics["lastfm_listeners"]) == 1
@@ -105,7 +105,6 @@ class TestEnricherNodes:
         tracklist = TrackList([integration_sample_track])
         
         # Mock only external Spotify API calls
-        from unittest.mock import patch
         
         # Create mock enriched tracklist with Spotify metrics attached
         mock_enriched_tracklist = tracklist.with_metadata("metrics", {
@@ -138,7 +137,7 @@ class TestEnricherNodes:
         assert "popularity" in metrics
         
         # Verify metrics have integer keys and expected structure  
-        assert all(isinstance(k, int) for k in metrics["popularity"].keys())
+        assert all(isinstance(k, int) for k in metrics["popularity"])
         assert len(metrics["popularity"]) == 1
 
     async def test_create_enricher_node_no_matches(self, real_workflow_context, db_session, integration_sample_track, lastfm_enricher_config):
@@ -152,7 +151,6 @@ class TestEnricherNodes:
         tracklist = TrackList([integration_sample_track])
         
         # Mock no matching results - only external API calls
-        from unittest.mock import patch
         with patch('src.infrastructure.services.track_metadata_enricher.TrackMetadataEnricher.enrich_tracks', 
                    return_value=(tracklist, {})):
             # Execute enricher node with real workflow context
@@ -184,7 +182,6 @@ class TestEnricherNodes:
         enricher_node = create_enricher_node(lastfm_enricher_config)
         
         # Mock only external API calls
-        from unittest.mock import patch
         with patch('src.infrastructure.services.track_metadata_enricher.TrackMetadataEnricher.enrich_tracks', 
                    return_value=(tracklist, {})):
             # Execute enricher node with real workflow context
@@ -205,7 +202,7 @@ class TestEnricherNodes:
             if metric_name in metrics:
                 assert isinstance(metrics[metric_name], dict)
                 # Verify integer keys
-                assert all(isinstance(k, int) for k in metrics[metric_name].keys())
+                assert all(isinstance(k, int) for k in metrics[metric_name])
 
     async def test_create_enricher_node_invalid_connector(self, lastfm_enricher_config, real_workflow_context, db_session, integration_sample_track):
         """Test error handling for invalid connector."""
@@ -247,7 +244,6 @@ class TestEnricherNodes:
         tracklist = TrackList([integration_sample_track])
         
         # Mock only external API calls
-        from unittest.mock import patch
         with patch('src.infrastructure.services.track_metadata_enricher.TrackMetadataEnricher.enrich_tracks', 
                    return_value=(tracklist, {})):
             # Execute enricher node with real workflow context
@@ -277,7 +273,7 @@ class TestEnricherNodes:
         
         # Mock new matching results using proper MatchResult objects
         from src.domain.matching.types import MatchResult
-        mock_match_results = {
+        {
             1: MatchResult(
                 track=track,
                 success=True,
@@ -288,7 +284,6 @@ class TestEnricherNodes:
             )
         }
         
-        from unittest.mock import patch
         with patch('src.infrastructure.services.track_metadata_enricher.TrackMetadataEnricher.enrich_tracks', 
                    return_value=(tracklist, {})):
             # Execute enricher node with real workflow context
@@ -312,4 +307,4 @@ class TestEnricherNodes:
         if extracted_metrics:
             # Verify integer keys for any extracted metrics
             for metric_name in extracted_metrics:
-                assert all(isinstance(k, int) for k in final_metrics[metric_name].keys())
+                assert all(isinstance(k, int) for k in final_metrics[metric_name])

@@ -1,10 +1,10 @@
 """Unit tests for TrackRepository core operations."""
 
-import pytest
 from unittest.mock import AsyncMock
 
+import pytest
+
 from src.infrastructure.persistence.repositories.track.core import TrackRepository
-from tests.fixtures.models import track, tracks, db_track, db_tracks
 
 
 class TestTrackRepository:
@@ -26,6 +26,7 @@ class TestTrackRepository:
         """Should find track by ID when it exists."""
         # Create a database track mock that matches DBTrack structure
         from unittest.mock import MagicMock
+
         from src.infrastructure.persistence.database.db_models import DBTrack
         db_track = DBTrack(
             id=1,
@@ -53,12 +54,12 @@ class TestTrackRepository:
         assert result[1].title == "Test Track"
 
     @pytest.mark.asyncio
-    async def test_find_tracks_by_ids_multiple_tracks(self, repo, db_tracks):
+    async def test_find_tracks_by_ids_multiple_tracks(self, repo, tracks):
         """Should find multiple tracks by IDs."""
         # Mock the session execute to return our database tracks
         from unittest.mock import MagicMock
         mock_scalars = MagicMock()
-        mock_scalars.all.return_value = db_tracks
+        mock_scalars.all.return_value = tracks
         mock_result = MagicMock()
         mock_result.scalars.return_value = mock_scalars
         repo.session.execute = AsyncMock(return_value=mock_result)

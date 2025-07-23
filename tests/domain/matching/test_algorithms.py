@@ -3,9 +3,11 @@
 These tests verify the pure business logic of track matching and confidence scoring.
 """
 
-import pytest
 
-from src.domain.matching.algorithms import calculate_confidence, calculate_title_similarity
+from src.domain.matching.algorithms import (
+    calculate_confidence,
+    calculate_title_similarity,
+)
 
 
 class TestCalculateTitleSimilarity:

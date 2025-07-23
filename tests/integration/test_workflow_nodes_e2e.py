@@ -4,11 +4,12 @@ Tests complete workflow execution with real dependencies but mocked external API
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
-from src.domain.entities.track import Track, TrackList, Artist
-from src.domain.entities.playlist import Playlist
 from src.application.workflows.context import create_workflow_context
+from src.domain.entities.playlist import Playlist
+from src.domain.entities.track import Artist, Track, TrackList
 
 
 class TestWorkflowNodesE2E:
@@ -18,10 +19,13 @@ class TestWorkflowNodesE2E:
     def workflow_context(self, db_session):
         """Fast workflow context with mocked dependencies for E2E testing."""
         from unittest.mock import AsyncMock, MagicMock
+
         from src.application.use_cases.save_playlist import SavePlaylistUseCase
         from src.application.use_cases.update_playlist import UpdatePlaylistUseCase
+        from src.infrastructure.persistence.repositories.playlist import (
+            PlaylistRepositories,
+        )
         from src.infrastructure.persistence.repositories.track import TrackRepositories
-        from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
         
         # Create real repositories with test session
         track_repos = TrackRepositories(db_session)
@@ -78,17 +82,20 @@ class TestWorkflowNodesE2E:
     @pytest.mark.integration
     async def test_spotify_playlist_source_e2e(self, sample_tracks, workflow_context):
         """Test Spotify playlist source with real database but mocked API."""
-        from src.application.workflows.source_nodes import spotify_playlist_source
-        
         # Mock the Spotify API calls
-        from datetime import datetime, UTC
+        from datetime import UTC, datetime
+
+        from src.application.workflows.source_nodes import spotify_playlist_source
         mock_connector = AsyncMock()
         
         # Mock the connector in the workflow context instead of patching the source node
         workflow_context["connectors"].get_connector = MagicMock(return_value=mock_connector)
         
         # Mock playlist response with proper structure and data types
-        from src.domain.entities.playlist import ConnectorPlaylist, ConnectorPlaylistItem
+        from src.domain.entities.playlist import (
+            ConnectorPlaylist,
+            ConnectorPlaylistItem,
+        )
         mock_playlist = ConnectorPlaylist(
             connector_name="spotify",
             connector_playlist_id="test_playlist_123",
@@ -116,7 +123,6 @@ class TestWorkflowNodesE2E:
         
         # Mock convert function to return proper ConnectorTrack objects
         from src.domain.entities.track import ConnectorTrack
-        from datetime import datetime, UTC
         
         with patch('src.infrastructure.connectors.spotify.convert_spotify_track_to_connector') as mock_convert:
             def create_connector_track(data):
@@ -150,7 +156,9 @@ class TestWorkflowNodesE2E:
     @pytest.mark.integration
     async def test_internal_destination_e2e(self, sample_tracks, workflow_context):
         """Test internal destination with real database."""
-        from src.application.workflows.destination_nodes import handle_internal_destination
+        from src.application.workflows.destination_nodes import (
+            handle_internal_destination,
+        )
         
         # Create a real tracklist
         tracklist = TrackList(sample_tracks)
@@ -172,7 +180,9 @@ class TestWorkflowNodesE2E:
     @pytest.mark.integration
     async def test_spotify_destination_e2e(self, sample_tracks, workflow_context):
         """Test Spotify destination with mocked API."""
-        from src.application.workflows.destination_nodes import handle_spotify_destination
+        from src.application.workflows.destination_nodes import (
+            handle_spotify_destination,
+        )
         
         # Mock the Spotify API - connector should have create_playlist directly
         mock_connector = AsyncMock()
@@ -206,7 +216,6 @@ class TestWorkflowNodesE2E:
     async def test_enricher_node_e2e(self, sample_tracks, db_session):
         """Test enricher node with real connectors but mocked API calls."""
         from src.application.workflows.node_factories import create_enricher_node
-        from src.application.workflows.context import create_workflow_context
         
         # Create enricher configuration
         config = {
@@ -267,14 +276,13 @@ class TestWorkflowNodesE2E:
             
             # Verify integer keys are used (critical for downstream compatibility)
             for metric_name, metric_values in metrics.items():
-                assert all(isinstance(k, int) for k in metric_values.keys()), \
+                assert all(isinstance(k, int) for k in metric_values), \
                     f"Metric {metric_name} should have integer keys"
 
     @pytest.mark.integration
     async def test_workflow_node_error_handling(self, db_session):
         """Test error handling in workflow nodes with real infrastructure."""
         from src.application.workflows.source_nodes import spotify_playlist_source
-        from src.application.workflows.context import create_workflow_context
         
         # Use real workflow context for meaningful error testing
         real_workflow_context = create_workflow_context()
@@ -305,10 +313,11 @@ class TestWorkflowNodesE2E:
     @pytest.mark.integration
     async def test_complete_workflow_pipeline(self, sample_tracks, db_session):
         """Test a complete workflow pipeline: source -> enricher -> destination."""
-        from src.application.workflows.source_nodes import spotify_playlist_source
+        from src.application.workflows.destination_nodes import (
+            handle_internal_destination,
+        )
         from src.application.workflows.node_factories import create_enricher_node
-        from src.application.workflows.destination_nodes import handle_internal_destination
-        from src.application.workflows.context import create_workflow_context
+        from src.application.workflows.source_nodes import spotify_playlist_source
         
         # Use real workflow context for meaningful pipeline testing
         real_workflow_context = create_workflow_context(db_session)
@@ -317,7 +326,10 @@ class TestWorkflowNodesE2E:
         mock_spotify_connector = AsyncMock()
         
         # Mock playlist and tracks with proper structure
-        from src.domain.entities.playlist import ConnectorPlaylist, ConnectorPlaylistItem
+        from src.domain.entities.playlist import (
+            ConnectorPlaylist,
+            ConnectorPlaylistItem,
+        )
         mock_playlist = ConnectorPlaylist(
             connector_name="spotify",
             connector_playlist_id="test_123",
@@ -345,8 +357,9 @@ class TestWorkflowNodesE2E:
             mock_get_connector.return_value = mock_spotify_connector
             
             with patch('src.infrastructure.connectors.spotify.convert_spotify_track_to_connector') as mock_convert:
-                from src.domain.entities.track import ConnectorTrack, Artist
-                from datetime import datetime, UTC
+                from datetime import UTC, datetime
+
+                from src.domain.entities.track import Artist, ConnectorTrack
                 
                 def create_connector_track(data):
                     return ConnectorTrack(
@@ -425,12 +438,15 @@ class TestWorkflowNodesE2E:
     @pytest.mark.integration
     async def test_update_playlist_destination_e2e(self, sample_tracks, workflow_context):
         """Test update playlist destination with differential operations."""
-        from src.application.workflows.destination_nodes import handle_update_playlist_destination
-        from src.domain.entities.playlist import Playlist
-        
+        from src.application.workflows.destination_nodes import (
+            handle_update_playlist_destination,
+        )
+
         # Create a test playlist in the database first
         from src.infrastructure.persistence.database.db_connection import get_session
-        from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
+        from src.infrastructure.persistence.repositories.playlist import (
+            PlaylistRepositories,
+        )
         
         async with get_session() as session:
             playlist_repos = PlaylistRepositories(session)
@@ -476,12 +492,15 @@ class TestWorkflowNodesE2E:
     @pytest.mark.integration
     async def test_update_playlist_destination_dry_run_e2e(self, sample_tracks, workflow_context):
         """Test update playlist destination in dry-run mode."""
-        from src.application.workflows.destination_nodes import handle_update_playlist_destination
-        from src.domain.entities.playlist import Playlist
-        
+        from src.application.workflows.destination_nodes import (
+            handle_update_playlist_destination,
+        )
+
         # Create a test playlist in the database first
         from src.infrastructure.persistence.database.db_connection import get_session
-        from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
+        from src.infrastructure.persistence.repositories.playlist import (
+            PlaylistRepositories,
+        )
         
         async with get_session() as session:
             playlist_repos = PlaylistRepositories(session)
@@ -522,7 +541,9 @@ class TestWorkflowNodesE2E:
     @pytest.mark.integration
     async def test_update_playlist_destination_error_handling(self):
         """Test error handling in update playlist destination."""
-        from src.application.workflows.destination_nodes import handle_update_playlist_destination
+        from src.application.workflows.destination_nodes import (
+            handle_update_playlist_destination,
+        )
         
         # Test missing playlist_id
         with pytest.raises(ValueError, match="Missing required playlist_id"):

@@ -4,17 +4,17 @@ Tests focus on playlist entity behavior, connector operations, and business rule
 Following TDD principles - write tests first, then implement domain services.
 """
 
+from datetime import UTC, datetime
+
 import pytest
-from datetime import datetime, UTC
-from typing import Any
 
 from src.domain.entities.playlist import (
-    Playlist, 
-    ConnectorPlaylist, 
+    ConnectorPlaylist,
     ConnectorPlaylistItem,
-    PlaylistTrack
+    Playlist,
+    PlaylistTrack,
 )
-from src.domain.entities.track import Track, Artist
+from src.domain.entities.track import Artist, Track
 
 
 class TestPlaylistEntity:
@@ -250,4 +250,4 @@ class TestPlaylistTrackEntity:
         assert track.id is None
 
 
-# TODO: Add tests for domain services once they're implemented
+# TODO(#123): Add tests for domain services once they're implemented

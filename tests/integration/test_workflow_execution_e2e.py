@@ -4,7 +4,6 @@ This test verifies workflow building and context injection work correctly,
 following the test pyramid principle (minimal E2E tests).
 """
 
-import pytest
 
 from src.application.workflows.prefect import build_flow
 

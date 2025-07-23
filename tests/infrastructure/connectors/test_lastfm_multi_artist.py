@@ -1,9 +1,10 @@
 """Tests for LastFM multi-artist fallback functionality."""
 
-import pytest
 from unittest.mock import AsyncMock, Mock
 
-from src.domain.entities import Track, Artist
+import pytest
+
+from src.domain.entities import Artist, Track
 from src.infrastructure.connectors.lastfm import LastFMConnector, LastFMTrackInfo
 
 
@@ -170,7 +171,7 @@ class TestLastFMMultiArtistFallback:
     ):
         """Test that MBID lookup succeeds and doesn't try artist fallback."""
         # Add MBID to track
-        track = multi_artist_track.with_connector_track_id("musicbrainz", "test-mbid-123")
+        multi_artist_track.with_connector_track_id("musicbrainz", "test-mbid-123")
         
         # Mock successful MBID lookup
         mock_lastfm_connector.get_lastfm_track_info.return_value = successful_track_info

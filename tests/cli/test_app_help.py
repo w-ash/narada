@@ -1,8 +1,9 @@
 """Tests for CLI app help system consolidation."""
 
+from unittest.mock import patch
+
 import pytest
 from typer.testing import CliRunner
-from unittest.mock import AsyncMock, patch
 
 from src.infrastructure.cli.app import app
 

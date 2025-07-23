@@ -1,6 +1,5 @@
 """Tests for data command user flows and parameter validation."""
 
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -76,7 +75,7 @@ class TestParameterValidation:
             mock_import.return_value = OperationResult(operation_name="test")
             
             # Should accept valid options without crashing
-            result = runner.invoke(app, ["data", "import-plays-lastfm", "--recent", "100"])
+            runner.invoke(app, ["data", "import-plays-lastfm", "--recent", "100"])
             # Don't assert success since it might fail on missing config, but shouldn't crash
 
 

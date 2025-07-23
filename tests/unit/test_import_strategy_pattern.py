@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from src.domain.entities import OperationResult, PlayRecord, SyncCheckpoint, TrackPlay
+from src.domain.entities import PlayRecord, SyncCheckpoint, TrackPlay
 
 
 class TestImportStrategyPattern:
@@ -174,7 +174,7 @@ class TestImportStrategyPattern:
         mock_lastfm_connector.get_recent_tracks.return_value = sample_play_records
         
         # Act: Import using incremental strategy
-        result = await strategy_based_service.import_data(strategy="incremental", user_id="testuser")
+        await strategy_based_service.import_data(strategy="incremental", user_id="testuser")
         
         # Assert: Incremental strategy was used
         assert strategy_based_service.fetch_strategy_used == "incremental"
@@ -207,7 +207,7 @@ class TestImportStrategyPattern:
         mock_lastfm_connector.get_recent_tracks.return_value = sample_play_records
         
         # Act: Import with strategy-specific and processing parameters
-        result = await strategy_based_service.import_data(
+        await strategy_based_service.import_data(
             strategy="recent",
             limit=500,
             resolve_tracks=True,

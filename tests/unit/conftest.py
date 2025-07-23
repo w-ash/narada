@@ -7,25 +7,25 @@ use case orchestration with mocked dependencies.
 # Import all domain fixtures to make them available to unit tests
 from tests.domain.conftest import (
     artist,
+    empty_playlist,
+    playlist,
+    test_timestamp,
     track,
-    tracks,
-    tracks_with_metadata,
     tracklist,
     tracklist_with_metrics,
-    playlist,
-    empty_playlist,
-    test_timestamp,
+    tracks,
+    tracks_with_metadata,
 )
 
 # Re-export for pytest discovery
 __all__ = [
     "artist",
-    "track", 
-    "tracks",
-    "tracks_with_metadata",
+    "empty_playlist",
+    "playlist",
+    "test_timestamp",
+    "track",
     "tracklist",
     "tracklist_with_metrics",
-    "playlist",
-    "empty_playlist",
-    "test_timestamp",
+    "tracks",
+    "tracks_with_metadata",
 ]

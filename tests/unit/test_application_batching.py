@@ -3,18 +3,19 @@
 Validates Clean Architecture compliance - no external dependencies.
 """
 
-import pytest
 from unittest.mock import AsyncMock, Mock
 
+import pytest
+
 from src.application.utilities.batching import (
-    BatchProcessor, 
-    BatchResult, 
-    ImportStrategy, 
-    MatchStrategy, 
-    SyncStrategy,
+    BatchProcessor,
+    BatchResult,
     ConfigProvider,
+    ImportStrategy,
     Logger,
-    RepositoryProvider
+    MatchStrategy,
+    RepositoryProvider,
+    SyncStrategy,
 )
 
 
@@ -342,11 +343,8 @@ class TestCleanArchitectureCompliance:
         
         # This should work without any narada.* imports
         from application.utilities.batching import (
-            BatchProcessor, 
+            BatchProcessor,
             BatchResult,
-            ImportStrategy,
-            MatchStrategy, 
-            SyncStrategy
         )
         
         # Verify we can create instances without external dependencies
@@ -360,7 +358,10 @@ class TestCleanArchitectureCompliance:
     
     def test_dependency_injection_protocols(self):
         """Test that Protocol interfaces enforce contracts."""
-        from application.utilities.batching import ConfigProvider, Logger, RepositoryProvider
+        from application.utilities.batching import (
+            ConfigProvider,
+            Logger,
+        )
         
         # Verify protocols define expected methods
         assert hasattr(ConfigProvider, 'get')
@@ -380,6 +381,6 @@ class TestCleanArchitectureCompliance:
         
         # These should satisfy the protocol contracts
         config: ConfigProvider = MockConfig()
-        logger: Logger = MockLogger()
+        MockLogger()
         
         assert config.get("test", 42) == 42

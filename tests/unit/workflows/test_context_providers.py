@@ -4,15 +4,16 @@ These tests verify individual context providers work correctly in isolation,
 following the test pyramid principle of many fast unit tests.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from src.application.workflows.context import (
     ConfigProviderImpl,
-    LoggerProviderImpl,
     ConnectorRegistryImpl,
-    UseCaseProviderImpl,
     DatabaseSessionProviderImpl,
+    LoggerProviderImpl,
+    UseCaseProviderImpl,
     create_workflow_context,
 )
 

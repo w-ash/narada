@@ -1,11 +1,11 @@
 """Unit tests for BaseRepository bulk operations."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from src.infrastructure.persistence.repositories.base_repo import BaseRepository
+import pytest
+
 from src.infrastructure.persistence.database.db_models import DBTrack
-from tests.fixtures.models import track, tracks
+from src.infrastructure.persistence.repositories.base_repo import BaseRepository
 
 
 class TestBulkOperations:

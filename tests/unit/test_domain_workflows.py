@@ -5,20 +5,17 @@ making them fast and reliable without mocking complexity.
 """
 
 import pytest
-from src.domain.entities import Playlist, Track, TrackList, Artist
+
+from src.domain.entities import Artist, Playlist, Track, TrackList
 from src.domain.workflows.playlist_operations import (
+    calculate_track_persistence_stats,
     create_playlist_operation,
     create_spotify_playlist_operation,
-    calculate_track_persistence_stats,
     format_destination_result,
     format_spotify_destination_result,
-    update_playlist_tracks_operation,
     format_update_destination_result,
+    update_playlist_tracks_operation,
 )
-
-
-
-
 
 
 @pytest.fixture

@@ -1,19 +1,19 @@
 """Tests for unified BatchProcessor to eliminate duplicate batch processing patterns."""
 
 from collections.abc import Callable
-from unittest.mock import AsyncMock, MagicMock
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.domain.entities.track import Track, Artist
 from src.application.utilities.batching import (
     BatchProcessor,
-    ImportStrategy,
-    MatchStrategy, 
-    SyncStrategy,
     BatchResult,
+    ImportStrategy,
+    MatchStrategy,
+    SyncStrategy,
 )
+from src.domain.entities.track import Track
 
 
 class TestBatchProcessor:
@@ -28,7 +28,6 @@ class TestBatchProcessor:
         repos.likes = AsyncMock()
         repos.core = AsyncMock()
         return repos
-
 
     @pytest.fixture
     def batch_processor(self, mock_repositories):
@@ -256,7 +255,7 @@ class TestBatchProcessor:
         def mock_progress_callback(current: int, total: int, description: str):
             progress_calls.append((current, total, description))
         
-        strategy = ImportStrategy(
+        ImportStrategy(
             batch_size=2,
             processor_func=AsyncMock(return_value={"status": "processed"}),
         )

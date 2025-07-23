@@ -1,7 +1,7 @@
 """Tests for refactored SpotifyImportService using BaseImportService template method pattern."""
 
-import json
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
@@ -125,9 +125,7 @@ class TestSpotifyImportServiceRefactored:
         """Create temporary Spotify export file."""
         file_path = tmp_path / "test_spotify_export.json"
         # Convert SpotifyPlayRecord objects to raw JSON format
-        raw_data = []
-        for record in sample_spotify_records:
-            raw_data.append({
+        raw_data = [{
                 "ts": record.timestamp.isoformat().replace("+00:00", "Z"),
                 "spotify_track_uri": record.track_uri,
                 "master_metadata_track_name": record.track_name,
@@ -142,7 +140,7 @@ class TestSpotifyImportServiceRefactored:
                 "skipped": record.skipped,
                 "offline": record.offline,
                 "incognito_mode": record.incognito_mode,
-            })
+            } for record in sample_spotify_records]
         
         with open(file_path, "w") as f:
             json.dump(raw_data, f)
@@ -356,7 +354,7 @@ class TestSpotifyImportServiceRefactored:
             progress_callback = Mock()
             
             # Act: Import with progress callback
-            result = await service.import_from_file(temp_spotify_file, progress_callback=progress_callback)
+            await service.import_from_file(temp_spotify_file, progress_callback=progress_callback)
             
             # Assert: Progress callback was called multiple times
             assert progress_callback.call_count >= 3

@@ -3,22 +3,23 @@
 Validates Clean Architecture compliance - no external dependencies.
 """
 
-import pytest
+from datetime import datetime
 from unittest.mock import AsyncMock, Mock
-from datetime import datetime, UTC
+
+import pytest
 
 from src.application.utilities.progress import (
+    NoOpProgressProvider,
     ProgressOperation,
     ProgressProvider,
-    NoOpProgressProvider,
     create_operation,
     get_progress_provider,
     set_progress_provider,
 )
 from src.application.utilities.progress_integration import (
-    with_progress,
     DatabaseProgressContext,
     batch_progress_wrapper,
+    with_progress,
 )
 
 
@@ -326,15 +327,8 @@ class TestCleanArchitectureCompliance:
         
         # This should work without any narada.* imports
         from application.utilities.progress import (
-            ProgressOperation,
-            ProgressProvider,
             NoOpProgressProvider,
-            create_operation
-        )
-        from application.utilities.progress_integration import (
-            with_progress,
-            DatabaseProgressContext,
-            batch_progress_wrapper
+            create_operation,
         )
         
         # Verify we can create instances without external dependencies

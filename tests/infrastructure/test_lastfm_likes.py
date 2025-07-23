@@ -1,9 +1,10 @@
 """Tests for LastFM likes functionality."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pylast
+import pytest
+
 from src.infrastructure.connectors.lastfm import LastFMConnector
 
 

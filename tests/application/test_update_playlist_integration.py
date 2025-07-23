@@ -4,7 +4,6 @@ Tests the complete playlist update workflow including database operations,
 Spotify sync services, and end-to-end operation execution.
 """
 
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -26,7 +25,7 @@ class MockSpotifyConnector:
         self.operations_executed = []
         self.api_calls_made = 0
 
-    async def execute_playlist_operations(self, playlist_id, operations, snapshot_id=None):
+    async def execute_playlist_operations(self, _playlist_id, operations, _snapshot_id=None):
         """Mock execution of playlist operations."""
         self.operations_executed.extend(operations)
         self.api_calls_made += len(operations)
@@ -235,7 +234,7 @@ class TestUpdatePlaylistIntegration:
         )
         
         # Execute command
-        result = await use_case.execute(command)
+        await use_case.execute(command)
         
         # Both sync services should have been called
         second_sync_service.supports_playlist.assert_called_once()
@@ -276,7 +275,7 @@ class TestSpotifyPlaylistSyncService:
         from src.application.use_cases.update_playlist import (
             PlaylistOperation,
             PlaylistOperationType,
-            UpdatePlaylistOptions
+            UpdatePlaylistOptions,
         )
         
         # Create test operations
@@ -333,7 +332,7 @@ class TestSpotifyPlaylistSyncService:
         """Test accurate API call counting."""
         from src.application.use_cases.update_playlist import (
             PlaylistOperation,
-            PlaylistOperationType
+            PlaylistOperationType,
         )
         
         # Test different operation types
@@ -343,10 +342,9 @@ class TestSpotifyPlaylistSyncService:
             # 75 remove operations should be 1 API call (batched)
             *[PlaylistOperation(PlaylistOperationType.REMOVE, Mock(), i) for i in range(75)],
             # 3 move operations should be 3 API calls (individual)
-            *[PlaylistOperation(PlaylistOperationType.MOVE, Mock(), i, i+1) for i in range(3)]
+            *[PlaylistOperation(PlaylistOperationType.MOVE, Mock(), i, i + 1) for i in range(3)]
         ]
         
         api_calls = sync_service._count_spotify_api_calls(operations)
         
-        # Expected: 2 (adds) + 1 (removes) + 3 (moves) = 6
-        assert api_calls == 6
+        assert api_calls == 6  # 2 (adds) + 1 (removes) + 3 (moves) = 6

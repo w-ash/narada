@@ -30,11 +30,8 @@ class TrackPlayMapper(BaseModelMapper[DBTrackPlay, TrackPlay]):
         return []  # Don't eagerly load track by default for performance
 
     @staticmethod
-    async def to_domain(db_model: DBTrackPlay) -> TrackPlay | None:
+    async def to_domain(db_model: DBTrackPlay) -> TrackPlay:
         """Convert database play to domain model."""
-        if not db_model:
-            return None
-
         return TrackPlay(
             track_id=db_model.track_id,
             service=db_model.service,
@@ -231,3 +228,11 @@ class TrackPlayRepository(BaseRepository[DBTrackPlay, TrackPlay]):
             track_ids, ["period_plays"], start_date, end_date
         )
         return aggregations.get("period_plays", {})
+
+    @db_operation("get_recent_plays")
+    async def get_recent_plays(self, limit: int = 100) -> list[TrackPlay]:
+        """Get recent plays."""
+        return await self.find_by(
+            [],
+            limit=limit,
+        )

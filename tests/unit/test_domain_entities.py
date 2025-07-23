@@ -3,14 +3,23 @@
 These tests verify that the domain entities work correctly and have zero external dependencies.
 """
 
+from datetime import UTC, datetime
+
 import pytest
-from datetime import datetime, UTC
 
 from src.domain.entities import (
-    Artist, Track, TrackLike, TrackList, 
-    Playlist, ConnectorPlaylistItem,
-    SyncCheckpoint, PlayRecord, TrackPlay, OperationResult,
-    TrackContextFields, create_lastfm_play_record, ensure_utc
+    Artist,
+    ConnectorPlaylistItem,
+    OperationResult,
+    Playlist,
+    PlayRecord,
+    SyncCheckpoint,
+    Track,
+    TrackContextFields,
+    TrackList,
+    TrackPlay,
+    create_lastfm_play_record,
+    ensure_utc,
 )
 
 

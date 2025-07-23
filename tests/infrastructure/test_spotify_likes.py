@@ -1,10 +1,10 @@
 """Tests for Spotify likes functionality."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.infrastructure.connectors.spotify import SpotifyConnector
-from src.domain.entities import Track, Artist
 
 
 @pytest.mark.asyncio
@@ -31,7 +31,7 @@ async def test_get_liked_tracks():
     }
     
     # Create a mock Spotify client
-    with patch("spotipy.Spotify") as MockSpotify:
+    with patch("spotipy.Spotify"):
         mock_client = MagicMock()
         mock_client.current_user_saved_tracks.return_value = mock_response
         
@@ -107,7 +107,7 @@ async def test_get_liked_tracks_pagination():
     }
     
     # Create a mock Spotify client
-    with patch("spotipy.Spotify") as MockSpotify:
+    with patch("spotipy.Spotify"):
         mock_client = MagicMock()
         mock_client.current_user_saved_tracks.side_effect = [
             mock_response_page1,

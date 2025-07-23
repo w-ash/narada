@@ -7,12 +7,15 @@ never directly on external connector data."
 This means tracks entering workflow operations MUST have database IDs.
 """
 
-import pytest
 from unittest.mock import AsyncMock, Mock
 
-from src.domain.entities import Track, Artist, TrackList  
+import pytest
+
+from src.domain.entities import Artist, Track, TrackList
+from src.infrastructure.services.connector_metadata_manager import (
+    ConnectorMetadataManager,
+)
 from src.infrastructure.services.track_identity_resolver import TrackIdentityResolver
-from src.infrastructure.services.connector_metadata_manager import ConnectorMetadataManager
 
 
 class TestDatabaseFirstWorkflowCompliance:
@@ -32,7 +35,7 @@ class TestDatabaseFirstWorkflowCompliance:
             Track(title="No ID Track 2", artists=[Artist(name="Artist 2")])
         ])
         
-        tracks_with_ids = TrackList(tracks=[
+        TrackList(tracks=[
             Track(id=1, title="ID Track 1", artists=[Artist(name="Artist 1")]),
             Track(id=2, title="ID Track 2", artists=[Artist(name="Artist 2")])
         ])
@@ -100,12 +103,13 @@ class TestDatabaseFirstWorkflowCompliance:
         mock_repos.connector.get_connector_mappings.return_value = {}
         
         # Execute: Should work with track IDs
-        result = await manager.fetch_fresh_metadata(
+        fresh_metadata, failed_track_ids = await manager.fetch_fresh_metadata(
             identity_mappings, "lastfm", mock_connector, [1]
         )
         
         # Verify: Operation succeeded (empty result due to no mappings, but no error)
-        assert isinstance(result, dict)
+        assert isinstance(fresh_metadata, dict)
+        assert isinstance(failed_track_ids, set)
         
         # Verify: Repository was called with valid track IDs
         mock_repos.connector.get_connector_mappings.assert_called_once_with([1], "lastfm")
@@ -160,7 +164,9 @@ class TestDatabaseFirstWorkflowCompliance:
         assert hasattr(lastfm_track_info, 'lastfm_user_playcount'), "LastFM model must have playcount"
         
         # Verify: External models can be converted to metadata dicts
-        from src.infrastructure.services.connector_metadata_manager import ConnectorMetadataManager
+        from src.infrastructure.services.connector_metadata_manager import (
+            ConnectorMetadataManager,
+        )
         manager = ConnectorMetadataManager(Mock())
         
         # Test the conversion method works with attrs classes

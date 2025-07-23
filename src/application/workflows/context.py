@@ -7,9 +7,9 @@ Clean Architecture principles.
 from dataclasses import dataclass
 from typing import Any
 
-from src.infrastructure.connectors import CONNECTORS, discover_connectors
 from src.config import get_logger
-from src.domain.repositories.interfaces import PlaylistRepository, TrackRepository
+from src.domain.repositories.interfaces import ConnectorRepository, LikeRepository, PlaylistRepository, PlaysRepository, RepositoryProvider, TrackRepository
+from src.infrastructure.connectors import CONNECTORS, discover_connectors
 from src.infrastructure.persistence.database.db_connection import get_session
 from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
 from src.infrastructure.persistence.repositories.track import TrackRepositories

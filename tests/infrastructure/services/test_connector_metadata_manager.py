@@ -1,12 +1,15 @@
 """Tests for ConnectorMetadataManager service."""
 
-import pytest
 from unittest.mock import AsyncMock, Mock, patch
 
-from src.infrastructure.services.connector_metadata_manager import ConnectorMetadataManager
-from src.domain.entities import Track, Artist
+import pytest
+
+from src.domain.entities import Artist, Track
 from src.domain.matching.types import MatchResult
 from src.infrastructure.persistence.repositories.track import TrackRepositories
+from src.infrastructure.services.connector_metadata_manager import (
+    ConnectorMetadataManager,
+)
 
 
 @pytest.fixture
@@ -80,7 +83,7 @@ class TestConnectorMetadataManager:
         mock_track_repos.connector.get_connector_mappings.return_value = existing_mappings
 
         # Execute
-        result = await metadata_manager.fetch_fresh_metadata(
+        fresh_metadata, failed_track_ids = await metadata_manager.fetch_fresh_metadata(
             sample_identity_mappings,
             "lastfm",
             mock_connector_instance,
@@ -88,9 +91,10 @@ class TestConnectorMetadataManager:
         )
 
         # Verify
-        assert len(result) == 1
-        assert result[1]["lastfm_user_playcount"] == 42
-        assert result[1]["lastfm_global_playcount"] == 1000
+        assert len(fresh_metadata) == 1
+        assert fresh_metadata[1]["lastfm_user_playcount"] == 42
+        assert fresh_metadata[1]["lastfm_global_playcount"] == 1000
+        assert len(failed_track_ids) == 0
 
         # Verify direct API call was made with correct tracks
         mock_connector_instance.batch_get_track_info.assert_called_once()
@@ -217,14 +221,15 @@ class TestConnectorMetadataManager:
         """Test fetching when no tracks need refresh."""
         mock_connector_instance = Mock()
         
-        result = await metadata_manager.fetch_fresh_metadata(
+        fresh_metadata, failed_track_ids = await metadata_manager.fetch_fresh_metadata(
             sample_identity_mappings,
             "lastfm",
             mock_connector_instance,
             []  # No tracks to refresh
         )
 
-        assert result == {}
+        assert fresh_metadata == {}
+        assert failed_track_ids == set()
 
     @pytest.mark.asyncio
     async def test_fetch_fresh_metadata_no_valid_mappings(
@@ -233,14 +238,15 @@ class TestConnectorMetadataManager:
         """Test fetching when no valid identity mappings exist for refresh tracks."""
         mock_connector_instance = Mock()
         
-        result = await metadata_manager.fetch_fresh_metadata(
+        fresh_metadata, failed_track_ids = await metadata_manager.fetch_fresh_metadata(
             sample_identity_mappings,
             "lastfm",
             mock_connector_instance,
             [999]  # Track ID not in identity mappings
         )
 
-        assert result == {}
+        assert fresh_metadata == {}
+        assert failed_track_ids == {999}
 
     @pytest.mark.asyncio
     async def test_fetch_fresh_metadata_provider_exception(
@@ -258,7 +264,7 @@ class TestConnectorMetadataManager:
             1: {"lastfm": "https://www.last.fm/music/mac+demarco/_/home"}
         }
         
-        result = await metadata_manager.fetch_fresh_metadata(
+        fresh_metadata, failed_track_ids = await metadata_manager.fetch_fresh_metadata(
             sample_identity_mappings,
             "lastfm",
             mock_connector_instance,
@@ -266,7 +272,8 @@ class TestConnectorMetadataManager:
         )
 
         # Should return empty dict on connector failure
-        assert result == {}
+        assert fresh_metadata == {}
+        assert failed_track_ids == {1}
 
     @pytest.mark.asyncio
     async def test_get_cached_metadata_success(self, metadata_manager, mock_track_repos):
@@ -408,7 +415,7 @@ class TestConnectorMetadataManager:
         ) as mock_process_metrics:
             mock_process_metrics.return_value = []
             
-            result = await metadata_manager.fetch_fresh_metadata(
+            fresh_metadata, failed_track_ids = await metadata_manager.fetch_fresh_metadata(
                 sample_identity_mappings,
                 "lastfm",
                 mock_connector_instance,
@@ -416,7 +423,8 @@ class TestConnectorMetadataManager:
             )
 
         # Verify: Should return empty dict when no connector mappings exist
-        assert result == {}
+        assert fresh_metadata == {}
+        assert failed_track_ids == {1}
         
         # Storage should not be attempted without existing mappings
         mock_track_repos.connector.save_mapping_confidence.assert_not_called()
@@ -584,12 +592,14 @@ class TestSessionManagementIssues:
         """
         import asyncio
         import gc
-        import warnings
         from unittest.mock import AsyncMock
-        
+        import warnings
+
+        from src.domain.entities import Artist, Track
         from src.infrastructure.persistence.repositories.track import TrackRepositories
-        from src.infrastructure.services.connector_metadata_manager import ConnectorMetadataManager
-        from src.domain.entities import Track, Artist
+        from src.infrastructure.services.connector_metadata_manager import (
+            ConnectorMetadataManager,
+        )
         
         # Create a small number of tracks for this test
         track_count = 5
@@ -653,10 +663,12 @@ class TestSessionManagementIssues:
         instead of manual commits prevents the database lock issues.
         """
         from unittest.mock import AsyncMock
-        
+
+        from src.domain.entities import Artist, Track
         from src.infrastructure.persistence.repositories.track import TrackRepositories
-        from src.infrastructure.services.connector_metadata_manager import ConnectorMetadataManager
-        from src.domain.entities import Track, Artist
+        from src.infrastructure.services.connector_metadata_manager import (
+            ConnectorMetadataManager,
+        )
         
         # Create moderate number of tracks to test batch operations
         track_count = 10
@@ -702,6 +714,7 @@ class TestSessionManagementIssues:
                 # Some other error - that's OK for this test, as long as it's not locks
                 pass
 
+
 # Legacy test class - kept for reference but renamed for clarity
 class TestConcurrentEnrichmentLocks:
     """Legacy test cases - these will be superseded by TestSessionManagementIssues."""
@@ -717,12 +730,13 @@ class TestConcurrentEnrichmentLocks:
         
         This test verifies the fix is working.
         """
-        import asyncio
         from sqlalchemy.exc import OperationalError
-        
+
+        from src.domain.entities import Artist, Track
         from src.infrastructure.persistence.repositories.track import TrackRepositories
-        from src.infrastructure.services.connector_metadata_manager import ConnectorMetadataManager
-        from src.domain.entities import Track, Artist
+        from src.infrastructure.services.connector_metadata_manager import (
+            ConnectorMetadataManager,
+        )
             
         # Create 77 tracks with metadata (matching the real error scenario)
         track_count = 77
@@ -801,15 +815,20 @@ class TestConcurrentEnrichmentLocks:
         thanks to StaticPool connection pooling.
         """
         import asyncio
-        import tempfile
         from pathlib import Path
+        import tempfile
+
         from sqlalchemy.exc import OperationalError
-        
-        from src.infrastructure.persistence.database.db_connection import create_db_engine, create_session_factory
-        from src.infrastructure.persistence.database.db_models import init_db
+
+        from src.domain.entities import Artist, Track
+        from src.infrastructure.persistence.database.db_connection import (
+            create_db_engine,
+            create_session_factory,
+        )
         from src.infrastructure.persistence.repositories.track import TrackRepositories
-        from src.infrastructure.services.connector_metadata_manager import ConnectorMetadataManager
-        from src.domain.entities import Track, Artist
+        from src.infrastructure.services.connector_metadata_manager import (
+            ConnectorMetadataManager,
+        )
         
         # Create temporary database for this test
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_db:
@@ -822,9 +841,9 @@ class TestConcurrentEnrichmentLocks:
             session_factory = create_session_factory(engine)
             
             # Initialize database schema
-            from src.infrastructure.persistence.database.db_connection import Base
+            from src.infrastructure.persistence.database.db_models import NaradaDBBase
             async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
+                await conn.run_sync(NaradaDBBase.metadata.create_all)
             
             # Create multiple batches of tracks to process concurrently
             batch_size = 25
@@ -853,7 +872,7 @@ class TestConcurrentEnrichmentLocks:
                 track_repos = TrackRepositories(session)
                 
                 tracks_to_create = []
-                for track_id in all_existing_mappings.keys():
+                for track_id in all_existing_mappings:
                     track = Track(
                         id=track_id,
                         title=f"Track {track_id}",
@@ -863,7 +882,7 @@ class TestConcurrentEnrichmentLocks:
                     tracks_to_create.append(track)
                 
                 for track in tracks_to_create:
-                    await track_repos.core.save_track(track)
+                    await track_repos.core.create(track)
                 await session.commit()
             
             # The critical test: Process multiple batches concurrently

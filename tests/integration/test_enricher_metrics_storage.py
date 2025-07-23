@@ -4,9 +4,11 @@ These tests verify that the enricher properly stores metrics with integer keys
 and handles various data format scenarios correctly.
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from src.domain.entities.track import Track, TrackList, Artist
+
+from src.domain.entities.track import Artist, Track, TrackList
 from src.infrastructure.services.track_metadata_enricher import TrackMetadataEnricher
 
 
@@ -85,18 +87,18 @@ class TestEnricherMetricsStorage:
             # Mock freshness controller - all tracks need refresh
             mock_freshness.get_stale_tracks = AsyncMock(return_value=[1, 2])
             
-            # Mock metadata manager - return fresh metadata
-            mock_metadata_mgr.fetch_fresh_metadata = AsyncMock(return_value={
+            # Mock metadata manager - return fresh metadata (tuple of dict and set)
+            mock_metadata_mgr.fetch_fresh_metadata = AsyncMock(return_value=({
                 1: {"lastfm_user_playcount": 75, "lastfm_global_playcount": 1500},
                 2: {"lastfm_user_playcount": 125, "lastfm_global_playcount": 2500}
-            })
+            }, set()))
             mock_metadata_mgr.get_all_metadata = AsyncMock(return_value={
                 1: {"lastfm_user_playcount": 75, "lastfm_global_playcount": 1500},
                 2: {"lastfm_user_playcount": 125, "lastfm_global_playcount": 2500}
             })
             
             # Execute enrichment
-            enriched_tracklist, metrics = await enricher.enrich_tracks(
+            _enriched_tracklist, metrics = await enricher.enrich_tracks(
                 sample_tracklist,
                 "lastfm", 
                 mock_connector,
@@ -112,9 +114,9 @@ class TestEnricherMetricsStorage:
             user_playcount_metrics = metrics["lastfm_user_playcount"]
             global_playcount_metrics = metrics["lastfm_global_playcount"]
             
-            assert isinstance(list(user_playcount_metrics.keys())[0], int), \
+            assert isinstance(next(iter(user_playcount_metrics.keys())), int), \
                 "Metrics keys should be integers, not strings"
-            assert isinstance(list(global_playcount_metrics.keys())[0], int), \
+            assert isinstance(next(iter(global_playcount_metrics.keys())), int), \
                 "Metrics keys should be integers, not strings"
             
             # Test that integer keys work for lookup
@@ -155,16 +157,16 @@ class TestEnricherMetricsStorage:
             })
             
             mock_freshness.get_stale_tracks = AsyncMock(return_value=[1, 2])
-            mock_metadata_mgr.fetch_fresh_metadata = AsyncMock(return_value={
+            mock_metadata_mgr.fetch_fresh_metadata = AsyncMock(return_value=({
                 1: {"lastfm_user_playcount": 75},
                 # Track 2 has no metadata
-            })
+            }, set()))
             mock_metadata_mgr.get_all_metadata = AsyncMock(return_value={
                 1: {"lastfm_user_playcount": 75},
             })
             
             # Execute enrichment
-            enriched_tracklist, metrics = await enricher.enrich_tracks(
+            _enriched_tracklist, metrics = await enricher.enrich_tracks(
                 tracklist, "lastfm", mock_connector, extractors, max_age_hours=1.0
             )
             
@@ -208,9 +210,9 @@ class TestEnricherMetricsStorage:
             })
             
             mock_freshness.get_stale_tracks = AsyncMock(return_value=[1])
-            mock_metadata_mgr.fetch_fresh_metadata = AsyncMock(return_value={
+            mock_metadata_mgr.fetch_fresh_metadata = AsyncMock(return_value=({
                 1: {"lastfm_user_playcount": 75}
-            })
+            }, set()))
             mock_metadata_mgr.get_all_metadata = AsyncMock(return_value={
                 1: {"lastfm_user_playcount": 75}
             })

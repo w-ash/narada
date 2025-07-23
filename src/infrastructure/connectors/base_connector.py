@@ -320,7 +320,7 @@ class BatchProcessor[T, R]:
 
                 # Emit individual item progress based on config frequency
                 current_item = batch_start + item_index + 1
-                progress_frequency = get_config("BATCH_PROGRESS_LOG_FREQUENCY")
+                progress_frequency = get_config("BATCH_PROGRESS_LOG_FREQUENCY") or 10
                 if progress_callback and (
                     current_item % progress_frequency == 0
                     or current_item == total_items

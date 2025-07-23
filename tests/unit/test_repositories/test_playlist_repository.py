@@ -1,11 +1,11 @@
 """Unit tests for PlaylistRepository core operations."""
 
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
 
 from src.domain.entities import Playlist
 from src.infrastructure.persistence.repositories.playlist.core import PlaylistRepository
-from tests.fixtures.models import track, tracks, db_playlist
 
 
 class TestPlaylistRepository:
