@@ -1,291 +1,156 @@
-# Narada v0.2.4: Playlist Workflow Expansion
+# Narada v0.2.4: Quality & Cleanup Initiative
 
-**Vision**: Transform playlist creation from static collections to intelligent, data-driven experiences using play history analysis and workflow automation.
+**Vision**: Solidify the codebase by eliminating technical debt, fixing all tests, and cleaning up legacy patterns to create a stable foundation for future feature development outlined in `BACKLOG.md`.
 
-**Status**: Runtime Issues Fixed ✅ | Test Anti-Patterns Being Addressed
-
----
-
-## Architecture Foundation ✅ COMPLETE
-
-### Clean Architecture Migration ✅
-- Domain/Application/Infrastructure separation with proper dependency inversion
-- Test execution optimized from 45s→31s with proper layer classification
-- 99.8% test success rate maintained
-
-### Database Concurrency ✅
-- Fixed SQLite database lock errors through `NullPool` and shared session management
-- Zero "database is locked" errors with proper async architecture
-- Single workflow-scoped session prevents concurrent session issues
-
-### Clean Architecture Simplification ✅
-- Eliminated 200+ lines of unnecessary abstraction layers
-- Deleted entire `providers/` and `interfaces/` directories
-- Direct dependency injection with focused protocols only
-- All adapter classes removed, no temporary code remains
-
-### Workflow Integration Tests ✅
-- Fixed all 3 remaining test failures from architecture migration
-- Tests now use real infrastructure with selective API mocking
-- Proper context passing between workflow nodes established
+**Current Status**: ✅ Critical runtime bugs fixed. ✅ Test suite infrastructure repaired. ✅ All failing tests fixed (620 passing, 1 skipped, 0 failures).
 
 ---
 
-## COMPLETED: Runtime Issues Fixed ✅
+## ✅ COMPLETED: Green Build Achieved (0 Failing Tests)
 
-**Successfully resolved critical workflow execution failures that tests didn't catch**
+**Context**: The test suite was critically broken with 59 failures due to recent architectural changes. All critical issues have been resolved and the build is now green with 620 tests passing, 1 skipped, 0 failures.
 
-### Problem Discovery
-After implementing clean architecture changes, workflows were failing at runtime with errors like:
-- `'NoneType' object has no attribute 'get_connector_mappings'` (repository injection failure)
-- `'list' object has no attribute 'items'` (extractor type mismatch) 
-- `'SpotifyConnector' object has no attribute '_connector'` (interface mismatch)
+### Completed Fixes
 
-### Root Cause: Test Anti-Pattern
-**Tests were passing because they artificially provided what broken production code expected:**
-- **Production**: `get_connector("spotify")._connector.create_playlist()` (BROKEN - no `._connector`)  
-- **Test**: `mock_connector._connector = mock_spotify_internal` (ARTIFICIALLY PROVIDES `._connector`)
-- **Runtime**: `SpotifyConnector` has no `._connector` attribute (FAILS)
+- ✅ **Enricher Tests (3 failures)**: Fixed missing connector registry and repositories in test context for `tests/unit/test_enricher_key_types.py`
+  - **Root Cause**: Tests created enricher nodes but didn't provide required `connectors` registry in context
+  - **Solution**: Added mock connector registry and repositories to test context
 
-**Pattern**: Tests validate that mocks work with mocks, not that production code works with real dependencies.
+- ✅ **Repository Test (1 failure)**: Fixed `tests/unit/test_repositories/test_track_repository.py::TestTrackRepository::test_find_tracks_by_ids_multiple_tracks`
+  - **Root Cause**: Test used domain `Track` entities where `DBTrack` database models were expected by mapper
+  - **Solution**: Updated test to use proper `DBTrack` models with correct data structure (`artists={"names": ["Artist 1"]}`)
 
-### Runtime Fixes Applied ✅
+### Quality Issues Identified (Non-Critical)
 
-1. **Repository Dependency Injection** (`src/application/workflows/context.py`)
-   - Fixed `create_workflow_context()` to provide real `RepositoryProviderImpl` with shared session
-   - Added missing `metrics` property to repository provider
-   - **Impact**: Enricher services now get working repository instances
+During the test fixes, several quality issues were discovered that align perfectly with the systematic architectural work already planned below:
 
-2. **Extractor Type Conversion** (`src/application/workflows/node_factories.py`) 
-   - Fixed enricher nodes to convert attribute lists to extractor dictionaries
-   - Import connector configurations to get real extractor functions
-   - **Impact**: Last.fm enrichment now processes extractors correctly
+- **Type system issues (10 errors)** - exactly the "Type System Anti-Patterns" cleanup in section 4 below
+- **Repository protocol compatibility issues** - addressed by "Refactor Use Cases for True Dependency Inversion" in Future Work
+- **Linting issues (125 warnings)** - mostly unused test parameters and broad exceptions  
+- **Prefect logging I/O errors** - harmless but should be investigated
 
-3. **Connector Interface Fixes** (`src/application/workflows/destination_nodes.py`)
-   - Removed `._connector` adapter access pattern
-   - Use connectors directly: `get_connector("spotify").create_playlist()`
-   - **Impact**: Destination nodes work with real connector instances
-
-### Test Architecture Improvements ✅
-
-4. **Interface Contract Tests** (`tests/integration/test_connector_contracts.py`)
-   - Validate connectors have expected methods before workflow execution
-   - Prevent interface mismatches like missing `._connector` attributes
-   - **Purpose**: Catch integration failures before runtime
-
-5. **Dependency Injection Contract Tests** (`tests/integration/test_workflow_context_contracts.py`)
-   - Validate `create_workflow_context()` provides working repositories
-   - Test real dependency injection paths with shared sessions  
-   - **Purpose**: Catch repository provider failures before runtime
-
-6. **Fixed Test Anti-Pattern** (`tests/integration/test_workflow_nodes_e2e.py`)
-   - Removed artificial `mock_connector._connector = mock_spotify_internal`
-   - Tests now validate real connector interfaces: `mock_connector.create_playlist.return_value`
-   - **Purpose**: Tests validate real production interfaces
-
-### Key Insight: Testing Anti-Pattern Prevention
-
-**❌ BAD**: Tests create artificial dependencies to make broken production code work
-**✅ GOOD**: Tests validate production code works with real dependencies (only external APIs mocked)
+> **Recommendation**: Address these quality issues as part of the planned systematic cleanup phases rather than urgent patches.
 
 ---
 
-## CURRENT: Test Architecture Fix - Get to 0 Failing Tests
+## 🚀 Next Priority: Systematically Improve Test Quality
 
-**Critical Issue**: 59 failing/erroring tests breaking development workflow
-
-### Problem Analysis ✅
-- **Infrastructure Breakdown**: `db_session` fixture references non-existent `_initialize_db` 
-- **Architectural Chaos**: 34/72 tests still in legacy `tests/unit/` structure
-- **Interface Mismatches**: Tests expect old interfaces (e.g., tuple returns vs. current API)
-- **Async Issues**: CLI tests have unawaited coroutines
-- **Testing Trivialities**: Many tests check implementation details vs. business value
-
-### Phase 1: Foundation Repair ✅
-**Goal**: Fix broken test infrastructure to enable running tests
-
-#### Infrastructure Fixes Applied
-- **Database Fixtures**: Fixed `db_session` fixture reference (`_initialize_db` → `initialize_db`)
-- **Return Type Alignment**: Updated 4 connector metadata manager tests for tuple unpacking from `fetch_fresh_metadata()`
-- **Async CLI Integration**: Added `asyncio.run()` to CLI handlers calling async functions
-- **Domain Validation**: Updated error message expectations to match attrs validators
-
-#### Current Test Status (11 remaining issues from original 59)
-
-**Failed Tests (8)**:
-- `tests/infrastructure/services/test_connector_metadata_manager.py::TestConcurrentEnrichmentLocks::test_concurrent_multiple_store_calls_no_longer_cause_locks`
-- `tests/infrastructure/test_database_first_workflow_compliance.py::TestDatabaseFirstWorkflowCompliance::test_connector_metadata_manager_expects_track_ids`
-- `tests/integration/test_enricher_metrics_storage.py` - 3 enricher integration tests
-- `tests/unit/test_enricher_key_types.py` - 3 enricher key type validation tests
-
-**Error Tests (3)**:
-- `tests/cli/test_workflows_cli.py` - 2 workflow CLI discovery tests
-- `tests/unit/test_repositories/test_track_repository.py::TestTrackRepository::test_find_tracks_by_ids_multiple_tracks`
-
-#### Remaining Issues Analysis
-**Primary Issue**: 6/8 failures are enricher-related, suggesting business logic changes in enricher key handling
-**Secondary Issue**: CLI workflow discovery and repository edge case handling  
-**Impact**: Core infrastructure stable, remaining issues are specific feature tests
-
-### Next Phase: Address Remaining Business Logic Issues
-- **Enricher Key Type Consistency**: Review integer vs string key handling in metrics storage
-- **CLI Workflow Discovery**: Fix workflow file parsing and empty directory handling
-- **Repository Edge Cases**: Address track ID handling in batch operations
-
----
-
-## PREVIOUS PHASE: Systematic Test Anti-Pattern Elimination ✅
-
-**Goal**: Replace mock-heavy tests with real component integration to catch future runtime failures
-
-### Testing Issues Identified
-
-1. **441 references** to old `_connector` pattern in tests indicate widespread coupling to implementation details
-2. **Mock-heavy integration tests** don't validate real dependency injection paths  
-3. **Missing contract validation** for interfaces returned by dependency injection
-4. **Test documentation** doesn't explain what runtime failures each test prevents
-
-### Implementation Plan (In Progress)
-
-#### Phase 1: Interface Contract Tests ✅ COMPLETED
-- ✅ Created connector interface validation tests
-- ✅ Created workflow context dependency injection tests  
-- ✅ Added extractor configuration contract tests
-- **Result**: Future interface mismatches will be caught by CI
-
-#### Phase 2: Test Anti-Pattern Fixes (IN PROGRESS)
-- ✅ Fixed 1 test with artificial `._connector` mocking
-- ⏳ **TODO**: Fix remaining tests with artificial dependency mocking
-- ⏳ **TODO**: Convert mock-heavy integration tests to use real components
-- **Result**: Tests will validate real integration paths
-
-#### Phase 3: DRY Test Fixtures (PENDING)
-- **TODO**: Create shared fixtures for real workflow context testing
-- **TODO**: Eliminate test duplication while maintaining pyramid structure
-- **Result**: Consistent testing approach across all test files
-
-### Remaining Work for Next Developer
-
-**Current Status**: Runtime issues fixed, beginning systematic test improvement
-
-**Todo List** (see TodoWrite output):
-```
-✅ [completed] Fix workflow context repository dependency injection
-✅ [completed] Fix extractor type mismatch in enricher node  
-✅ [completed] Fix connector adapter references in destination nodes
-🔄 [in_progress] Create interface contract tests for connector registry
-⏳ [pending] Fix test anti-pattern: remove artificial _connector mocking  
-⏳ [pending] Convert mock-heavy integration tests to use real components
-⏳ [pending] Create DRY shared test fixtures for workflow context
-```
-
-**Files Created**:
-- `tests/integration/test_connector_contracts.py` - Prevents interface mismatches
-- `tests/integration/test_workflow_context_contracts.py` - Prevents dependency injection failures
-
-**Next Steps**:
-1. **Fix remaining `_connector` references in tests** - Search for and remove artificial adapter mocking
-2. **Convert integration tests to real components** - Use real `create_workflow_context()`, mock only external APIs
-3. **Create DRY shared fixtures** - Eliminate test duplication while maintaining testing pyramid
-
-**Testing Pyramid Target**:
-- **Unit Tests**: Fast, isolated component tests (existing)
-- **Integration Tests**: Real component integration, external APIs mocked (improving) 
-- **E2E Tests**: Complete workflow execution, minimal mocking (future)
-
----
-
-## NEXT PHASE: Final Codebase Cleanup
-
-### Legacy Code Patterns Identified (Scan Results)
-
-During codebase scan for "temporary", "TODO", "legacy", "backward compatibility", we found several areas that need cleanup for truly clean codebase:
-
-#### High Priority - Remove Legacy Compatibility Layers
-
-1. **Legacy CLI Aliases** (`src/infrastructure/cli/ui.py:285-287`)
-   - Lines 285-287: `# Legacy aliases for existing code - remove after updating all callers`
-   - Remove: `display_sync_stats = display_operation_result` and `display_workflow_result = display_operation_result`
-   - **Action**: Update all callers to use `display_operation_result` directly
-
-2. **Legacy Protocol Properties** (`src/application/workflows/protocols.py:113-117`)
-   - Lines 113-117: `# Legacy compatibility - will be removed`
-   - Property: `repositories` marked as deprecated 
-   - **Action**: Remove deprecated `repositories` property from `WorkflowContext` protocol
-
-3. **Legacy Comments in Node Factories** (`src/application/workflows/node_factories.py:58-61`)
-   - Lines 58-61: `# === LEGACY ENRICHER IMPLEMENTATION REMOVED ===`
-   - **Action**: Remove outdated comment block about removed legacy implementation
-
-#### Medium Priority - Placeholder Implementations
-
-4. **Incomplete Matching Provider** (`src/application/providers/concrete_matching_provider.py:51-80`)
-   - Lines 51-52: "Note: This is a simplified implementation"
-   - Lines 78-80: "This is a placeholder that maintains the interface"
-   - **Impact**: Track matching functionality may be non-functional
-   - **Action**: Either implement properly or document as intentional minimal implementation
-
-5. **Backward Compatibility Comments** (Multiple files)
-   - `src/application/use_cases/match_tracks.py:86`: "Convert TrackList to MatchResultsById format for backward compatibility"
-   - `src/application/use_cases/match_tracks.py:102`: "legacy API compatibility"
-   - `src/application/workflows/destination_nodes.py:63`: "Return result in expected format for backward compatibility"
-   - **Action**: Review if these compatibility layers are still needed
-
-#### Low Priority - Wrapper/Adapter References
-
-6. **Wrapper Function Comments** (Multiple files)
-   - Various files still reference "wrapper" patterns in docstrings
-   - Examples: `src/infrastructure/connectors/spotify.py:58`, `src/infrastructure/connectors/musicbrainz.py:43`
-   - **Action**: Update docstrings to reflect clean architecture patterns
-
-7. **Type System Anti-Patterns** (Codebase-wide) 🆕
-   - Multiple files use `cast()` or `Any` to paper over typing issues instead of fixing root causes
-   - Examples: Repository interface mismatches, return type inconsistencies, protocol violations
-   - **Anti-Pattern**: Using `cast(SomeProtocol, broken_implementation)` to mask architectural issues
-   - **Impact**: Runtime errors hidden by type system, debugging made harder, architectural debt
-   - **Action**: Replace type casts with proper interface alignment and fix underlying type mismatches
+**Context**: The recent runtime failures were caused by a systemic testing anti-pattern where mocks were used to make broken code pass. Once the build is green, we must refactor tests to validate real component integrations and prevent this class of bugs from recurring. This phase is about moving from "tests that pass" to "tests that provide confidence".
 
 ### Implementation Plan
 
-#### Phase 1: Remove Legacy Compatibility (30 minutes)
-1. **Update CLI callers and remove legacy aliases**
-2. **Remove deprecated protocol properties**  
-3. **Clean up legacy comment blocks**
+#### Phase 1: Eliminate Artificial Mocks (In Progress)
 
-#### Phase 2: Review Placeholder Implementations (45 minutes)
-4. **Assess ConcreteMatchingProvider implementation**
-5. **Document backward compatibility requirements**
-6. **Remove unnecessary compatibility layers**
+- **Goal**: Remove all instances of tests artificially patching objects (e.g., `mock_connector._connector = ...`). Tests must validate the real component's public interface.
+- **Action**:
+  - `⏳ [pending]` **Find and Replace**: Search the codebase for the `._connector` pattern in tests and refactor them to mock the public methods (e.g., `mock_connector.create_playlist.return_value = ...`). There are over 400 references to fix.
+  - `⏳ [pending]` **Convert Integration Tests**: Refactor mock-heavy integration tests to use real components instantiated via `create_workflow_context()`, mocking only the outermost boundaries (external API clients).
 
-#### Phase 3: Documentation Cleanup (15 minutes)
-7. **Update docstrings to remove wrapper/adapter references**
-8. **Ensure all comments reflect current clean architecture**
+#### Phase 2: Create DRY Test Fixtures (Pending)
 
-#### Phase 4: Type System Cleanup (45 minutes) 🆕
-9. **Audit and remove type casts** - Find all `cast()` calls and replace with proper fixes
-10. **Fix protocol interface mismatches** - Align repository implementations with domain protocols
-11. **Replace `Any` with specific types** - Eliminate type system escape hatches where possible
-
-### Success Criteria
-
-After cleanup:
-- ✅ Zero references to "legacy", "backward compatibility", "temporary"
-- ✅ Zero placeholder implementations in critical paths
-- ✅ All wrapper/adapter references removed from docstrings
-- ✅ Zero type casts masking architectural issues 🆕
-- ✅ All protocol interfaces properly aligned 🆕
-- ✅ Clean breaks principle fully applied
-- ✅ 98%+ test success rate maintained
-
-### Clean Architecture Compliance Verification
-
-**Current Status**: Almost complete, needs final cleanup
-- ✅ No adapter classes remain in codebase
-- ✅ Direct dependency injection implemented
-- ⏳ Legacy compatibility patterns need removal
-- ⏳ Placeholder implementations need resolution
-- ⏳ Type system anti-patterns need cleanup 🆕
+- **Goal**: Reduce test code duplication and ensure consistent setup for integration tests.
+- **Action**:
+  - `⏳ [pending]` **Create Shared Fixtures**: Develop shared pytest fixtures that provide a real, working `WorkflowContext` for integration tests.
+  - `⏳ [pending]` **Refactor Tests**: Update integration tests to use these new shared fixtures, promoting a consistent testing approach.
 
 ---
 
-*Database Architecture Complete. Clean Architecture Phase 2 Complete. Final Legacy Cleanup in Progress.*
+## 🧹 Final Phase: Codebase Cleanup
+
+**Context**: With a stable and reliable test suite, the final step is to remove legacy code, placeholder implementations, and type system workarounds. This will complete the Clean Architecture migration and leave the codebase in an exceptionally clean state, ready for new feature development.
+
+### High Priority - Remove Legacy Compatibility Layers
+
+1. **Legacy CLI Aliases** (`src/infrastructure/cli/ui.py:285-287`): Remove `display_sync_stats` and `display_workflow_result` aliases. Update all callers to use `display_operation_result` directly.
+
+2. **Legacy Protocol Properties** (`src/application/workflows/protocols.py:113-117`): Remove the deprecated `repositories` property from the `WorkflowContext` protocol.
+
+3. **Legacy Comments** (`src/application/workflows/node_factories.py:58-61`): Remove outdated comment block about a removed legacy implementation.
+
+### Medium Priority - Architectural & Type System Cleanup
+
+4. **Type System Anti-Patterns** (Codebase-wide): This is a critical quality improvement.
+   - **Action**: Find all uses of `cast()` and `Any` that are used to paper over typing issues.
+   - **Goal**: Replace these type casts with proper interface alignment and fix the underlying type mismatches. Using `cast(SomeProtocol, broken_implementation)` hides architectural debt and must be eliminated.
+
+5. **Placeholder Repository Provider** (`src/application/workflows/context.py`): The `PlaceholderRepositoryProvider` class within `create_workflow_context` is an acknowledged "hack" for backward compatibility.
+   - **Goal**: Eliminate this placeholder by completing the "Refactor Use Cases for True Dependency Inversion" epic. Once use cases no longer create their own repositories, this placeholder will be obsolete.
+
+6. **Incomplete Matching Provider** (`src/application/providers/concrete_matching_provider.py:51-80`): The track matching functionality may be non-functional. Either implement it properly or document it as an intentional minimal implementation.
+
+7. **Backward Compatibility Comments** (Multiple files): Review if compatibility layers in `match_tracks.py` and `destination_nodes.py` are still needed. Remove them if possible.
+
+### Low Priority - Documentation Cleanup
+
+8. **Wrapper/Adapter References** (Multiple files): Update docstrings in connectors and other files to remove references to "wrapper" patterns and reflect the clean architecture.
+
+---
+
+## Future Work: Foundational Architectural Refinements (from BACKLOG.md)
+
+**Context**: Once the codebase is stable and the test suite is green, the next phase is to complete the foundational architectural refinements outlined in the project backlog. This will fully realize the benefits of the Clean Architecture and prepare the system for the "Playlist Workflow Expansion" features.
+
+### Key Initiatives (Sequenced for Efficiency)
+
+> **Architectural Note on Sequencing**: The following tasks are ordered to prevent rework. The `MatcherService` is refactored first to provide a stable interface. Then, the general dependency injection pattern is established. Finally, the `UpdatePlaylistUseCase` is completed, integrating with the new, stable components in a single step.
+
+#### 1. Clarify Enrichment vs. Matching Data Flow
+
+- **Goal**: Refactor the `MatcherService` to align with the superior, single-responsibility pattern established by the `TrackMetadataEnricher`.
+
+- **Architectural Vision**: The system should have a clear distinction between *identity resolution* (finding a track's external ID) and *data enrichment* (fetching metadata for a known ID). The `MatcherService` should only do the former.
+
+- **Action**:
+  1. Refactor `MatcherService` to remove all internal data freshness logic (e.g., the `max_age_hours` parameter). Its sole responsibility should be to find connector IDs for tracks that don't have them.
+  2. Create a new, lean `EnricherService` (or reuse components from `TrackMetadataEnricher`) that takes a list of tracks with known connector IDs and fetches their latest metadata.
+  3. Update all callers of `MatcherService` to adopt the new, two-step flow: first call the matcher to resolve identities, then call the enricher to fetch data.
+
+- **Why**: This eliminates redundant logic, makes the data flow explicit and efficient (by not re-matching known tracks), and brings the entire system's data access patterns into alignment with our best practices.
+
+#### 2. Refactor Use Cases for True Dependency Inversion
+
+- **Goal**: Make all Application Use Cases pure orchestrators that are 100% independent of the database, dramatically improving testability and adaptability.
+
+- **Architectural Vision**: Use cases should depend only on *interfaces* (protocols) defined in the domain layer, not on concrete infrastructure implementations. This is the final, critical step to achieving true Clean Architecture.
+
+- **Phased Implementation Plan** (to avoid "boiling the ocean"):
+
+  1. **Phase 1: Define Core Protocols**: In the `src/domain/repositories/` directory, ensure all repository protocols (e.g., `PlaylistRepository`, `TrackRepository`) are clearly defined. This is a safe, non-breaking first step.
+
+  2. **Phase 2: Refactor a Pilot Use Case (`UpdatePlaylistUseCase`)**:
+     - **Objective**: Prove the dependency inversion pattern on a single, representative use case.
+     - **Action (Use Case)**: Modify `UpdatePlaylistUseCase.__init__` to accept a `playlist_repo` that conforms to the `PlaylistRepository` protocol.
+     - **Action (Wiring)**: Update `UseCaseProviderImpl` to instantiate the concrete `SQLAlchemyPlaylistRepository` and inject it into the `UpdatePlaylistUseCase`.
+     - **Action (Testing)**: Update the tests for `UpdatePlaylistUseCase` to inject a mock repository object that implements the `PlaylistRepository` protocol. This eliminates the need to mock database sessions in tests.
+
+  3. **Phase 3: Roll Out to Remaining Use Cases**:
+     - **Objective**: Apply the now-proven pattern to other key use cases.
+     - **Action**: Repeat the refactoring process for `SavePlaylistUseCase` and any other services that directly instantiate repositories.
+
+- **Why**: This incremental approach delivers value at each step, reduces risk, and establishes a clear, repeatable pattern for modernizing the entire application layer.
+
+#### 3. Complete UpdatePlaylistUseCase Implementation
+
+- **Goal**: Evolve `UpdatePlaylistUseCase` from a diff *calculator* into a fully-featured, production-ready diff *executor* that can intelligently synchronize playlists.
+
+- **Architectural Vision**: The use case should be the single source of truth for all differential playlist updates. It must correctly calculate, sequence, and execute operations (ADD, REMOVE, MOVE) against both the internal database representation and external services like Spotify, while remaining extensible.
+
+- **Phased Implementation Plan**:
+
+  1. **Phase 1: Solidify the Differential Algorithm (Internal Logic)**
+     - **Objective**: Ensure the calculated `PlaylistDiff` is 100% accurate before touching external APIs.
+     - **Action (Positioning)**: Refactor the `calculate_diff` method to address the `"Simplified positioning for now"` comment. The target position for new `ADD` operations must be calculated based on the track's actual index in the `target_tracklist` to ensure the final order is correct.
+     - **Action (Execution)**: In `_execute_operations`, enhance the logic to correctly apply `MOVE` operations to the in-memory `updated_tracks` list. Currently, they are logged but not executed, meaning the reordering is never reflected in the final persisted playlist.
+
+  2. **Phase 2: Implement External Service Synchronization**
+     - **Objective**: Translate the calculated `PlaylistDiff` into a series of efficient, sequenced API calls to an external service.
+     - **Action (Service Impl)**: Create a concrete implementation of the `PlaylistSyncService` protocol for Spotify. This service will receive the list of `PlaylistOperation` objects from the use case.
+     - **Architectural Note**: This is distinct from the existing `MatcherService`. The Matcher's role is **read-only identity resolution** (finding tracks), whereas the `PlaylistSyncService`'s role is **write-only state modification** (adding/removing/moving tracks in a playlist). This separation of concerns is critical for a clean architecture.
+     - **Action (Batching & Sequencing)**: Inside the `SpotifySyncService`, implement the logic to batch operations according to API limits (e.g., 100 tracks per request). Crucially, execute them in the correct order: `REMOVE`s first (in reverse index order), then `ADD`s, then `MOVE`s to prevent index-related errors.
+     - **Action (Wiring)**: Ensure the `UpdatePlaylistUseCase` is instantiated with the `SpotifySyncService` so `_execute_operations` can correctly delegate to it.
+
+  3. **Phase 3: Integrate with MatcherService for Robust Matching**
+     - **Objective**: Replace the use case's simplistic internal track matching with the project's existing, powerful `MatcherService`.
+     - **Architectural Note**: This is a critical DRY (Don't Repeat Yourself) improvement. Instead of re-implementing ISRC and metadata matching within the use case, we will delegate to the `MatcherService` which is the single source of truth for identity resolution.
+     - **Action (Dependency Injection)**: Modify the `UpdatePlaylistUseCase` to accept a `MatcherService` instance during its initialization.
+     - **Action (Delegation)**: Replace the entire implementation of the private `_match_tracks` method with a call to the injected `MatcherService`. The service will handle the sophisticated matching logic based on the `track_matching_strategy` option.

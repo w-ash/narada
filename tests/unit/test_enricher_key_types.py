@@ -63,10 +63,21 @@ class TestEnricherKeyTypes:
         
         mock_session = MagicMock()
         workflow_context = create_workflow_context()
+        
+        # Create mock connector registry
+        mock_connector_registry = MagicMock()
+        mock_connector_registry.list_connectors.return_value = ["lastfm", "spotify"]
+        mock_connector_registry.get_connector.return_value = MagicMock()
+        
+        # Create mock repositories
+        mock_repositories = MagicMock()
+        
         context = {
             "tracklist": tracklist, 
             "shared_session": mock_session,
-            "workflow_context": workflow_context
+            "workflow_context": workflow_context,
+            "connectors": mock_connector_registry,
+            "repositories": mock_repositories
         }
         result = await enricher_node(context, {})
         
@@ -143,10 +154,21 @@ class TestEnricherKeyTypes:
         
         mock_session = MagicMock()
         workflow_context = create_workflow_context()
+        
+        # Create mock connector registry
+        mock_connector_registry = MagicMock()
+        mock_connector_registry.list_connectors.return_value = ["lastfm", "spotify"]
+        mock_connector_registry.get_connector.return_value = MagicMock()
+        
+        # Create mock repositories
+        mock_repositories = MagicMock()
+        
         context = {
             "tracklist": tracklist, 
             "shared_session": mock_session,
-            "workflow_context": workflow_context
+            "workflow_context": workflow_context,
+            "connectors": mock_connector_registry,
+            "repositories": mock_repositories
         }
         result = await enricher_node(context, {})
         
@@ -216,10 +238,21 @@ class TestEnricherKeyTypes:
         
         mock_session = MagicMock()
         workflow_context = create_workflow_context()
+        
+        # Create mock connector registry
+        mock_connector_registry = MagicMock()
+        mock_connector_registry.list_connectors.return_value = ["lastfm", "spotify"]
+        mock_connector_registry.get_connector.return_value = MagicMock()
+        
+        # Create mock repositories
+        mock_repositories = MagicMock()
+        
         context = {
             "tracklist": tracklist, 
             "shared_session": mock_session,
-            "workflow_context": workflow_context
+            "workflow_context": workflow_context,
+            "connectors": mock_connector_registry,
+            "repositories": mock_repositories
         }
         result = await enricher_node(context, {})
         

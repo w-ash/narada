@@ -137,51 +137,38 @@ This document is a high level overview of Project Narada's development backlog/r
 ### v0.2.4: Playlist Workflow Expansion
 **Goal**: Enable advanced playlist workflows, including using plays for filtering and discovery workflows
 
-#### Foundational Architectural Refinements (Pre-Feature Work)
-**Goal**: Solidify the Clean Architecture implementation to ensure new features are built on a stable, testable, and maintainable foundation. This work must be completed before new feature development begins.  
-**Note**: The 'Refactor Use Cases' task is the prerequisite for the other two refactorings and should be tackled first.
+#### Foundational Epics (Pre-Feature Work)
+**Goal**: Solidify the Clean Architecture implementation and resolve key technical debt to prepare for advanced playlist workflow features. This foundational work ensures new features are built on a stable, testable, and maintainable platform.
 
-#### Technical Debt Resolution (Critical Pre-Feature Work)
-**Goal**: Address identified technical debt markers and temporary implementations to maintain code quality and architectural integrity before adding new features.
-
-- [ ] **Refactor Use Cases for True Dependency Inversion**
-    - Effort: M
-    - What: Refactor all Application Use Cases (e.g., `SavePlaylistUseCase`, `UpdatePlaylistUseCase`) to be pure orchestrators. They must receive repository and strategy *interfaces* (protocols) via dependency injection instead of creating concrete instances or accessing the database session directly.
-    - Why: This is the most critical step to fully realize the benefits of Clean Architecture. It will make our business logic 100% independent of the database, dramatically improving testability (no more mocking `get_session`), and making the system more adaptable to future changes. This directly addresses the "Application Layer Repository Abstractions" deferred item.
-    - Dependencies: Clean Architecture Foundation
-    - Status: Not Started
-    - Notes:
-        - Define repository and strategy protocols in the `domain` layer.
-        - Update use cases to accept these protocols in their `__init__` methods.
-        - Wire up concrete implementations (e.g., `SQLAlchemyTrackRepository`) at the outermost layer (CLI command or workflow node).
+**Architectural Note on Sequencing**: These epics are sequenced to prevent rework. The data flow (`MatcherService`) is clarified first, followed by the general dependency injection pattern, and finally the `UpdatePlaylistUseCase` is completed, integrating with the new, stable components.
 
 - [ ] **Clarify Enrichment vs. Matching Data Flow**
     - Effort: M
     - What: Decouple the expensive process of *identity resolution* (matching new, unknown tracks) from the cheap process of *metadata enrichment* (refreshing data for known tracks).
     - Why: The current `MatcherService` blurs these two distinct concerns. A clear separation will make the system more efficient (avoids re-matching known tracks), easier to reason about, and simplifies the data flow for both new and existing tracks.
-    - Dependencies: Clean Architecture Foundation
+    - Dependencies: Clean Architecture Migration
     - Status: Not Started
     - Notes:
         - Refactor `MatcherService` to only handle *identity resolution* for unknown tracks.
         - Create a new, simple `EnricherService` or use case to refresh metadata for known tracks based on a `last_updated` timestamp.
         - This simplifies components like `MetadataFreshnessController` and makes the data flow more explicit and efficient.
 
-- [ ] **Consolidate Playlist Persistence Logic**
-    - Effort: S
-    - What: Give `SavePlaylistUseCase` and `UpdatePlaylistUseCase` single, non-overlapping responsibilities. `SavePlaylistUseCase` should only persist to the *internal* database, while `UpdatePlaylistUseCase` handles the *differential update* against external services.
-    - Why: The current `SavePlaylistUseCase` handles both creation and updates, which is confusing and not DRY. Clarifying these roles will make the system's command patterns cleaner and easier for new developers to understand.
-    - Dependencies: Clean Architecture Foundation
+- [ ] **Refactor Use Cases for True Dependency Inversion**
+    - Effort: M
+    - What: Refactor all Application Use Cases (e.g., `SavePlaylistUseCase`, `UpdatePlaylistUseCase`) to be pure orchestrators. They must receive repository and strategy *interfaces* (protocols) via dependency injection instead of creating concrete instances or accessing the database session directly.
+    - Why: This is the most critical step to fully realize the benefits of Clean Architecture. It will make our business logic 100% independent of the database, dramatically improving testability (no more mocking `get_session`), and making the system more adaptable to future changes.
+    - Dependencies: Clarify Enrichment vs. Matching Data Flow
     - Status: Not Started
     - Notes:
-        - Rename `SavePlaylistUseCase` to `PersistPlaylistUseCase` to better reflect its new, single responsibility.
-        - `PersistPlaylistUseCase` will only handle writing a `Playlist` domain object to the internal database.
-        - `UpdatePlaylistUseCase` will be the sole component responsible for calculating and executing differential updates against external services.
+        - Define repository and strategy protocols in the `domain` layer.
+        - Update use cases to accept these protocols in their `__init__` methods.
+        - Wire up concrete implementations (e.g., `SQLAlchemyTrackRepository`) at the outermost layer (CLI command or workflow node).
 
 - [ ] **Complete UpdatePlaylistUseCase Implementation**
     - Effort: L
     - What: Replace placeholder implementations and simplified logic with production-ready Spotify API operations and sophisticated reordering algorithms.
     - Why: Current implementation contains TODOs for critical features including sophisticated reordering logic, ISRC/metadata matching strategies, and actual Spotify API operations (currently creates new playlists instead of updating existing ones).
-    - Dependencies: Clean Architecture Foundation
+    - Dependencies: Refactor Use Cases for True Dependency Inversion
     - Status: Not Started
     - Notes:
         - **TODO(#123)**: Implement sophisticated reordering logic for playlist updates
@@ -189,28 +176,16 @@ This document is a high level overview of Project Narada's development backlog/r
         - Address "simplified positioning for now" and "move operations simplified for now" in differential algorithm
         - File: `src/application/use_cases/update_playlist.py:261,266,292,512,549`
 
-- [ ] **Repository Interface Type Safety**
-    - Effort: S
-    - What: Replace `Any` type usage in domain repository interfaces with proper domain entity types to eliminate type safety warnings.
-    - Why: Current domain layer uses `Any` types to avoid circular imports, violating type safety principles and reducing IDE support and error detection.
-    - Dependencies: None
-    - Status: Not Started  
-    - Notes:
-        - File: `src/domain/repositories/interfaces.py:11`
-        - Use forward references or restructure imports to avoid circular dependencies
-        - Ensure all repository protocols are properly typed with domain entities
-
-- [ ] **Workflow Context Architecture Cleanup**
+- [ ] **Technical Debt Cleanup**
     - Effort: M
-    - What: Replace the acknowledged "hack" in LazyRepositoryProvider with proper Clean Architecture dependency injection patterns.
-    - Why: Current workflow context uses a self-described "hack" for repository provisioning that creates technical debt and violates Clean Architecture dependency inversion principles.
+    - What: Address remaining technical debt, including consolidating playlist persistence logic, improving type safety, and cleaning up the workflow context architecture.
+    - Why: To maintain code quality and architectural integrity, ensuring the codebase remains clean, modern, and easy to work with before adding new features.
     - Dependencies: Refactor Use Cases for True Dependency Inversion
     - Status: Not Started
     - Notes:
-        - File: `src/application/workflows/context.py:166`
-        - Implement proper dependency injection container for workflow execution
-        - Align with Clean Architecture patterns established in use case refactoring
-        - Remove session management responsibility from workflow context
+        - Consolidate `SavePlaylistUseCase` and `UpdatePlaylistUseCase` responsibilities.
+        - Replace `Any` types in repository interfaces with specific domain entities.
+        - Remove the "hack" in `LazyRepositoryProvider` with proper dependency injection.
 
 #### Play History Analysis Epics
 - [x] **Informative and Easy-to-use CLI**

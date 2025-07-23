@@ -8,7 +8,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.config import get_logger
-from src.domain.repositories.interfaces import ConnectorRepository, LikeRepository, PlaylistRepository, PlaysRepository, RepositoryProvider, TrackRepository
+from src.domain.repositories.interfaces import (
+    CheckpointRepository,
+    ConnectorRepository,
+    LikeRepository,
+    PlaylistRepository,
+    PlaysRepository,
+    RepositoryProvider,
+    TrackRepository,
+)
 from src.infrastructure.connectors import CONNECTORS, discover_connectors
 from src.infrastructure.persistence.database.db_connection import get_session
 from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
@@ -19,7 +27,6 @@ from .protocols import (
     ConnectorRegistry,
     DatabaseSessionProvider,
     LoggerProvider,
-    RepositoryProvider,
     UseCaseProvider,
     WorkflowContext,
 )
@@ -176,49 +183,49 @@ class RepositoryProviderImpl:
         self._playlist_repos = None
 
     @property
-    def core(self):
+    def core(self) -> TrackRepository:
         """Core track repository."""
         if self._track_repos is None:
             self._track_repos = TrackRepositories(self._session)
         return self._track_repos.core
 
     @property
-    def plays(self):
+    def plays(self) -> PlaysRepository:
         """Track plays repository."""
         if self._track_repos is None:
             self._track_repos = TrackRepositories(self._session)
         return self._track_repos.plays
 
     @property
-    def likes(self):
+    def likes(self) -> LikeRepository:
         """Track likes repository."""
         if self._track_repos is None:
             self._track_repos = TrackRepositories(self._session)
         return self._track_repos.likes
 
     @property
-    def connector(self):
+    def connector(self) -> ConnectorRepository:
         """Connector repository."""
         if self._track_repos is None:
             self._track_repos = TrackRepositories(self._session)
         return self._track_repos.connector
 
     @property
-    def metrics(self):
+    def metrics(self) -> Any:
         """Track metrics repository."""
         if self._track_repos is None:
             self._track_repos = TrackRepositories(self._session)
         return self._track_repos.metrics
 
     @property
-    def checkpoints(self):
+    def checkpoints(self) -> CheckpointRepository:
         """Sync checkpoints repository."""
         if self._track_repos is None:
             self._track_repos = TrackRepositories(self._session)
         return self._track_repos.checkpoints
 
     @property
-    def playlists(self):
+    def playlists(self) -> PlaylistRepository:
         """Playlist repository."""
         if self._playlist_repos is None:
             self._playlist_repos = PlaylistRepositories(self._session)
