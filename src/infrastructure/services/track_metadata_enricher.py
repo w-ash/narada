@@ -8,7 +8,11 @@ from typing import Any
 
 from src.config import get_logger
 from src.domain.entities import TrackList
-from src.infrastructure.persistence.repositories.track import TrackRepositories
+from src.domain.repositories.interfaces import (
+    ConnectorRepositoryProtocol,
+    MetricsRepositoryProtocol,
+    TrackRepositoryProtocol,
+)
 
 from .connector_metadata_manager import ConnectorMetadataManager
 from .metadata_freshness_controller import MetadataFreshnessController
@@ -28,16 +32,20 @@ class TrackMetadataEnricher:
     It focuses solely on orchestration and metric extraction.
     """
 
-    def __init__(self, track_repos: TrackRepositories) -> None:
-        """Initialize with repository container.
+    def __init__(self, track_repo: TrackRepositoryProtocol, connector_repo: ConnectorRepositoryProtocol, metrics_repo: MetricsRepositoryProtocol) -> None:
+        """Initialize with individual repository interfaces.
 
         Args:
-            track_repos: Repository container for database operations.
+            track_repo: Core track repository for database operations.
+            connector_repo: Connector repository for identity and metadata operations.
+            metrics_repo: Metrics repository for storing calculated metrics.
         """
-        self.track_repos = track_repos
-        self.identity_resolver = TrackIdentityResolver(track_repos)
-        self.freshness_controller = MetadataFreshnessController(track_repos)
-        self.metadata_manager = ConnectorMetadataManager(track_repos)
+        self.track_repo = track_repo
+        self.connector_repo = connector_repo
+        self.metrics_repo = metrics_repo
+        self.identity_resolver = TrackIdentityResolver(track_repo, connector_repo)
+        self.freshness_controller = MetadataFreshnessController(connector_repo)
+        self.metadata_manager = ConnectorMetadataManager(connector_repo)
 
     async def enrich_tracks(
         self,
@@ -280,7 +288,7 @@ class TrackMetadataEnricher:
 
             try:
                 # Use the track repositories metrics store to persist
-                await self.track_repos.metrics.save_track_metrics(metric_batch)
+                await self.metrics_repo.save_track_metrics(metric_batch)
                 logger.info(
                     f"Successfully persisted {len(metric_batch)} metrics to database"
                 )

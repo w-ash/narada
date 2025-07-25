@@ -32,21 +32,33 @@ Dependencies only flow inward, creating a stable core surrounded by adaptable in
 
 #### Domain Layer (`src/domain/`)
 - **Purpose**: Pure business logic with zero external dependencies
-- **Contents**: Core entities, business rules, algorithms
+- **Contents**: Core entities, business rules, algorithms, repository interfaces
 - **Examples**: Track matching algorithms, confidence scoring, playlist transformations
+- **Responsibilities**: Enforces business rules and data integrity (e.g., playlists can't have duplicate tracks, tracks must have valid structure)
 - **Benefits**: Fast tests, pure functions, technology-agnostic
+- **Key Principle**: Never touches databases, APIs, or external systems directly
 
 #### Application Layer (`src/application/`)
-- **Purpose**: Use cases and business workflow orchestration
+- **Purpose**: Orchestration and transaction boundary management
 - **Contents**: Use case implementations, workflow definitions, business services
 - **Examples**: ImportTracksUseCase, WorkflowExecutor, PlaylistOrchestrator
+- **Responsibilities**: 
+  - **Orchestrates business processes**: Coordinates the steps involved in complex operations (fetching, comparing, filtering, saving)
+  - **Controls transaction boundaries**: Decides when transactions begin, commit, or rollback based on business logic
+  - **Uses repositories as tools**: Asks repositories to fetch, save, or update domain models without knowing implementation details
 - **Benefits**: Testable business logic, clear boundaries, reusable components
+- **Key Principle**: Uses repositories like contract-based tools, owns transaction control logic
 
 #### Infrastructure Layer (`src/infrastructure/`)
-- **Purpose**: External integrations and framework adapters
-- **Contents**: Database repositories, API connectors, CLI commands
-- **Examples**: SpotifyConnector, SQLAlchemyRepository, TyperCLI
+- **Purpose**: External integrations and technical implementation
+- **Contents**: Database repositories, API connectors, CLI commands, UnitOfWork implementations
+- **Examples**: SpotifyConnector, SQLAlchemyRepository, TyperCLI, DatabaseUnitOfWork
+- **Responsibilities**: 
+  - **Implements repository contracts**: Provides concrete implementations that handle database queries and external service calls
+  - **Handles technical transaction details**: Manages actual database connections, commits, rollbacks
+  - **External service integration**: Communicates with Spotify, Last.fm, MusicBrainz APIs
 - **Benefits**: Swappable implementations, isolated side effects
+- **Key Principle**: Entirely behind interfaces, decoupled from application layer
 
 ### Why Clean Architecture?
 
@@ -56,7 +68,93 @@ Dependencies only flow inward, creating a stable core surrounded by adaptable in
 4. **Development Speed**: New features built on stable foundations
 5. **Technology Independence**: Core logic works with any database or API
 
+### Application Layer Orchestration
+
+The application layer serves as the conductor of business operations, coordinating complex processes without performing low-level work itself. Here's how it operates:
+
+#### Orchestration Responsibilities
+- **Process Coordination**: Knows the steps involved in complex operations (sync tracks, update playlists, import data)
+- **Repository Coordination**: Uses repository interfaces as contract-based tools to fetch, save, and update domain models
+- **Business Flow Control**: Makes decisions about what operations to perform based on business rules
+- **Error Handling**: Decides how to handle failures and when to retry operations
+
+#### Transaction Boundary Management
+The application layer owns transaction control logic:
+
+```python
+class ImportTracksUseCase:
+    async def execute(self, command: ImportTracksCommand, uow: UnitOfWork):
+        async with uow:
+            track_repo = uow.get_track_repository()
+            connector_repo = uow.get_connector_repository()
+            
+            # Orchestrate the import process
+            existing_tracks = await track_repo.get_by_spotify_ids(command.spotify_ids)
+            new_tracks = self._filter_new_tracks(command.tracks, existing_tracks)
+            enriched_tracks = await self._enrich_metadata(new_tracks)
+            
+            # Application decides transaction outcome based on business rules
+            if self._validation_passes(enriched_tracks):
+                saved_tracks = await track_repo.save_batch(enriched_tracks)
+                await connector_repo.save_mappings(saved_tracks, command.connector)
+                await uow.commit()  # Business logic determines success
+                return ImportResult(success=True, tracks=saved_tracks)
+            else:
+                await uow.rollback()  # Business logic determines failure
+                return ImportResult(success=False, errors=self._get_validation_errors())
+```
+
+**Key Principles:**
+- **Application Decides**: When to begin, commit, or rollback transactions based on business logic
+- **Infrastructure Implements**: Technical details of how transactions work (database connections, session management)
+- **Domain Validates**: Business rules and data integrity without knowing about transactions
+- **Repositories as Tools**: Application tells repositories what to do, not how to do it
+
+#### Separation from Technical Concerns
+The application layer remains decoupled from:
+- Database implementation details (SQL, NoSQL, file system)
+- External API specifics (REST, GraphQL, authentication methods)
+- Session management (connection pooling, transaction isolation levels)
+- Framework dependencies (web frameworks, CLI libraries)
+
+This separation enables the application layer to focus purely on business logic and process orchestration.
+
 ## Key Architectural Patterns
+
+### Unit of Work Pattern
+Centralizes transaction boundary management in the application layer.
+
+```python
+# Domain interface
+class UnitOfWork(Protocol):
+    async def __aenter__(self) -> Self: ...
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None: ...
+    async def commit(self) -> None: ...
+    async def rollback(self) -> None: ...
+    def get_track_repository(self) -> TrackRepository: ...
+    def get_plays_repository(self) -> PlaysRepository: ...
+
+# Application layer usage
+class SyncTracksUseCase:
+    async def execute(self, command: SyncTracksCommand, uow: UnitOfWork):
+        async with uow:
+            track_repo = uow.get_track_repository()
+            plays_repo = uow.get_plays_repository()
+            
+            # Orchestrate business process
+            current_tracks = await track_repo.get_canonical_tracks()
+            spotify_tracks = await self._fetch_spotify_tracks(command.playlist_id)
+            filtered_tracks = self._filter_duplicates(current_tracks, spotify_tracks)
+            
+            # Application decides transaction outcome
+            if self._validation_passes(filtered_tracks):
+                await track_repo.save_batch(filtered_tracks)
+                await uow.commit()  # Application controls when to commit
+            else:
+                await uow.rollback()  # Application decides to rollback
+```
+
+**Benefits**: Application controls transaction lifecycle, clean separation of orchestration vs implementation, easy testing with mock UnitOfWork
 
 ### Repository Pattern
 Centralizes data access with consistent async interfaces.
@@ -420,7 +518,43 @@ This database-first approach is fundamental to Narada's ability to provide unifi
 
 ## Database Session Management Architecture
 
-Narada implements a sophisticated session management strategy to handle SQLite's concurrency limitations while maintaining Clean Architecture principles and preventing database locks.
+Narada implements a sophisticated session management strategy to handle SQLite's concurrency limitations while maintaining Clean Architecture principles and proper transaction boundary control through the UnitOfWork pattern.
+
+### Transaction Management Philosophy
+
+**Application Layer Controls Transaction Boundaries**: Use cases decide when transactions begin, commit, or rollback based on business logic, not just technical success/failure.
+
+**Infrastructure Layer Handles Technical Implementation**: Database connections, session lifecycle, and transaction mechanics are managed by infrastructure components.
+
+**Clean Separation**: Business logic remains decoupled from session management complexity.
+
+### UnitOfWork Pattern Implementation
+
+```python
+# Domain interface
+class UnitOfWork(Protocol):
+    async def __aenter__(self) -> Self: ...
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None: ...
+    async def commit(self) -> None: ...
+    async def rollback(self) -> None: ...
+    def get_track_repository(self) -> TrackRepository: ...
+
+# Infrastructure implementation
+class DatabaseUnitOfWork:
+    def __init__(self, session: AsyncSession):
+        self._session = session
+        self._committed = False
+    
+    async def commit(self):
+        await self._session.commit()
+        self._committed = True
+    
+    async def rollback(self):
+        await self._session.rollback()
+    
+    def get_track_repository(self) -> TrackRepository:
+        return TrackRepository(self._session)
+```
 
 ### Session Management Patterns
 
@@ -535,17 +669,57 @@ Narada follows modern clean architecture principles with strict adherence to dep
 ### Layer Compliance Verification
 
 #### Application Layer Independence
-The application layer maintains strict independence from infrastructure concerns:
+The application layer maintains strict independence from infrastructure concerns while controlling transaction boundaries:
 
 ```python
-# ✅ Correct: Application uses only domain entities and injected interfaces
-class LikeService:
-    def __init__(self, repositories: Any, connector_provider: ConnectorProvider):
-        self.repositories = repositories  # Interface, not concrete implementation
-        self.connector_provider = connector_provider
+# ✅ Correct: Application orchestrates with UnitOfWork pattern
+class SyncLikesUseCase:
+    async def execute(self, command: SyncLikesCommand, uow: UnitOfWork):
+        async with uow:
+            track_repo = uow.get_track_repository()
+            likes_repo = uow.get_likes_repository()
+            
+            # Orchestrate business process
+            spotify_likes = await self._fetch_spotify_likes()
+            lastfm_likes = await self._fetch_lastfm_likes()
+            matched_tracks = await self._match_tracks(spotify_likes, lastfm_likes)
+            
+            # Application decides transaction outcome
+            if self._sync_validation_passes(matched_tracks):
+                await likes_repo.sync_likes(matched_tracks)
+                await uow.commit()  # Business logic controls commit
+            else:
+                await uow.rollback()  # Business logic controls rollback
 
 # ❌ Avoided: Direct infrastructure imports in application layer
 # from src.infrastructure.connectors.spotify import SpotifyConnector
+# from src.infrastructure.persistence.database.db_connection import get_session
+```
+
+#### Transaction Boundary Control
+The application layer owns transaction decisions while infrastructure handles implementation:
+
+```python
+# ✅ Application controls transaction lifecycle
+async def execute_playlist_update(command: UpdatePlaylistCommand, uow: UnitOfWork):
+    async with uow:
+        playlist_repo = uow.get_playlist_repository()
+        
+        # Business orchestration
+        current_playlist = await playlist_repo.get_by_id(command.playlist_id)
+        updated_tracks = self._apply_transformations(current_playlist.tracks, command.operations)
+        
+        # Business rule validation
+        if self._validate_playlist_constraints(updated_tracks):
+            await playlist_repo.update_tracks(command.playlist_id, updated_tracks)
+            await uow.commit()  # Application decides success
+        else:
+            await uow.rollback()  # Application decides failure
+
+# ❌ Avoided: Infrastructure controlling transactions
+# async with get_session() as session:  # Infrastructure decision
+#     repo = PlaylistRepository(session)
+#     # Session auto-commits/rollbacks based on exceptions, not business logic
 ```
 
 #### Clean Dependency Flow

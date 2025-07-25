@@ -20,7 +20,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class DatabaseConfig(BaseModel):
     """Database connection and pooling configuration."""
     
-    url: str = "sqlite+aiosqlite:///narada.db"
+    url: str = "sqlite+aiosqlite:///data/db/narada.db"
     echo: bool = False
     pool_size: int = 5
     max_overflow: int = 10

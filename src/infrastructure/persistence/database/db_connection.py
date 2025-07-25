@@ -51,7 +51,7 @@ def create_db_engine(connection_string: str | None = None) -> AsyncEngine:
     # Use connection string from args or environment
     db_url = connection_string or os.environ.get(
         "DATABASE_URL",
-        "sqlite+aiosqlite:///narada.db",
+        "sqlite+aiosqlite:///data/db/narada.db",
     )
 
     # SQLite-specific connect args

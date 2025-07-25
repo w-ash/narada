@@ -1,27 +1,43 @@
-"""Tests for consolidated LikeService that merges like_operations and like_sync functionality."""
+"""Tests for like service use cases that follow Clean Architecture patterns."""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.application.use_cases.sync_likes import LikeService
+from src.application.use_cases.sync_likes import (
+    ExportLastFmLikesCommand,
+    ExportLastFmLikesUseCase,
+    ImportSpotifyLikesCommand,
+    ImportSpotifyLikesUseCase,
+)
 from src.domain.entities import Artist, Track
 from src.domain.entities.operations import OperationResult
 
 
-class TestLikeServiceConsolidated:
-    """Test the consolidated LikeService that eliminates functional overlap."""
+class TestLikeUseCases:
+    """Test the like use cases that follow Clean Architecture patterns."""
 
     @pytest.fixture
-    def mock_repositories(self):
-        """Create mock repositories for testing."""
-        repos = MagicMock()
-        repos.session = MagicMock()
-        repos.likes = AsyncMock()
-        repos.core = AsyncMock()
-        repos.checkpoints = AsyncMock()
-        repos.connector = AsyncMock()
-        return repos
+    def mock_unit_of_work(self):
+        """Create mock UnitOfWork for testing."""
+        uow = AsyncMock()
+        
+        # Mock repositories (non-async getters, async methods)
+        mock_like_repo = AsyncMock()
+        mock_track_repo = AsyncMock() 
+        mock_checkpoint_repo = AsyncMock()
+        mock_connector_repo = AsyncMock()
+        
+        uow.get_like_repository = MagicMock(return_value=mock_like_repo)
+        uow.get_track_repository = MagicMock(return_value=mock_track_repo)
+        uow.get_checkpoint_repository = MagicMock(return_value=mock_checkpoint_repo)
+        uow.get_connector_repository = MagicMock(return_value=mock_connector_repo)
+        
+        # Mock service connector provider (non-async)
+        mock_provider = MagicMock()
+        uow.get_service_connector_provider = MagicMock(return_value=mock_provider)
+        
+        return uow
 
     @pytest.fixture
     def mock_spotify_connector(self):
@@ -38,127 +54,107 @@ class TestLikeServiceConsolidated:
         return connector
 
     @pytest.fixture
-    def mock_connector_provider(self, mock_spotify_connector, mock_lastfm_connector):
-        """Create mock connector provider."""
-        provider = MagicMock()
-        provider.get_connector.side_effect = lambda name: {
-            "spotify": mock_spotify_connector,
-            "lastfm": mock_lastfm_connector
-        }.get(name)
-        return provider
+    def import_use_case(self):
+        """Create ImportSpotifyLikesUseCase instance for testing."""
+        return ImportSpotifyLikesUseCase()
 
     @pytest.fixture
-    def like_service(self, mock_repositories, mock_connector_provider):
-        """Create LikeService instance for testing."""
-        return LikeService(repositories=mock_repositories, connector_provider=mock_connector_provider)
+    def export_use_case(self):
+        """Create ExportLastFmLikesUseCase instance for testing."""
+        return ExportLastFmLikesUseCase()
 
-    def test_import_spotify_likes_consolidates_session_handling(self, like_service, mock_spotify_connector):
-        """Test that Spotify likes import eliminates session wrapper patterns."""
-        # This test verifies that we no longer need separate session wrapper functions
-        # The service should handle everything internally with the injected repositories
-        
+    async def test_import_spotify_use_case_follows_clean_architecture(
+        self, import_use_case, mock_unit_of_work, mock_spotify_connector
+    ):
+        """Test that ImportSpotifyLikesUseCase follows Clean Architecture patterns."""
         # Arrange
-        
-        # Configure mock to return some connector tracks
+        mock_unit_of_work.get_service_connector_provider().get_connector.return_value = mock_spotify_connector
         mock_spotify_connector.get_liked_tracks.return_value = ([], None)
         
-        # Act & Assert - should not require external session management
-        # The consolidated service should handle this internally
-        assert hasattr(like_service, 'import_spotify_likes')
-        assert hasattr(like_service, 'export_likes_to_lastfm')
-
-    def test_export_likes_to_lastfm_consolidates_batch_processing(self, like_service, mock_lastfm_connector):
-        """Test that Last.fm export consolidates batch processing logic."""
-        # This test verifies that duplicate batch processing patterns are eliminated
+        # Mock checkpoint operations
+        from src.domain.entities import SyncCheckpoint
+        mock_checkpoint = SyncCheckpoint(user_id="test", service="spotify", entity_type="likes")
+        mock_unit_of_work.get_checkpoint_repository().get_sync_checkpoint.return_value = mock_checkpoint
+        mock_unit_of_work.get_checkpoint_repository().save_sync_checkpoint.return_value = mock_checkpoint
         
-        # Arrange
-        tracks = [
-            Track(id=1, title="Test Track 1", artists=[Artist(name="Artist 1")]),
-            Track(id=2, title="Test Track 2", artists=[Artist(name="Artist 2")]),
-        ]
-        
-        # Configure mocks
-        like_service.repositories.likes.get_all_liked_tracks.return_value = []
-        like_service.repositories.core.get_by_id.side_effect = tracks
-        mock_lastfm_connector.love_track.return_value = True
-        
-        # Act & Assert - should use consolidated batch processing
-        assert hasattr(like_service, '_process_batch_with_unified_processor')
-
-    def test_checkpoint_management_consolidation(self, like_service):
-        """Test that checkpoint management is consolidated into the service."""
-        # This test verifies that CheckpointManager functionality is integrated
-        
-        # Act & Assert
-        assert hasattr(like_service, 'get_or_create_checkpoint')
-        assert hasattr(like_service, 'update_checkpoint')
-
-    def test_result_creation_uses_result_factory(self, like_service):
-        """Test that consolidated service uses ResultFactory for consistent results."""
-        # Arrange
-        import_data = {
-            'imported_count': 10,
-            'skipped_count': 2,
-            'error_count': 1,
-        }
+        command = ImportSpotifyLikesCommand(user_id="test_user", limit=50, max_imports=100)
         
         # Act
-        result = like_service._create_import_result("Spotify Likes Import", import_data)
+        result = await import_use_case.execute(command, mock_unit_of_work)
         
         # Assert
         assert isinstance(result, OperationResult)
         assert result.operation_name == "Spotify Likes Import"
-        assert result.imported_count == 10
-        assert result.skipped_count == 2
-        assert result.error_count == 1
+        mock_unit_of_work.__aenter__.assert_called_once()
 
-    def test_consolidated_service_eliminates_duplicate_functions(self, like_service):
-        """Test that the consolidated service eliminates duplicate wrapper functions."""
-        # Verify that session wrapper functions are no longer needed
+    async def test_export_lastfm_use_case_follows_clean_architecture(
+        self, export_use_case, mock_unit_of_work, mock_lastfm_connector
+    ):
+        """Test that ExportLastFmLikesUseCase follows Clean Architecture patterns."""
+        # Arrange
+        mock_unit_of_work.get_service_connector_provider().get_connector.return_value = mock_lastfm_connector
+        mock_lastfm_connector.love_track.return_value = True
         
-        # These methods should NOT exist in the consolidated service
-        assert not hasattr(like_service, 'run_with_session')
-        assert not hasattr(like_service, 'run_spotify_likes_import')  
-        assert not hasattr(like_service, 'run_lastfm_likes_export')
+        # Mock repository responses - avoid division by zero
+        mock_unit_of_work.get_like_repository().get_all_liked_tracks.return_value = [1, 2, 3]  # 3 tracks
+        mock_unit_of_work.get_like_repository().get_unsynced_likes.return_value = []
         
-        # These should be the primary interface methods
-        assert hasattr(like_service, 'import_spotify_likes')
-        assert hasattr(like_service, 'export_likes_to_lastfm')
-
-    def test_batch_processing_strategy_consolidation(self, like_service):
-        """Test that batch processing uses unified strategy pattern."""
-        # The service should have a single batch processing method that works for both
-        # import and export scenarios, eliminating the duplication
+        # Mock checkpoint operations
+        from src.domain.entities import SyncCheckpoint
+        mock_checkpoint = SyncCheckpoint(user_id="test", service="lastfm", entity_type="likes")
+        mock_unit_of_work.get_checkpoint_repository().get_sync_checkpoint.return_value = mock_checkpoint
+        mock_unit_of_work.get_checkpoint_repository().save_sync_checkpoint.return_value = mock_checkpoint
         
-        assert hasattr(like_service, '_process_batch_with_unified_processor')
+        command = ExportLastFmLikesCommand(user_id="test_user", batch_size=20, max_exports=50)
         
-        # Should not have separate batch processing methods
-        assert not hasattr(like_service, 'process_batch_with_matcher')
-
-    def test_progress_handling_standardization(self, like_service):
-        """Test that progress handling is standardized across operations."""
-        # Both import and export should use the same progress handling pattern
+        # Act
+        result = await export_use_case.execute(command, mock_unit_of_work)
         
-        # The service should use the unified progress system via decorators
-        # Progress is handled by the @with_db_progress decorators in the methods
-        assert hasattr(like_service, 'import_spotify_likes')
-        assert hasattr(like_service, 'export_likes_to_lastfm')
+        # Assert
+        assert isinstance(result, OperationResult)
+        assert result.operation_name == "Last.fm Likes Export"
+        mock_unit_of_work.__aenter__.assert_called_once()
 
-    def test_error_handling_consolidation(self, like_service):
-        """Test that error handling follows consistent patterns."""
-        # All operations should use the same error handling approach
+    def test_use_cases_have_no_constructor_dependencies(self, import_use_case, export_use_case):
+        """Test that use cases follow Clean Architecture with no constructor dependencies."""
+        # Import use case should have no constructor dependencies
+        assert hasattr(import_use_case, 'execute')
+        assert not hasattr(import_use_case, '_dependencies')
         
-        # Should use ResultFactory for consistent error results
-        error_result = like_service._create_error_result("Test error", "batch_123")
-        assert error_result.error_count == 1
-        assert "Test error" in error_result.play_metrics.get("errors", [])
+        # Export use case should have no constructor dependencies  
+        assert hasattr(export_use_case, 'execute')
+        assert not hasattr(export_use_case, '_dependencies')
+
+    def test_use_cases_use_unit_of_work_parameter_injection(self, import_use_case, export_use_case):
+        """Test that use cases use UnitOfWork parameter injection pattern."""
+        import inspect
+        
+        # Import use case should take UoW as parameter
+        import_sig = inspect.signature(import_use_case.execute)
+        assert 'uow' in import_sig.parameters
+        
+        # Export use case should take UoW as parameter
+        export_sig = inspect.signature(export_use_case.execute)
+        assert 'uow' in export_sig.parameters
+
+    def test_commands_are_immutable(self):
+        """Test that command objects are immutable."""
+        import_cmd = ImportSpotifyLikesCommand(user_id="test", limit=50)
+        export_cmd = ExportLastFmLikesCommand(user_id="test", batch_size=20)
+        
+        # Commands should be frozen (immutable)
+        with pytest.raises(AttributeError):
+            import_cmd.user_id = "modified"  # Should fail - frozen
+            
+        with pytest.raises(AttributeError):
+            export_cmd.user_id = "modified"  # Should fail - frozen
 
 
-class TestOperationResult:
-    """Test the specialized result type for like import operations."""
+class TestOperationResultForLikeOperations:
+    """Test OperationResult for like import/export operations."""
 
-    def test_like_import_result_extends_operation_result(self):
-        """Test that OperationResult properly extends OperationResult."""
+    def test_like_import_result_metrics(self):
+        """Test that OperationResult tracks import metrics correctly."""
         result = OperationResult(
             operation_name="Test Import",
             imported_count=50,
@@ -172,27 +168,10 @@ class TestOperationResult:
         assert result.imported_count == 50
         assert result.total_processed == 57  # 50 + 5 + 2
         assert result.success_rate > 0
+        assert result.already_liked == 100
 
-    def test_efficiency_metrics_calculation(self):
-        """Test efficiency metrics for like operations."""
-        result = OperationResult(
-            operation_name="Efficiency Test",
-            imported_count=80,
-            skipped_count=15,
-            error_count=5,
-            already_liked=200,
-            candidates=100,
-        )
-        
-        # Should calculate efficiency rate properly
-        assert result.efficiency_rate == 200.0  # (200 already_liked / 100 total) * 100
-
-
-class TestOperationResult:
-    """Test the specialized result type for like export operations."""
-
-    def test_like_export_result_extends_operation_result(self):
-        """Test that OperationResult properly extends OperationResult."""
+    def test_like_export_result_metrics(self):
+        """Test that OperationResult tracks export metrics correctly."""
         result = OperationResult(
             operation_name="Test Export",
             exported_count=25,
@@ -206,18 +185,4 @@ class TestOperationResult:
         assert result.exported_count == 25
         assert result.total_processed == 29  # 25 + 3 + 1
         assert result.success_rate > 0
-
-    def test_export_specific_metrics(self):
-        """Test export-specific metrics and calculations."""
-        result = OperationResult(
-            operation_name="Export Metrics Test",
-            exported_count=45,
-            skipped_count=10,
-            error_count=5,
-            already_liked=100,
-            candidates=60,
-        )
-        
-        # Should track export-specific metrics
-        assert result.exported_count == 45
-        assert result.already_liked == 100
+        assert result.already_liked == 50

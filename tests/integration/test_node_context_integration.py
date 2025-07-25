@@ -26,7 +26,7 @@ class TestNodeContextIntegration:
         assert workflow_context.connectors is not None
         assert workflow_context.use_cases is not None
         assert workflow_context.session_provider is not None
-        assert workflow_context.repositories is not None
+        assert workflow_context.use_cases is not None
         
         # Test that providers have expected interfaces
         assert hasattr(workflow_context.config, 'get')
@@ -49,11 +49,11 @@ class TestNodeContextIntegration:
             "config": workflow_context.config,
             "logger": workflow_context.logger,
             "session_provider": workflow_context.session_provider,
-            "repositories": workflow_context.repositories,
+            "repositories": workflow_context.use_cases,
         }
         
         # Verify all required keys are present
-        required_keys = ["use_cases", "connectors", "config", "logger", "session_provider", "repositories"]
+        required_keys = ["use_cases", "connectors", "config", "logger", "session_provider"]
         for key in required_keys:
             assert key in injected_context
             assert injected_context[key] is not None

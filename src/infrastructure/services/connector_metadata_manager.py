@@ -9,7 +9,7 @@ from typing import Any, cast
 
 from src.config import get_logger
 from src.domain.matching.types import MatchResultsById
-from src.infrastructure.persistence.repositories.track import TrackRepositories
+from src.domain.repositories.interfaces import ConnectorRepositoryProtocol
 
 logger = get_logger(__name__)
 
@@ -31,13 +31,13 @@ class ConnectorMetadataManager:
     - Confidence scores or matching evidence
     """
 
-    def __init__(self, track_repos: TrackRepositories) -> None:
-        """Initialize with repository container.
+    def __init__(self, connector_repo: ConnectorRepositoryProtocol) -> None:
+        """Initialize with connector repository interface.
 
         Args:
-            track_repos: Repository container for database operations.
+            connector_repo: Connector repository for metadata operations.
         """
-        self.track_repos = track_repos
+        self.connector_repo = connector_repo
 
     async def fetch_fresh_metadata(
         self,
@@ -138,7 +138,7 @@ class ConnectorMetadataManager:
             )
 
             # Get metadata from database
-            metadata = await self.track_repos.connector.get_connector_metadata(
+            metadata = await self.connector_repo.get_connector_metadata(
                 track_ids, connector
             )
 
@@ -241,7 +241,7 @@ class ConnectorMetadataManager:
             # Get existing connector tracks to update their metadata
             track_ids = list(fresh_metadata.keys())
             logger.debug(f"Getting connector mappings for {len(track_ids)} tracks")
-            existing_mappings = await self.track_repos.connector.get_connector_mappings(
+            existing_mappings = await self.connector_repo.get_connector_mappings(
                 track_ids, connector
             )
 
@@ -256,7 +256,7 @@ class ConnectorMetadataManager:
 
             # SQLALCHEMY 2.0 COMPLIANT: Use nested transactions for batch operations
             # This allows granular error handling without interfering with parent transaction
-            session = self.track_repos.connector.session
+            session = self.connector_repo.session
             logger.debug("Starting batch processing with nested transactions")
 
             # Step 1: Batch process all metrics using nested transaction
@@ -319,7 +319,7 @@ class ConnectorMetadataManager:
                     nested_transaction = await session.begin_nested()
                     try:
                         for update in mapping_updates:
-                            await self.track_repos.connector.save_mapping_confidence(
+                            await self.connector_repo.save_mapping_confidence(
                                 track_id=update["track_id"],
                                 connector=connector,
                                 connector_id=update["connector_id"],
@@ -416,7 +416,7 @@ class ConnectorMetadataManager:
 
             # Get connector track information for direct API calls
             track_ids = list(tracks_to_refresh.keys())
-            existing_mappings = await self.track_repos.connector.get_connector_mappings(
+            existing_mappings = await self.connector_repo.get_connector_mappings(
                 track_ids, connector
             )
 

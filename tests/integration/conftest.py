@@ -22,36 +22,28 @@ def integration_workflow_context(db_session):
     """
     from src.application.use_cases.save_playlist import SavePlaylistUseCase
     from src.application.use_cases.update_playlist import UpdatePlaylistUseCase
-    from src.infrastructure.persistence.repositories.playlist import (
-        PlaylistRepositories,
-    )
-    from src.infrastructure.persistence.repositories.track import TrackRepositories
     
-    # Create real repositories with test session
-    track_repos = TrackRepositories(db_session)
-    playlist_repos = PlaylistRepositories(db_session)
-    
-    # Create mock use case provider that returns real use cases with test session
+    # Create mock use case provider that returns real use cases with UoW pattern
+    # Use cases now have no constructor dependencies - they get UoW in execute()
     mock_use_cases = MagicMock()
-    mock_use_cases.get_save_playlist_use_case = AsyncMock(return_value=SavePlaylistUseCase(
-        track_repo=track_repos.core,
-        playlist_repo=playlist_repos.core
-    ))
-    mock_use_cases.get_update_playlist_use_case = AsyncMock(return_value=UpdatePlaylistUseCase(
-        playlist_repo=playlist_repos.core
-    ))
+    mock_use_cases.get_save_playlist_use_case = AsyncMock(return_value=SavePlaylistUseCase())
+    mock_use_cases.get_update_playlist_use_case = AsyncMock(return_value=UpdatePlaylistUseCase())
     
-    # Mock other components for speed
+    # Use real connector registry for proper integration testing
+    # Only external APIs should be mocked in individual tests
+    from src.application.workflows.context import create_workflow_context
+    real_context = create_workflow_context(db_session)
+    
+    # Mock only configuration and non-critical components for speed
     mock_config = MagicMock()
     mock_logger = MagicMock() 
-    mock_connectors = MagicMock()
     mock_session_provider = MagicMock()
     
     return {
         "repositories": track_repos,  # Real repositories for integration
         "config": mock_config,
         "logger": mock_logger,
-        "connectors": mock_connectors,
+        "connectors": real_context.connectors,  # Real connectors, mock external APIs in tests
         "session_provider": mock_session_provider,
         "use_cases": mock_use_cases,
     }

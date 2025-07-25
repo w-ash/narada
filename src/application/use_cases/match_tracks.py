@@ -2,42 +2,40 @@
 
 This use case encapsulates the business process of matching tracks across
 different music services while maintaining clean architecture boundaries.
+
+REFACTORED: Now uses TrackIdentityUseCase for ruthlessly DRY architecture.
 """
 
 from typing import Any
 
 from src.domain.entities import TrackList
 from src.domain.matching.types import MatchResultsById
+from src.domain.repositories import UnitOfWorkProtocol
+
+from .resolve_track_identity import (
+    ResolveTrackIdentityCommand,
+    ResolveTrackIdentityUseCase,
+)
 
 
 class MatchTracksUseCase:
     """Orchestrates track matching business process with validation.
 
-    Validates business rules, delegates to infrastructure services, and
-    handles errors at the application boundary.
-
-    Uses direct dependency injection for clean architecture compliance.
+    This use case delegates to ResolveTrackIdentityUseCase for all track identity resolution,
+    following Clean Architecture with ruthlessly DRY principles and UnitOfWork pattern.
+    
+    Migrated to UnitOfWork pattern for pure Clean Architecture compliance:
+    - No constructor dependencies (pure domain layer)
+    - Explicit transaction control through UnitOfWork parameter
+    - Simplified testing with single UnitOfWork mock
     """
-
-    def __init__(
-        self,
-        track_repos: Any,  # TrackRepositories - avoiding circular import
-        matcher_service: Any,  # MatcherService - avoiding circular import 
-    ) -> None:
-        """Initialize with injected dependencies.
-
-        Args:
-            track_repos: TrackRepositories instance for data access
-            matcher_service: MatcherService instance for track resolution
-        """
-        self.track_repos = track_repos
-        self.matcher_service = matcher_service
 
     async def execute(
         self,
         track_list: TrackList,
         connector: str,
         connector_instance: Any,
+        uow: UnitOfWorkProtocol,
         max_age_hours: float | None = None,
         **additional_options: Any,
     ) -> MatchResultsById:
@@ -47,6 +45,7 @@ class MatchTracksUseCase:
             track_list: Tracks to match against external service.
             connector: Target service name ("lastfm", "spotify", "musicbrainz").
             connector_instance: Service connector implementation.
+            uow: UnitOfWork for transaction management and repository access.
             max_age_hours: Maximum age of cached data in hours. If None, uses cached data regardless of age.
             **additional_options: Options forwarded to infrastructure.
 
@@ -70,15 +69,25 @@ class MatchTracksUseCase:
         if not connector_instance:
             raise ValueError("Connector instance cannot be None")
 
-        # Use existing matcher service directly - this is the actual implementation
-        # that has been working in the system
-        return await self.matcher_service.match_tracks(
-            track_list=track_list,
+        # Delegate to ResolveTrackIdentityUseCase (Clean Architecture + DRY)
+        # Share the same UnitOfWork transaction for consistency
+        identity_command = ResolveTrackIdentityCommand(
+            tracklist=track_list,
             connector=connector,
             connector_instance=connector_instance,
-            max_age_hours=max_age_hours,
-            **additional_options,
+            additional_options=additional_options
         )
+        
+        identity_use_case = ResolveTrackIdentityUseCase()
+        result = await identity_use_case.execute(identity_command, uow)
+        
+        if result.errors:
+            # Log errors but don't raise (backward compatibility)
+            from src.config import get_logger
+            logger = get_logger(__name__)
+            logger.warning(f"Track matching had errors: {result.errors}")
+        
+        return result.identity_mappings
 
 
 # Convenience function that matches the original API for backward compatibility
@@ -86,33 +95,37 @@ async def match_tracks(
     track_list: TrackList,
     connector: str,
     connector_instance: Any,
-    track_repos,  # Accept any repository type for backward compatibility
     max_age_hours: float | None = None,
     **additional_options: Any,
 ) -> MatchResultsById:
     """Match tracks to external service (convenience function).
 
+    REFACTORED: Now uses UnitOfWork pattern for Clean Architecture compliance.
+
     Args:
         track_list: Tracks to match.
         connector: Target service name.
         connector_instance: Service connector implementation.
-        track_repos: TrackRepositories instance.
         max_age_hours: Maximum age of cached data in hours. If None, uses cached data regardless of age.
-        **additional_options: Options forwarded to matcher service.
+        **additional_options: Options forwarded to infrastructure.
 
     Returns:
         Track IDs mapped to MatchResult objects.
     """
-    from src.infrastructure.services.matcher_service import MatcherService
-
-    # Use existing infrastructure directly - no provider wrapper needed
-    matcher_service = MatcherService(track_repos)
-
-    use_case = MatchTracksUseCase(track_repos, matcher_service)
-    return await use_case.execute(
-        track_list=track_list,
-        connector=connector,
-        connector_instance=connector_instance,
-        max_age_hours=max_age_hours,
-        **additional_options,
-    )
+    from src.infrastructure.persistence.database.db_connection import get_session
+    from src.infrastructure.persistence.repositories.factories import get_unit_of_work
+    
+    async with get_session() as session:
+        uow = get_unit_of_work(session)
+        
+        # Simple instantiation - no dependencies
+        use_case = MatchTracksUseCase()
+        
+        return await use_case.execute(
+            track_list=track_list,
+            connector=connector,
+            connector_instance=connector_instance,
+            uow=uow,
+            max_age_hours=max_age_hours,
+            **additional_options,
+        )

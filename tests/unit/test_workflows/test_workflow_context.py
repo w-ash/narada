@@ -15,7 +15,7 @@ class TestWorkflowContext:
         mock_config = MagicMock()
         mock_logger = MagicMock()
         mock_connectors = MagicMock()
-        mock_repositories = MagicMock()
+        # repositories removed in Clean Architecture migration
         mock_session_provider = MagicMock()
         mock_use_cases = MagicMock()
         
@@ -24,7 +24,7 @@ class TestWorkflowContext:
             config=mock_config,
             logger=mock_logger,
             connectors=mock_connectors,
-            repositories=mock_repositories,
+            # repositories parameter removed
             session_provider=mock_session_provider,
             use_cases=mock_use_cases
         )
@@ -33,7 +33,7 @@ class TestWorkflowContext:
         assert context.config is mock_config
         assert context.logger is mock_logger
         assert context.connectors is mock_connectors
-        assert context.repositories is mock_repositories
+        # repositories attribute removed in Clean Architecture migration
         assert context.session_provider is mock_session_provider
 
     async def test_workflow_context_with_real_dependencies(self):
@@ -47,7 +47,7 @@ class TestWorkflowContext:
         assert context.config is not None
         assert context.logger is not None
         assert context.connectors is not None
-        assert context.repositories is not None
+        # repositories attribute removed in Clean Architecture migration
         assert context.session_provider is not None
         
         # Test connector registry functionality

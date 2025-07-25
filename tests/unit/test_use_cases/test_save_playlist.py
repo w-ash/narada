@@ -5,7 +5,7 @@ track enrichment, and persistence operations using mocked dependencies.
 """
 
 from datetime import datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -20,6 +20,7 @@ from src.application.use_cases.save_playlist import (
 )
 from src.domain.entities.playlist import Playlist
 from src.domain.entities.track import Artist, Track, TrackList
+from src.domain.repositories import UnitOfWorkProtocol
 
 
 class TestSavePlaylistCommand:
@@ -151,23 +152,29 @@ class TestSavePlaylistUseCase:
         return strategy
 
     @pytest.fixture
-    def mock_track_repo(self):
-        """Mock track repository."""
-        return AsyncMock()
+    def mock_unit_of_work(self):
+        """Mock UnitOfWork with track and playlist repositories."""
+        mock_uow = Mock(spec=UnitOfWorkProtocol)
+        
+        # Mock repositories
+        mock_track_repo = AsyncMock()
+        mock_playlist_repo = AsyncMock()
+        
+        mock_uow.get_track_repository.return_value = mock_track_repo
+        mock_uow.get_playlist_repository.return_value = mock_playlist_repo
+        
+        # Mock async context manager
+        mock_uow.__aenter__ = AsyncMock(return_value=mock_uow)
+        mock_uow.__aexit__ = AsyncMock(return_value=None)
+        mock_uow.commit = AsyncMock()
+        mock_uow.rollback = AsyncMock()
+        
+        return mock_uow
 
     @pytest.fixture
-    def mock_playlist_repo(self):
-        """Mock playlist repository."""
-        return AsyncMock()
-
-    @pytest.fixture
-    def use_case(self, mock_track_repo, mock_playlist_repo, mock_enrichment_strategy):
-        """SavePlaylistUseCase with mocked dependencies."""
-        return SavePlaylistUseCase(
-            track_repo=mock_track_repo,
-            playlist_repo=mock_playlist_repo,
-            enrichment_strategy=mock_enrichment_strategy
-        )
+    def use_case(self, mock_enrichment_strategy):
+        """SavePlaylistUseCase with UnitOfWork pattern (no constructor dependencies)."""
+        return SavePlaylistUseCase(enrichment_strategy=mock_enrichment_strategy)
 
     @pytest.fixture
     def enriched_track(self):
@@ -198,7 +205,7 @@ class TestSavePlaylistUseCase:
         )
 
     @pytest.mark.asyncio
-    async def test_execute_validation_failure(self, use_case):
+    async def test_execute_validation_failure(self, use_case, mock_unit_of_work):
         """Test that execute raises ValueError for invalid command."""
         # Create invalid command with empty tracklist
         invalid_command = SavePlaylistCommand(
@@ -211,14 +218,17 @@ class TestSavePlaylistUseCase:
         )
         
         with pytest.raises(ValueError, match="Invalid command: failed business rule validation"):
-            await use_case.execute(invalid_command)
+            await use_case.execute(invalid_command, mock_unit_of_work)
 
     @pytest.mark.asyncio
     async def test_execute_enrichment_disabled(
-        self, use_case, track, mock_enrichment_strategy, mock_track_repo, mock_playlist_repo
+        self, use_case, track, mock_enrichment_strategy, mock_unit_of_work
     ):
         """Test execution with enrichment disabled."""
-        # Configure repository mocks
+        # Configure repository mocks through UnitOfWork
+        mock_track_repo = mock_unit_of_work.get_track_repository.return_value
+        mock_playlist_repo = mock_unit_of_work.get_playlist_repository.return_value
+        
         mock_track_repo.save_track = AsyncMock(return_value=track)
         
         saved_playlist = Playlist(
@@ -240,7 +250,7 @@ class TestSavePlaylistUseCase:
             ),
         )
         
-        result = await use_case.execute(command)
+        result = await use_case.execute(command, mock_unit_of_work)
         
         # Verify enrichment strategy was not called
         mock_enrichment_strategy.enrich_tracks.assert_not_called()
@@ -254,13 +264,16 @@ class TestSavePlaylistUseCase:
     @pytest.mark.asyncio
     async def test_execute_enrichment_enabled(
         self, use_case, track, enriched_track, 
-        mock_enrichment_strategy, sample_command, mock_track_repo, mock_playlist_repo
+        mock_enrichment_strategy, sample_command, mock_unit_of_work
     ):
         """Test execution with enrichment enabled."""
         # Configure enrichment strategy
         mock_enrichment_strategy.enrich_tracks.return_value = [enriched_track]
         
-        # Configure repository mocks
+        # Configure repository mocks through UnitOfWork
+        mock_track_repo = mock_unit_of_work.get_track_repository.return_value
+        mock_playlist_repo = mock_unit_of_work.get_playlist_repository.return_value
+        
         mock_track_repo.save_track = AsyncMock(return_value=enriched_track)
         
         saved_playlist = Playlist(
@@ -271,7 +284,7 @@ class TestSavePlaylistUseCase:
         )
         mock_playlist_repo.save_playlist = AsyncMock(return_value=saved_playlist)
         
-        result = await use_case.execute(sample_command)
+        result = await use_case.execute(sample_command, mock_unit_of_work)
         
         # Verify enrichment strategy was called
         mock_enrichment_strategy.enrich_tracks.assert_called_once_with(
@@ -286,9 +299,13 @@ class TestSavePlaylistUseCase:
 
     @pytest.mark.asyncio
     async def test_execute_create_spotify_operation(
-        self, use_case, track, mock_enrichment_strategy, mock_track_repo, mock_playlist_repo
+        self, use_case, track, mock_enrichment_strategy, mock_unit_of_work
     ):
         """Test execution with create_spotify operation type."""
+        # Configure repository mocks through UnitOfWork
+        mock_track_repo = mock_unit_of_work.get_track_repository.return_value
+        mock_playlist_repo = mock_unit_of_work.get_playlist_repository.return_value
+        
         # Configure mocks
         mock_enrichment_strategy.enrich_tracks.return_value = [track]
         mock_track_repo.save_track = AsyncMock(return_value=track)
@@ -313,7 +330,7 @@ class TestSavePlaylistUseCase:
             ),
         )
         
-        result = await use_case.execute(command)
+        result = await use_case.execute(command, mock_unit_of_work)
         
         # Verify result
         assert result.operation_type == "create_spotify"
@@ -321,9 +338,13 @@ class TestSavePlaylistUseCase:
 
     @pytest.mark.asyncio
     async def test_execute_track_persistence_error_handling(
-        self, use_case, track, mock_enrichment_strategy, mock_track_repo, mock_playlist_repo
+        self, use_case, track, mock_enrichment_strategy, mock_unit_of_work
     ):
         """Test error handling during track persistence."""
+        # Configure repository mocks through UnitOfWork
+        mock_track_repo = mock_unit_of_work.get_track_repository.return_value
+        mock_playlist_repo = mock_unit_of_work.get_playlist_repository.return_value
+        
         # Configure enrichment strategy
         mock_enrichment_strategy.enrich_tracks.return_value = [track]
         
@@ -348,7 +369,7 @@ class TestSavePlaylistUseCase:
             ),
         )
         
-        result = await use_case.execute(command)
+        result = await use_case.execute(command, mock_unit_of_work)
         
         # Verify operation completed despite track persistence error
         assert isinstance(result, SavePlaylistResult)

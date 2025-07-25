@@ -15,6 +15,7 @@ from src.application.use_cases.update_playlist import (
 )
 from src.domain.entities.playlist import Playlist
 from src.domain.entities.track import Artist, Track, TrackList
+from src.domain.repositories.interfaces import UnitOfWorkProtocol
 from src.infrastructure.services.spotify_playlist_sync import SpotifyPlaylistSyncService
 
 
@@ -43,6 +44,13 @@ class TestUpdatePlaylistIntegration:
         return repo
 
     @pytest.fixture
+    def mock_unit_of_work(self, mock_playlist_repo):
+        """Mock UnitOfWork with playlist repository."""
+        uow = AsyncMock(spec=UnitOfWorkProtocol)
+        uow.get_playlist_repository.return_value = mock_playlist_repo
+        return uow
+
+    @pytest.fixture
     def mock_spotify_connector(self):
         """Mock Spotify connector."""
         return MockSpotifyConnector()
@@ -53,12 +61,11 @@ class TestUpdatePlaylistIntegration:
         return SpotifyPlaylistSyncService(spotify_connector=mock_spotify_connector)
 
     @pytest.fixture
-    def integrated_use_case(self, mock_playlist_repo, spotify_sync_service):
-        """UpdatePlaylistUseCase with real sync service."""
-        return UpdatePlaylistUseCase(
-            playlist_repo=mock_playlist_repo,
-            sync_services=[spotify_sync_service],
-        )
+    def integrated_use_case(self, spotify_sync_service):
+        """UpdatePlaylistUseCase following Clean Architecture UnitOfWork pattern."""
+        # Zero constructor dependencies - Clean Architecture compliance
+        # Inject sync services for integration testing
+        return UpdatePlaylistUseCase(sync_services=[spotify_sync_service])
 
     @pytest.fixture
     def spotify_playlist(self):
@@ -90,7 +97,7 @@ class TestUpdatePlaylistIntegration:
         )
 
     async def test_complete_playlist_update_flow(
-        self, integrated_use_case, spotify_playlist, mock_playlist_repo, mock_spotify_connector
+        self, integrated_use_case, spotify_playlist, mock_playlist_repo, mock_spotify_connector, mock_unit_of_work
     ):
         """Test complete playlist update with Spotify sync."""
         # Configure repository to return test playlist
@@ -133,8 +140,8 @@ class TestUpdatePlaylistIntegration:
         )
         mock_playlist_repo.save_playlist.return_value = updated_playlist
         
-        # Execute the command
-        result = await integrated_use_case.execute(command)
+        # Execute the command with UnitOfWork
+        result = await integrated_use_case.execute(command, mock_unit_of_work)
         
         # Verify the complete flow
         assert result.api_calls_made > 0  # External API calls were made
@@ -166,7 +173,7 @@ class TestUpdatePlaylistIntegration:
         assert spotify_sync_service.supports_playlist(non_spotify_playlist) is False
 
     async def test_dry_run_skips_external_sync(
-        self, integrated_use_case, spotify_playlist, mock_playlist_repo, mock_spotify_connector
+        self, integrated_use_case, spotify_playlist, mock_playlist_repo, mock_spotify_connector, mock_unit_of_work
     ):
         """Test that dry run mode skips external synchronization."""
         # Configure repository
@@ -183,7 +190,7 @@ class TestUpdatePlaylistIntegration:
         )
         
         # Execute dry run
-        result = await integrated_use_case.execute(command)
+        result = await integrated_use_case.execute(command, mock_unit_of_work)
         
         # Verify no external operations were performed
         assert result.api_calls_made == 0
@@ -202,11 +209,9 @@ class TestUpdatePlaylistIntegration:
         second_sync_service.supports_playlist = Mock(return_value=True)  # Sync method
         second_sync_service.sync_playlist.return_value = ({"apple_snapshot": "123"}, 1)
         
-        # Create use case with multiple sync services
-        use_case = UpdatePlaylistUseCase(
-            playlist_repo=mock_playlist_repo,
-            sync_services=[spotify_sync_service, second_sync_service]
-        )
+        # Create use case following Clean Architecture UnitOfWork pattern
+        # Inject both sync services for this test
+        use_case = UpdatePlaylistUseCase(sync_services=[spotify_sync_service, second_sync_service])
         
         # Create test playlist that both services support
         test_playlist = Playlist(
@@ -233,8 +238,12 @@ class TestUpdatePlaylistIntegration:
             options=UpdatePlaylistOptions(operation_type="sync_bidirectional")
         )
         
+        # Create UoW mock for this test  
+        mock_uow = AsyncMock(spec=UnitOfWorkProtocol)
+        mock_uow.get_playlist_repository.return_value = mock_playlist_repo
+        
         # Execute command
-        await use_case.execute(command)
+        await use_case.execute(command, mock_uow)
         
         # Both sync services should have been called
         second_sync_service.supports_playlist.assert_called_once()

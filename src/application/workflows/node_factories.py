@@ -52,11 +52,6 @@ class WorkflowNodeFactory:
 
     # === ENRICHER FACTORY ===
 
-    # === LEGACY ENRICHER IMPLEMENTATION REMOVED ===
-    # The create_enricher_node method has been removed in favor of the
-    # standalone create_enricher_node function that uses the modern
-    # TrackMetadataEnricher with clean architecture separation.
-
 
 # === DESTINATION FACTORY ===
 
@@ -205,24 +200,11 @@ def create_enricher_node(config: dict) -> NodeFn:
             f"Starting {enricher_type} enrichment for {len(tracklist.tracks)} tracks"
         )
 
-        # Initialize connector instance using flattened context (Clean Architecture)
-        connector_registry = context.get("connectors")
-        if not connector_registry:
-            raise ValueError("No connector registry available")
+        # Initialize connector instance using DRY helper function
+        connector_instance = ctx.get_connector(enricher_type)
 
-        available_connectors = connector_registry.list_connectors()
-
-        if enricher_type not in available_connectors:
-            raise ValueError(
-                f"Unsupported connector: {enricher_type}. Available: {available_connectors}"
-            )
-
-        connector_instance = connector_registry.get_connector(enricher_type)
-
-        # Direct repository injection - 2025 clean architecture pattern
-        repositories = context.get("repositories")
-        if not repositories:
-            raise ValueError("No repositories available")
+        # Use case dependency injection - 2025 clean architecture pattern
+        use_cases = ctx.extract_use_cases()
 
         # Get freshness configuration for this enricher
         max_age_hours = node_config.get("max_age_hours")
@@ -238,12 +220,7 @@ def create_enricher_node(config: dict) -> NodeFn:
                 f"Using data freshness requirement: {max_age_hours} hours for {enricher_type}"
             )
 
-        # Use the new TrackMetadataEnricher for clean separation of concerns
-        from src.infrastructure.services.track_metadata_enricher import (
-            TrackMetadataEnricher,
-        )
-
-        enricher = TrackMetadataEnricher(repositories)
+        # Use EnrichTracksUseCase for Clean Architecture compliance - already extracted above
 
         # Get extractors from connector configuration
         # The config may specify attribute names, but we need actual extractor functions
@@ -290,19 +267,41 @@ def create_enricher_node(config: dict) -> NodeFn:
             logger.warning(f"Could not import connector config for {enricher_type}, using fallback")
             extractors = {attr: lambda obj, field=attr: getattr(obj, field, None) for attr in attribute_names}
 
-        enriched, metrics = await enricher.enrich_tracks(
-            tracklist,
-            enricher_type,
-            connector_instance,
-            extractors,
-            max_age_hours,
+        # Create enrichment command using Clean Architecture pattern
+        from src.application.use_cases.enrich_tracks import (
+            EnrichmentConfig,
+            EnrichTracksCommand,
         )
-
-        return {
-            "tracklist": enriched,
-            "operation": f"{enricher_type}_enrichment",
-            "metrics_count": sum(len(values) for values in metrics.values()),
-        }
+        
+        enrichment_config = EnrichmentConfig(
+            enrichment_type="external_metadata",
+            connector=enricher_type,
+            connector_instance=connector_instance,
+            extractors=extractors,
+            max_age_hours=max_age_hours
+        )
+        
+        enrichment_command = EnrichTracksCommand(
+            tracklist=tracklist,
+            enrichment_config=enrichment_config
+        )
+        
+        # Execute enrichment through use case with UnitOfWork pattern
+        workflow_context = ctx.extract_workflow_context()
+        result = await workflow_context.execute_use_case(
+            use_cases.get_enrich_tracks_use_case, 
+            enrichment_command
+        )
+        
+        if result.errors:
+            logger.warning(f"Enrichment had errors: {result.errors}")
+        
+        # Use standardized result formatter
+        return NodeContext.format_enrichment_result(
+            operation=f"{enricher_type}_enrichment",
+            enriched_tracklist=result.enriched_tracklist,
+            metrics=result.metrics_added
+        )
 
     return node_impl
 
@@ -318,8 +317,6 @@ def create_play_history_enricher_node() -> NodeFn:
     """
 
     async def node_impl(context: dict, config: dict) -> dict:
-        from src.application.services.play_history_enricher import PlayHistoryEnricher
-
         ctx = NodeContext(context)
         tracklist = ctx.extract_tracklist()
 
@@ -331,26 +328,42 @@ def create_play_history_enricher_node() -> NodeFn:
             f"Starting play history enrichment for {len(tracklist.tracks)} tracks"
         )
 
-        # Use flattened context to get repositories (Clean Architecture)
-        repositories = context.get("repositories")
-        if not repositories:
-            raise ValueError("No repositories available")
-        enricher = PlayHistoryEnricher(repositories)
-
-        enriched = await enricher.enrich_with_play_history(
-            tracklist=tracklist,
-            metrics=metrics,
-            period_days=period_days,
+        # Use EnrichTracksUseCase for Clean Architecture compliance
+        use_cases = ctx.extract_use_cases()
+        
+        # Create enrichment command using Clean Architecture pattern
+        from src.application.use_cases.enrich_tracks import (
+            EnrichmentConfig,
+            EnrichTracksCommand,
         )
-
-        play_metrics = enriched.metadata.get("metrics", {})
-        metrics_count = sum(len(values) for values in play_metrics.values())
-
-        return {
-            "tracklist": enriched,
-            "operation": "play_history_enrichment",
-            "metrics_count": metrics_count,
-            "enriched_metrics": list(play_metrics.keys()),
-        }
+        
+        enrichment_config = EnrichmentConfig(
+            enrichment_type="play_history",
+            metrics=metrics,
+            period_days=period_days
+        )
+        
+        enrichment_command = EnrichTracksCommand(
+            tracklist=tracklist,
+            enrichment_config=enrichment_config
+        )
+        
+        # Execute enrichment through use case with UnitOfWork pattern
+        workflow_context = ctx.extract_workflow_context()
+        result = await workflow_context.execute_use_case(
+            use_cases.get_enrich_tracks_use_case, 
+            enrichment_command
+        )
+        
+        if result.errors:
+            logger.warning(f"Play history enrichment had errors: {result.errors}")
+        
+        # Use standardized result formatter with extra fields
+        return NodeContext.format_enrichment_result(
+            operation="play_history_enrichment",
+            enriched_tracklist=result.enriched_tracklist,
+            metrics=result.metrics_added,
+            enriched_metrics=list(result.metrics_added.keys())  # Extra field for this operation
+        )
 
     return node_impl

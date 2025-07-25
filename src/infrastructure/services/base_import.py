@@ -9,7 +9,7 @@ from uuid import uuid4
 from src.application.utilities.results import ImportResultData, ResultFactory
 from src.config import get_logger
 from src.domain.entities import OperationResult, TrackPlay
-from src.infrastructure.persistence.repositories.track import TrackRepositories
+from src.domain.repositories.interfaces import PlaysRepositoryProtocol
 
 logger = get_logger(__name__)
 
@@ -30,9 +30,9 @@ class BaseImportService(ABC):
     6. Return OperationResult (concrete - standardized format)
     """
 
-    def __init__(self, repositories: TrackRepositories) -> None:
-        """Initialize with repository access."""
-        self.repositories = repositories
+    def __init__(self, plays_repository: PlaysRepositoryProtocol) -> None:
+        """Initialize with repository access following Clean Architecture."""
+        self.plays_repository = plays_repository
         self.operation_name = "Base Import"  # Override in subclasses
 
     async def import_data(
@@ -217,7 +217,7 @@ class BaseImportService(ABC):
         if not track_plays:
             return 0
 
-        return await self.repositories.plays.bulk_insert_plays(track_plays)
+        return await self.plays_repository.bulk_insert_plays(track_plays)
 
     def _create_success_result(
         self,

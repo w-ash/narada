@@ -7,7 +7,7 @@ freshness policies. It focuses solely on freshness decisions without any data fe
 from datetime import UTC, datetime, timedelta
 
 from src.config import get_config, get_logger
-from src.infrastructure.persistence.repositories.track import TrackRepositories
+from src.domain.repositories.interfaces import ConnectorRepositoryProtocol
 
 logger = get_logger(__name__)
 
@@ -26,13 +26,13 @@ class MetadataFreshnessController:
     - Service-specific data extraction
     """
 
-    def __init__(self, track_repos: TrackRepositories) -> None:
-        """Initialize with repository container.
+    def __init__(self, connector_repo: ConnectorRepositoryProtocol) -> None:
+        """Initialize with connector repository interface.
 
         Args:
-            track_repos: Repository container for database operations.
+            connector_repo: Connector repository for metadata timestamp operations.
         """
-        self.track_repos = track_repos
+        self.connector_repo = connector_repo
 
     async def get_stale_tracks(
         self,
@@ -80,7 +80,7 @@ class MetadataFreshnessController:
 
             # Only check track metrics timestamps for this connector
             # Identity mappings are permanent - once established, they don't expire
-            metrics_timestamps = await self._get_metrics_timestamps(track_ids, connector)
+            metrics_timestamps = await self.connector_repo.get_metadata_timestamps(track_ids, connector)
 
             stale_track_ids = []
 
@@ -110,62 +110,7 @@ class MetadataFreshnessController:
             logger.info(f"Found {len(stale_track_ids)} tracks with stale data out of {len(track_ids)} checked")
             return stale_track_ids
 
-    async def _get_metrics_timestamps(
-        self, track_ids: list[int], connector: str
-    ) -> dict[int, datetime]:
-        """Get most recent metrics collection timestamps for tracks from this connector.
-        
-        Args:
-            track_ids: Track IDs to check metrics timestamps for.
-            connector: Connector name to filter metrics by.
-            
-        Returns:
-            Dictionary mapping track_id to most recent collected_at timestamp.
-        """
-        if not track_ids:
-            return {}
-            
-        try:
-            # Get the most recent metrics timestamp for each track from this connector
-            from sqlalchemy import func, select
-
-            from src.infrastructure.persistence.database.db_models import DBTrackMetric
-            
-            # Query for the most recent collected_at timestamp for each track
-            stmt = (
-                select(
-                    DBTrackMetric.track_id,
-                    func.max(DBTrackMetric.collected_at).label("latest_collected_at")
-                )
-                .where(
-                    DBTrackMetric.track_id.in_(track_ids),
-                    DBTrackMetric.connector_name == connector,
-                    DBTrackMetric.is_deleted == False  # noqa: E712
-                )
-                .group_by(DBTrackMetric.track_id)
-            )
-            
-            result = await self.track_repos.metrics.session.execute(stmt)
-            rows = result.fetchall()
-            
-            timestamps = {}
-            for row in rows:
-                track_id = row[0]
-                collected_at = row[1]
-                
-                # Ensure UTC timezone for consistency - database stores UTC timestamps
-                # If no timezone info, assume it's already UTC (our standard)
-                if collected_at and collected_at.tzinfo is None:
-                    collected_at = collected_at.replace(tzinfo=UTC)
-                    
-                timestamps[track_id] = collected_at
-            
-            logger.debug(f"Retrieved metrics timestamps for {len(timestamps)}/{len(track_ids)} tracks from {connector}")
-            return timestamps
-            
-        except Exception as e:
-            logger.warning(f"Failed to get metrics timestamps for {connector}: {e}")
-            return {}
+# _get_metrics_timestamps method removed - functionality moved to ConnectorRepository.get_metadata_timestamps()
 
     def _get_freshness_policy(self, connector: str) -> float | None:
         """Get freshness policy for a connector from configuration.

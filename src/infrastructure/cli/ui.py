@@ -277,11 +277,6 @@ def display_operation_result(
     console.print()
 
 
-# Legacy aliases for existing code - remove after updating all callers
-display_sync_stats = display_operation_result
-display_workflow_result = display_operation_result
-
-
 def display_error(error: Exception, operation: str) -> None:
     """Display error message with consistent formatting.
 

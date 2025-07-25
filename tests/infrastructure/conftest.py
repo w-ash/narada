@@ -18,35 +18,34 @@ from src.infrastructure.persistence.database.db_models import DBPlaylist, DBTrac
 
 
 @pytest.fixture
-def real_track_repository(db_session):
-    """Real track repository with test database session."""
-    from src.infrastructure.persistence.repositories.track import TrackRepositories
-    return TrackRepositories(db_session).core
-
-
-@pytest.fixture  
-def real_playlist_repository(db_session):
-    """Real playlist repository with test database session."""
-    from src.infrastructure.persistence.repositories.playlist import (
-        PlaylistRepositories,
-    )
-    return PlaylistRepositories(db_session).core
+async def real_unit_of_work(db_session):
+    """Real UnitOfWork with test database session for infrastructure tests."""
+    from src.infrastructure.persistence.repositories.factories import get_unit_of_work
+    return await get_unit_of_work(db_session)
 
 
 @pytest.fixture
-def real_track_repositories(db_session):
-    """Real track repositories suite with test database session."""
-    from src.infrastructure.persistence.repositories.track import TrackRepositories
-    return TrackRepositories(db_session)
+def real_track_repository(real_unit_of_work):
+    """Real track repository via UnitOfWork pattern."""
+    return real_unit_of_work.get_track_repository()
 
 
 @pytest.fixture
-def real_playlist_repositories(db_session):
-    """Real playlist repositories suite with test database session."""
-    from src.infrastructure.persistence.repositories.playlist import (
-        PlaylistRepositories,
-    )
-    return PlaylistRepositories(db_session)
+def real_playlist_repository(real_unit_of_work):
+    """Real playlist repository via UnitOfWork pattern."""
+    return real_unit_of_work.get_playlist_repository()
+
+
+@pytest.fixture
+def real_connector_repository(real_unit_of_work):
+    """Real connector repository via UnitOfWork pattern."""
+    return real_unit_of_work.get_connector_repository()
+
+
+@pytest.fixture
+def real_metrics_repository(real_unit_of_work):
+    """Real metrics repository via UnitOfWork pattern."""
+    return real_unit_of_work.get_metrics_repository()
 
 
 @pytest.fixture

@@ -269,8 +269,8 @@ class DatabaseProgressContext:
         async with session_factory() as session:
             repositories = repository_factory(session)
 
-            # Execute operation with repositories
-            result = await operation_func(repositories, *args, **kwargs)
+            # Execute operation with repositories as keyword argument
+            result = await operation_func(*args, repositories=repositories, **kwargs)
 
             # Store result for display on context exit
             self.set_result(result)

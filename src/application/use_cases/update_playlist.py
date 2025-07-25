@@ -23,7 +23,7 @@ from attrs import define, field
 from src.config import get_logger
 from src.domain.entities.playlist import Playlist
 from src.domain.entities.track import Track, TrackList
-from src.domain.repositories.interfaces import PlaylistRepository
+from src.domain.repositories import UnitOfWorkProtocol
 
 # TrackRepositories import removed - not needed for current implementation
 
@@ -556,15 +556,17 @@ class UpdatePlaylistUseCase:
     4. Database and external service synchronization
     5. Result aggregation with performance metrics
 
-    Follows Clean Architecture principles by depending only on
-    abstractions and delegating infrastructure concerns.
+    Follows Clean Architecture principles with UnitOfWork pattern:
+    - No constructor dependencies (pure domain layer)
+    - All repository access through UnitOfWork parameter
+    - Explicit transaction control in business logic
+    - Simplified testing with single UnitOfWork mock
     """
 
-    playlist_repo: PlaylistRepository
     sync_services: list[PlaylistSyncService] = field(factory=list)
     diff_calculator: PlaylistDiffCalculator = field(factory=PlaylistDiffCalculator)
 
-    async def execute(self, command: UpdatePlaylistCommand) -> UpdatePlaylistResult:
+    async def execute(self, command: UpdatePlaylistCommand, uow: UnitOfWorkProtocol) -> UpdatePlaylistResult:
         """Execute playlist update operation.
 
         Args:
@@ -589,86 +591,92 @@ class UpdatePlaylistUseCase:
             dry_run=command.options.dry_run,
         )
 
-        try:
-            # Step 1: Get current playlist state
-            current_playlist = await self._get_current_playlist(command.playlist_id)
+        async with uow:
+            try:
+                # Step 1: Get current playlist state
+                current_playlist = await self._get_current_playlist(command.playlist_id, uow)
 
-            # Step 2: Calculate differential operations
-            diff = await self.diff_calculator.calculate_diff(
-                current_playlist, command.new_tracklist
-            )
+                # Step 2: Calculate differential operations
+                diff = await self.diff_calculator.calculate_diff(
+                    current_playlist, command.new_tracklist
+                )
 
-            if not diff.has_changes:
-                logger.info("No changes detected, playlist already up to date")
-                return UpdatePlaylistResult(
-                    playlist=current_playlist,
-                    execution_time_ms=int(
-                        (datetime.now(UTC) - start_time).total_seconds() * 1000
+                if not diff.has_changes:
+                    logger.info("No changes detected, playlist already up to date")
+                    return UpdatePlaylistResult(
+                        playlist=current_playlist,
+                        execution_time_ms=int(
+                            (datetime.now(UTC) - start_time).total_seconds() * 1000
+                        ),
+                    )
+
+                # Step 3: Execute operations (if not dry run)
+                result_playlist = current_playlist
+                operations_performed = []
+                api_calls_made = 0
+
+                if not command.options.dry_run:
+                    (
+                        result_playlist,
+                        operations_performed,
+                        api_calls_made,
+                    ) = await self._execute_operations(
+                        current_playlist, diff, command.options, uow
+                    )
+                    
+                    # Explicit commit after successful operations
+                    await uow.commit()
+
+                # Step 4: Calculate execution metrics
+                execution_time = int(
+                    (datetime.now(UTC) - start_time).total_seconds() * 1000
+                )
+
+                result = UpdatePlaylistResult(
+                    playlist=result_playlist,
+                    operations_performed=operations_performed,
+                    api_calls_made=api_calls_made,
+                    tracks_added=sum(
+                        1
+                        for op in operations_performed
+                        if op.operation_type == PlaylistOperationType.ADD
                     ),
+                    tracks_removed=sum(
+                        1
+                        for op in operations_performed
+                        if op.operation_type == PlaylistOperationType.REMOVE
+                    ),
+                    tracks_moved=sum(
+                        1
+                        for op in operations_performed
+                        if op.operation_type == PlaylistOperationType.MOVE
+                    ),
+                    execution_time_ms=execution_time,
                 )
 
-            # Step 3: Execute operations (if not dry run)
-            result_playlist = current_playlist
-            operations_performed = []
-            api_calls_made = 0
-
-            if not command.options.dry_run:
-                (
-                    result_playlist,
-                    operations_performed,
-                    api_calls_made,
-                ) = await self._execute_operations(
-                    current_playlist, diff, command.options
+                logger.info(
+                    "Playlist update operation completed",
+                    playlist_id=command.playlist_id,
+                    operations_performed=len(operations_performed),
+                    api_calls_made=api_calls_made,
+                    execution_time_ms=execution_time,
+                    dry_run=command.options.dry_run,
                 )
 
-            # Step 4: Calculate execution metrics
-            execution_time = int(
-                (datetime.now(UTC) - start_time).total_seconds() * 1000
-            )
+                return result
 
-            result = UpdatePlaylistResult(
-                playlist=result_playlist,
-                operations_performed=operations_performed,
-                api_calls_made=api_calls_made,
-                tracks_added=sum(
-                    1
-                    for op in operations_performed
-                    if op.operation_type == PlaylistOperationType.ADD
-                ),
-                tracks_removed=sum(
-                    1
-                    for op in operations_performed
-                    if op.operation_type == PlaylistOperationType.REMOVE
-                ),
-                tracks_moved=sum(
-                    1
-                    for op in operations_performed
-                    if op.operation_type == PlaylistOperationType.MOVE
-                ),
-                execution_time_ms=execution_time,
-            )
+            except Exception as e:
+                # Explicit rollback on business logic failure
+                await uow.rollback()
+                logger.error(
+                    "Playlist update operation failed",
+                    error=str(e),
+                    playlist_id=command.playlist_id,
+                    operation_type=command.options.operation_type,
+                )
+                raise
 
-            logger.info(
-                "Playlist update operation completed",
-                playlist_id=command.playlist_id,
-                operations_performed=len(operations_performed),
-                api_calls_made=api_calls_made,
-                execution_time_ms=execution_time,
-                dry_run=command.options.dry_run,
-            )
-
-            return result
-
-        except Exception as e:
-            logger.error(
-                "Playlist update operation failed",
-                error=str(e),
-                playlist_id=command.playlist_id,
-                operation_type=command.options.operation_type,
-            )
-            raise
-
-    async def _get_current_playlist(self, playlist_id: str) -> Playlist:
+    async def _get_current_playlist(self, playlist_id: str, uow: UnitOfWorkProtocol) -> Playlist:
         """Retrieve current playlist state from database.
 
         Args:
@@ -677,13 +685,16 @@ class UpdatePlaylistUseCase:
         Returns:
             Current playlist entity
         """
+        # Get playlist repository from UnitOfWork
+        playlist_repo = uow.get_playlist_repository()
+        
         try:
             # Try to get by internal ID first
-            playlist = await self.playlist_repo.get_playlist_by_id(int(playlist_id))
+            playlist = await playlist_repo.get_playlist_by_id(int(playlist_id))
             return playlist
         except ValueError:
             # If not an integer, try as connector ID
-            playlist = await self.playlist_repo.get_playlist_by_connector(
+            playlist = await playlist_repo.get_playlist_by_connector(
                 "spotify", playlist_id, raise_if_not_found=True
             )
             if playlist is None:
@@ -695,6 +706,7 @@ class UpdatePlaylistUseCase:
         current_playlist: Playlist,
         diff: PlaylistDiff,
         options: UpdatePlaylistOptions,
+        uow: UnitOfWorkProtocol,
     ) -> tuple[Playlist, list[PlaylistOperation], int]:
         """Execute the differential operations on the playlist.
 
@@ -797,7 +809,8 @@ class UpdatePlaylistUseCase:
 
         api_calls_made = total_external_api_calls
 
-        # Save updated playlist to database using injected repository
-        saved_playlist = await self.playlist_repo.save_playlist(updated_playlist)
+        # Get playlist repository from UnitOfWork and save updated playlist
+        playlist_repo = uow.get_playlist_repository()
+        saved_playlist = await playlist_repo.save_playlist(updated_playlist)
 
         return saved_playlist, operations_performed, api_calls_made

@@ -205,13 +205,13 @@ def build_flow(workflow_def: dict) -> Any:
             # Initialize execution context with shared session provider
             context = {
                 "parameters": parameters,
-                "use_cases": workflow_context.use_cases,
+                "use_cases": workflow_context.use_cases,  # Clean Architecture: use case dependency injection
                 "connectors": workflow_context.connectors,
                 "config": workflow_context.config,
                 "logger": workflow_context.logger,
                 "session_provider": shared_session_provider,  # Use shared session
-                "repositories": workflow_context.repositories,  # Legacy compatibility
                 "shared_session": shared_session,  # Direct access for nodes that need it
+                "workflow_context": workflow_context,  # Full context for UoW execution
             }
             task_results = {}
 

@@ -10,17 +10,22 @@ from src.application.utilities.progress_integration import with_progress
 from src.config import get_logger
 from src.domain.entities import TrackList
 from src.domain.matching.types import MatchResult, MatchResultsById
-from src.infrastructure.persistence.repositories.track import TrackRepositories
+from src.domain.repositories.interfaces import (
+    ConnectorRepositoryProtocol,
+    TrackIdentityServiceProtocol,
+    TrackRepositoryProtocol,
+)
 
 from .matching.providers import create_provider
 
 logger = get_logger(__name__)
 
 
-class TrackIdentityResolver:
+class TrackIdentityResolver(TrackIdentityServiceProtocol):
     """Resolves track identities between internal tracks and external connector tracks.
 
-    This service is responsible only for identity resolution:
+    This service implements the TrackIdentityServiceProtocol and is responsible only 
+    for identity resolution:
     - Finding existing track-to-connector mappings
     - Creating new mappings when tracks are not yet resolved
     - Managing confidence scores and matching evidence
@@ -31,13 +36,15 @@ class TrackIdentityResolver:
     - Service-specific data extraction
     """
 
-    def __init__(self, track_repos: TrackRepositories) -> None:
-        """Initialize with repository container.
+    def __init__(self, track_repo: TrackRepositoryProtocol, connector_repo: ConnectorRepositoryProtocol) -> None:
+        """Initialize with individual repository interfaces.
 
         Args:
-            track_repos: Repository container for database operations.
+            track_repo: Core track repository for database operations.
+            connector_repo: Connector repository for cross-service mappings.
         """
-        self.track_repos = track_repos
+        self.track_repo = track_repo
+        self.connector_repo = connector_repo
 
     @with_progress(
         "Resolving track identities",
@@ -142,7 +149,7 @@ class TrackIdentityResolver:
             db_mapped_tracks = {}
 
             # Step 1: Get all mappings in a single batch call
-            existing_mappings = await self.track_repos.connector.get_connector_mappings(
+            existing_mappings = await self.connector_repo.get_connector_mappings(
                 track_ids, connector
             )
 
@@ -169,7 +176,7 @@ class TrackIdentityResolver:
                 return {}
 
             # Step 3: Get all tracks in a single batch call
-            tracks_by_id = await self.track_repos.core.find_tracks_by_ids(
+            tracks_by_id = await self.track_repo.find_tracks_by_ids(
                 mapped_track_ids
             )
 
@@ -183,7 +190,7 @@ class TrackIdentityResolver:
                 connector_id = track_to_connector_id[track_id]
 
                 # Get mapping information (confidence, method, evidence)
-                mapping_data = await self.track_repos.connector.get_mapping_info(
+                mapping_data = await self.connector_repo.get_mapping_info(
                     track_id=track_id,
                     connector=connector,
                     connector_id=connector_id,
@@ -265,7 +272,7 @@ class TrackIdentityResolver:
                 return
 
             # Get all tracks in a single batch operation
-            tracks_by_id = await self.track_repos.core.find_tracks_by_ids(track_ids)
+            tracks_by_id = await self.track_repo.find_tracks_by_ids(track_ids)
 
             success_count = 0
 
@@ -276,9 +283,12 @@ class TrackIdentityResolver:
 
                 track = tracks_by_id[result.track.id]
 
+                if track.id is None:
+                    continue
+
                 try:
-                    # Map track to connector (identity mapping only, no metadata)
-                    await self.track_repos.connector.map_track_to_connector(
+                    # Create mapping with confidence and metadata
+                    await self.connector_repo.map_track_to_connector(
                         track=track,
                         connector=connector,
                         connector_id=result.connector_id,

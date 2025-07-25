@@ -204,7 +204,7 @@ def test_track_matching_confidence():
     assert result.confidence >= 0.8
 ```
 
-#### Application Tests (Mocked Dependencies)
+#### Application Tests (Mock Repository Interfaces)
 ```python
 @pytest.fixture
 def mock_repository():
@@ -216,13 +216,27 @@ async def test_import_tracks_use_case(mock_repository):
     assert result.success
 ```
 
-#### Integration Tests (Real External Services)
+#### Infrastructure Tests (Real Database, Mock External APIs)
+```python
+@pytest.mark.infrastructure
+async def test_track_service(real_track_repository):
+    # Use real repositories with test database
+    service = TrackService(real_track_repository)
+    with patch('external_api.get_track_data') as mock_api:
+        mock_api.return_value = {"title": "Test"}
+        result = await service.process_track(track)
+        assert result.success
+```
+
+#### Integration Tests (Mock Only External Boundaries)
 ```python
 @pytest.mark.integration
-async def test_spotify_connector():
-    connector = SpotifyConnector()
-    tracks = await connector.get_playlist_tracks("playlist_id")
-    assert len(tracks) > 0
+async def test_workflow_e2e():
+    # Use real workflow context, mock only external APIs
+    with patch('src.connectors.spotify.SpotifyConnector.get_playlist') as mock_api:
+        mock_api.return_value = mock_playlist_data
+        result = await workflow.execute(config)
+        assert result.success
 ```
 
 ### Test Utilities

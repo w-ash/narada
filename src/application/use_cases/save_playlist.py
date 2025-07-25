@@ -16,7 +16,7 @@ from attrs import define, field
 from src.config import get_logger
 from src.domain.entities.playlist import Playlist
 from src.domain.entities.track import Track, TrackList
-from src.domain.repositories.interfaces import PlaylistRepository, TrackRepository
+from src.domain.repositories import UnitOfWorkProtocol
 
 logger = get_logger(__name__)
 
@@ -161,7 +161,7 @@ class TrackUpsertEnrichmentStrategy:
     This ensures all tracks have database IDs for downstream processing.
     """
 
-    def __init__(self, track_repo: TrackRepository):
+    def __init__(self, track_repo):
         """Initialize with track repository interface.
 
         Args:
@@ -227,15 +227,16 @@ class SavePlaylistUseCase:
     2. Database persistence with transaction management
     3. Result aggregation and error handling
 
-    Follows Clean Architecture principles by depending only on
-    abstractions (protocols) and delegating infrastructure concerns.
+    Follows Clean Architecture principles with UnitOfWork pattern:
+    - No constructor dependencies (pure domain layer)
+    - All repository access through UnitOfWork parameter
+    - Explicit transaction control in business logic
+    - Simplified testing with single UnitOfWork mock
     """
 
-    track_repo: TrackRepository
-    playlist_repo: PlaylistRepository
     enrichment_strategy: TrackEnrichmentStrategy | None = field(default=None)
 
-    async def execute(self, command: SavePlaylistCommand) -> SavePlaylistResult:
+    async def execute(self, command: SavePlaylistCommand, uow: UnitOfWorkProtocol) -> SavePlaylistResult:
         """Execute playlist save operation.
 
         Args:
@@ -259,44 +260,50 @@ class SavePlaylistUseCase:
             enrichment_enabled=command.enrichment_config.enabled,
         )
 
-        try:
-            # Step 1: Enrich tracks if enabled
-            enriched_tracks = await self._enrich_tracks(command)
+        async with uow:
+            try:
+                # Step 1: Enrich tracks if enabled
+                enriched_tracks = await self._enrich_tracks(command, uow)
 
-            # Step 2: Persist playlist and tracks
-            saved_playlist = await self._persist_playlist(command, enriched_tracks)
+                # Step 2: Persist playlist and tracks
+                saved_playlist = await self._persist_playlist(command, enriched_tracks, uow)
+                
+                # Step 3: Explicit commit after successful business operations
+                await uow.commit()
+                
+                # Step 4: Calculate execution metrics
+                execution_time = int(
+                    (datetime.now(UTC) - start_time).total_seconds() * 1000
+                )
 
-            # Step 3: Calculate execution metrics
-            execution_time = int(
-                (datetime.now(UTC) - start_time).total_seconds() * 1000
-            )
+                result = SavePlaylistResult(
+                    playlist=saved_playlist,
+                    enriched_tracks=enriched_tracks,
+                    operation_type=command.persistence_options.operation_type,
+                    track_count=len(enriched_tracks),
+                    execution_time_ms=execution_time,
+                )
 
-            result = SavePlaylistResult(
-                playlist=saved_playlist,
-                enriched_tracks=enriched_tracks,
-                operation_type=command.persistence_options.operation_type,
-                track_count=len(enriched_tracks),
-                execution_time_ms=execution_time,
-            )
+                logger.info(
+                    "Playlist save operation completed successfully",
+                    playlist_id=saved_playlist.id,
+                    track_count=result.track_count,
+                    execution_time_ms=execution_time,
+                )
 
-            logger.info(
-                "Playlist save operation completed successfully",
-                playlist_id=saved_playlist.id,
-                track_count=result.track_count,
-                execution_time_ms=execution_time,
-            )
+                return result
 
-            return result
+            except Exception as e:
+                # Explicit rollback on business logic failure
+                await uow.rollback()
+                logger.error(
+                    "Playlist save operation failed",
+                    error=str(e),
+                    operation_type=command.persistence_options.operation_type,
+                )
+                raise
 
-        except Exception as e:
-            logger.error(
-                "Playlist save operation failed",
-                error=str(e),
-                operation_type=command.persistence_options.operation_type,
-            )
-            raise
-
-    async def _enrich_tracks(self, command: SavePlaylistCommand) -> list[Track]:
+    async def _enrich_tracks(self, command: SavePlaylistCommand, uow: UnitOfWorkProtocol) -> list[Track]:
         """Enrich tracks using configured strategy.
 
         Args:
@@ -311,8 +318,9 @@ class SavePlaylistUseCase:
 
         # Set up enrichment strategy if not provided
         if self.enrichment_strategy is None:
-            # Use injected track repository for upsert enrichment
-            strategy = TrackUpsertEnrichmentStrategy(self.track_repo)
+            # Get track repository from UnitOfWork for upsert enrichment
+            track_repo = uow.get_track_repository()
+            strategy = TrackUpsertEnrichmentStrategy(track_repo)
 
             logger.debug(
                 f"Using TrackUpsertEnrichmentStrategy to enrich {len(command.tracklist.tracks)} tracks",
@@ -334,7 +342,7 @@ class SavePlaylistUseCase:
             )
 
     async def _persist_playlist(
-        self, command: SavePlaylistCommand, enriched_tracks: list[Track]
+        self, command: SavePlaylistCommand, enriched_tracks: list[Track], uow: UnitOfWorkProtocol
     ) -> Playlist:
         """Persist playlist and tracks to database.
 
@@ -347,13 +355,17 @@ class SavePlaylistUseCase:
         """
         options = command.persistence_options
 
+        # Get repositories from UnitOfWork
+        track_repo = uow.get_track_repository()
+        playlist_repo = uow.get_playlist_repository()
+        
         # Step 1: Persist all tracks in bulk using repository
         logger.debug(f"Persisting {len(enriched_tracks)} tracks")
         persisted_tracks = []
 
         for track in enriched_tracks:
             try:
-                saved_track = await self.track_repo.save_track(track)
+                saved_track = await track_repo.save_track(track)
                 persisted_tracks.append(saved_track)
             except Exception as e:
                 if options.fail_on_track_error:
@@ -363,11 +375,11 @@ class SavePlaylistUseCase:
 
         # Step 2: Create playlist based on operation type
         if options.operation_type == "create_internal":
-            playlist = await self._create_internal_playlist(options, persisted_tracks)
+            playlist = await self._create_internal_playlist(options, persisted_tracks, playlist_repo)
         elif options.operation_type == "create_spotify":
-            playlist = await self._create_spotify_playlist(options, persisted_tracks)
+            playlist = await self._create_spotify_playlist(options, persisted_tracks, playlist_repo)
         elif options.operation_type == "update_spotify":
-            playlist = await self._update_spotify_playlist(options, persisted_tracks)
+            playlist = await self._update_spotify_playlist(options, persisted_tracks, playlist_repo)
         else:
             raise ValueError(f"Unsupported operation type: {options.operation_type}")
 
@@ -381,7 +393,7 @@ class SavePlaylistUseCase:
         return playlist
 
     async def _create_internal_playlist(
-        self, options: PersistenceOptions, tracks: list[Track]
+        self, options: PersistenceOptions, tracks: list[Track], playlist_repo
     ) -> Playlist:
         """Create new internal playlist."""
         from src.domain.workflows.playlist_operations import create_playlist_operation
@@ -397,10 +409,10 @@ class SavePlaylistUseCase:
         )
 
         # Save to database
-        return await self.playlist_repo.save_playlist(playlist)
+        return await playlist_repo.save_playlist(playlist)
 
     async def _create_spotify_playlist(
-        self, options: PersistenceOptions, tracks: list[Track]
+        self, options: PersistenceOptions, tracks: list[Track], playlist_repo
     ) -> Playlist:
         """Create new Spotify-connected playlist."""
         from src.domain.workflows.playlist_operations import (
@@ -424,10 +436,10 @@ class SavePlaylistUseCase:
         )
 
         # Save to database
-        return await self.playlist_repo.save_playlist(playlist)
+        return await playlist_repo.save_playlist(playlist)
 
     async def _update_spotify_playlist(
-        self, options: PersistenceOptions, tracks: list[Track]
+        self, options: PersistenceOptions, tracks: list[Track], playlist_repo
     ) -> Playlist:
         """Update existing Spotify playlist."""
         from src.domain.workflows.playlist_operations import (
@@ -440,7 +452,7 @@ class SavePlaylistUseCase:
             )
 
         # Get existing playlist
-        existing = await self.playlist_repo.get_playlist_by_connector(
+        existing = await playlist_repo.get_playlist_by_connector(
             "spotify", options.spotify_playlist_id, raise_if_not_found=True
         )
 
@@ -457,4 +469,4 @@ class SavePlaylistUseCase:
         # Save updated playlist
         if existing.id is None:
             raise ValueError("Existing playlist has no ID")
-        return await self.playlist_repo.update_playlist(existing.id, updated)
+        return await playlist_repo.update_playlist(existing.id, updated)

@@ -7,7 +7,8 @@ enabling Clean Architecture compliance through dependency inversion.
 from typing import Any, Protocol
 
 from src.domain.entities.track import Track, TrackList
-from src.domain.repositories.interfaces import RepositoryProvider
+
+# RepositoryProvider removed - Clean Architecture uses dependency injection through use cases
 
 
 class ConfigProvider(Protocol):
@@ -81,6 +82,18 @@ class UseCaseProvider(Protocol):
         """Get UpdatePlaylistUseCase with injected dependencies."""
         ...
 
+    async def get_track_identity_use_case(self) -> Any:
+        """Get ResolveTrackIdentityUseCase with injected dependencies."""
+        ...
+
+    async def get_enrich_tracks_use_case(self) -> Any:
+        """Get EnrichTracksUseCase with injected dependencies."""
+        ...
+
+    async def get_match_tracks_use_case(self) -> Any:
+        """Get MatchTracksUseCase with injected dependencies."""
+        ...
+
 
 class WorkflowContext(Protocol):
     """Complete workflow execution context with all dependencies."""
@@ -110,10 +123,19 @@ class WorkflowContext(Protocol):
         """Database session provider."""
         ...
 
-    # Legacy compatibility - will be removed
-    @property
-    def repositories(self) -> RepositoryProvider:
-        """Repository provider (deprecated - use use_cases instead)."""
+    async def execute_use_case(self, use_case_getter: Any, command: Any) -> Any:
+        """Execute use case with UnitOfWork pattern.
+        
+        This method provides a single entry point for all workflow use case execution,
+        handling UnitOfWork creation, session management, and cleanup automatically.
+        
+        Args:
+            use_case_getter: Async function that returns a use case instance
+            command: Command object to pass to the use case
+            
+        Returns:
+            Result from use case execution
+        """
         ...
 
 

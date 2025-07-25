@@ -29,13 +29,10 @@ async def spotify_playlist_source(
 
     logger.info(f"Fetching Spotify playlist: {playlist_id}")
     if spotify_connector is None:
-        # Get Spotify connector from flattened context (Clean Architecture)
-        connector_registry = context.get("connectors")
-        if not connector_registry:
-            raise ValueError("No connector registry available")
-
-        # Get connector directly - no adapter wrapper needed
-        spotify_connector = connector_registry.get_connector("spotify")
+        # Get Spotify connector using DRY helper function
+        from .node_context import NodeContext
+        ctx = NodeContext(context)
+        spotify_connector = ctx.get_connector("spotify")
 
     # 1. Fetch playlist with its items in a single API call
     connector_playlist = await spotify_connector.get_spotify_playlist(playlist_id)
@@ -94,14 +91,18 @@ async def spotify_playlist_source(
         ),
     )
 
-    # Get use cases from context (Clean Architecture compliance)
-    use_cases = context.get("use_cases")
-    if not use_cases:
-        raise ValueError("Use case provider not found in context")
+    # Use DRY helper functions for context extraction
+    from .node_context import NodeContext
+    ctx = NodeContext(context)
+    
+    workflow_context = ctx.extract_workflow_context()
+    use_cases = ctx.extract_use_cases()
 
-    # Get SavePlaylistUseCase with proper dependency injection
-    use_case = await use_cases.get_save_playlist_use_case()
-    result = await use_case.execute(save_command)
+    # Execute use case with UnitOfWork pattern
+    result = await workflow_context.execute_use_case(
+        use_cases.get_save_playlist_use_case, 
+        save_command
+    )
 
     return {
         "tracklist": TrackList(tracks=result.enriched_tracks),

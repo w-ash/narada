@@ -8,20 +8,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.config import get_logger
-from src.domain.repositories.interfaces import (
-    CheckpointRepository,
-    ConnectorRepository,
-    LikeRepository,
-    PlaylistRepository,
-    PlaysRepository,
-    RepositoryProvider,
-    TrackRepository,
-)
+
+# Repository interfaces imported only where needed by use case providers
 from src.infrastructure.connectors import CONNECTORS, discover_connectors
 from src.infrastructure.persistence.database.db_connection import get_session
-from src.infrastructure.persistence.repositories.playlist import PlaylistRepositories
-from src.infrastructure.persistence.repositories.track import TrackRepositories
 
+# Repository factory functions will be imported locally where needed
 from .protocols import (
     ConfigProvider,
     ConnectorRegistry,
@@ -135,101 +127,47 @@ class UseCaseProviderImpl:
         self._shared_session = shared_session
 
     async def get_save_playlist_use_case(self):
-        """Get SavePlaylistUseCase with injected dependencies."""
+        """Get SavePlaylistUseCase with UnitOfWork pattern."""
         from src.application.use_cases.save_playlist import SavePlaylistUseCase
-
-        if self._shared_session:
-            # Use the shared session from workflow context
-            track_repos = TrackRepositories(self._shared_session)
-            playlist_repos = PlaylistRepositories(self._shared_session)
-
-            return SavePlaylistUseCase(
-                track_repo=track_repos.core, playlist_repo=playlist_repos.core
-            )
-        else:
-            # Fallback to individual session (for non-workflow usage)
-            async with get_session() as session:
-                track_repos = TrackRepositories(session)
-                playlist_repos = PlaylistRepositories(session)
-
-                return SavePlaylistUseCase(
-                    track_repo=track_repos.core, playlist_repo=playlist_repos.core
-                )
+        
+        # Simple instantiation - no dependencies
+        # UnitOfWork will be passed as parameter during execution
+        return SavePlaylistUseCase()
 
     async def get_update_playlist_use_case(self):
-        """Get UpdatePlaylistUseCase with injected dependencies."""
+        """Get UpdatePlaylistUseCase with UnitOfWork pattern."""
         from src.application.use_cases.update_playlist import UpdatePlaylistUseCase
+        
+        # Simple instantiation - no dependencies
+        # UnitOfWork will be passed as parameter during execution
+        return UpdatePlaylistUseCase()
 
-        if self._shared_session:
-            # Use the shared session from workflow context
-            playlist_repos = PlaylistRepositories(self._shared_session)
+    async def get_track_identity_use_case(self):
+        """Get ResolveTrackIdentityUseCase with UnitOfWork pattern."""
+        from src.application.use_cases.resolve_track_identity import (
+            ResolveTrackIdentityUseCase,
+        )
+        
+        # Simple instantiation - no dependencies
+        # UnitOfWork will be passed as parameter during execution
+        return ResolveTrackIdentityUseCase()
 
-            return UpdatePlaylistUseCase(playlist_repo=playlist_repos.core)
-        else:
-            # Fallback to individual session (for non-workflow usage)
-            async with get_session() as session:
-                playlist_repos = PlaylistRepositories(session)
+    async def get_enrich_tracks_use_case(self):
+        """Get EnrichTracksUseCase with injected dependencies."""
+        from src.application.use_cases.enrich_tracks import EnrichTracksUseCase
+        # EnrichTracksUseCase follows UnitOfWork pattern - no constructor dependencies
+        return EnrichTracksUseCase()
 
-                return UpdatePlaylistUseCase(playlist_repo=playlist_repos.core)
+    async def get_match_tracks_use_case(self):
+        """Get MatchTracksUseCase with UnitOfWork pattern."""
+        from src.application.use_cases.match_tracks import MatchTracksUseCase
+        
+        # Simple instantiation - no dependencies
+        # UnitOfWork will be passed as parameter during execution
+        return MatchTracksUseCase()
 
 
-class RepositoryProviderImpl:
-    """Repository provider implementation."""
-
-    def __init__(self, session):
-        """Initialize repository provider with session."""
-        self._session = session
-        self._track_repos = None
-        self._playlist_repos = None
-
-    @property
-    def core(self) -> TrackRepository:
-        """Core track repository."""
-        if self._track_repos is None:
-            self._track_repos = TrackRepositories(self._session)
-        return self._track_repos.core
-
-    @property
-    def plays(self) -> PlaysRepository:
-        """Track plays repository."""
-        if self._track_repos is None:
-            self._track_repos = TrackRepositories(self._session)
-        return self._track_repos.plays
-
-    @property
-    def likes(self) -> LikeRepository:
-        """Track likes repository."""
-        if self._track_repos is None:
-            self._track_repos = TrackRepositories(self._session)
-        return self._track_repos.likes
-
-    @property
-    def connector(self) -> ConnectorRepository:
-        """Connector repository."""
-        if self._track_repos is None:
-            self._track_repos = TrackRepositories(self._session)
-        return self._track_repos.connector
-
-    @property
-    def metrics(self) -> Any:
-        """Track metrics repository."""
-        if self._track_repos is None:
-            self._track_repos = TrackRepositories(self._session)
-        return self._track_repos.metrics
-
-    @property
-    def checkpoints(self) -> CheckpointRepository:
-        """Sync checkpoints repository."""
-        if self._track_repos is None:
-            self._track_repos = TrackRepositories(self._session)
-        return self._track_repos.checkpoints
-
-    @property
-    def playlists(self) -> PlaylistRepository:
-        """Playlist repository."""
-        if self._playlist_repos is None:
-            self._playlist_repos = PlaylistRepositories(self._session)
-        return self._playlist_repos
+# RepositoryProviderImpl removed - Clean Architecture: use cases handle dependency injection
 
 
 @dataclass
@@ -241,7 +179,35 @@ class ConcreteWorkflowContext:
     connectors: ConnectorRegistry
     use_cases: UseCaseProvider
     session_provider: DatabaseSessionProvider
-    repositories: RepositoryProvider  # Legacy compatibility
+
+    async def execute_use_case(self, use_case_getter: Any, command: Any) -> Any:
+        """Execute use case with UnitOfWork pattern.
+        
+        This method provides a single entry point for all workflow use case execution,
+        handling UnitOfWork creation, session management, and cleanup automatically.
+        
+        Args:
+            use_case_getter: Async function that returns a use case instance
+            command: Command object to pass to the use case
+            
+        Returns:
+            Result from use case execution
+        """
+        # Get session from session provider
+        async with self.session_provider.get_session() as session:
+            # Import UnitOfWork factory locally to avoid circular imports
+            from src.infrastructure.persistence.repositories.factories import (
+                get_unit_of_work,
+            )
+            
+            # Create UnitOfWork from session
+            uow = get_unit_of_work(session)
+            
+            # Get use case instance
+            use_case = await use_case_getter()
+            
+            # Execute use case with command and UnitOfWork
+            return await use_case.execute(command, uow)
 
 
 def create_workflow_context(shared_session=None) -> WorkflowContext:
@@ -252,61 +218,8 @@ def create_workflow_context(shared_session=None) -> WorkflowContext:
     session_provider = DatabaseSessionProviderImpl()
     use_cases = UseCaseProviderImpl(shared_session)
 
-    # Create repository provider with real implementations using shared session
-    if shared_session:
-        # Use shared session for workflow execution - ensures transaction consistency
-        repositories = RepositoryProviderImpl(shared_session)
-    else:
-        # Fallback: Create placeholder for non-workflow usage (backwards compatibility)
-        class PlaceholderRepositoryProvider:
-            """Placeholder provider for non-workflow usage."""
-            
-            @property
-            def core(self) -> Any:
-                return None
-
-            @property
-            def plays(self) -> Any:
-                return None
-
-            @property
-            def likes(self) -> Any:
-                return None
-
-            @property
-            def connector(self) -> Any:
-                return None
-
-            @property
-            def checkpoints(self) -> Any:
-                return None
-
-            @property
-            def playlists(self) -> Any:
-                return None
-
-            async def create_repos_with_shared_session(
-                self,
-            ) -> tuple[TrackRepository, PlaylistRepository, Any]:
-                """Create track and playlist repositories sharing a single session."""
-                session = get_session()
-                session_ctx = await session.__aenter__()
-
-                track_repos = TrackRepositories(session_ctx)
-                playlist_repos = PlaylistRepositories(session_ctx)
-
-                return track_repos.core, playlist_repos.core, session
-
-            async def create_playlist_repo_with_session(
-                self,
-            ) -> tuple[PlaylistRepository, Any]:
-                """Create playlist repository with session for UpdatePlaylistUseCase."""
-                session = get_session()
-                session_ctx = await session.__aenter__()
-                playlist_repos = PlaylistRepositories(session_ctx)
-                return playlist_repos.core, session
-        
-        repositories = PlaceholderRepositoryProvider()
+    # Repository provider removed - use cases handle their own dependency injection
+    # Clean Architecture: Context provides use cases, not repositories directly
 
     return ConcreteWorkflowContext(
         config=config,
@@ -314,5 +227,4 @@ def create_workflow_context(shared_session=None) -> WorkflowContext:
         connectors=connectors,
         use_cases=use_cases,
         session_provider=session_provider,
-        repositories=repositories,  # Legacy compatibility
     )

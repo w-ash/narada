@@ -5,19 +5,25 @@ infrastructure implementations, following the dependency inversion principle.
 """
 
 from .interfaces import (
-    CheckpointRepository,
-    ConnectorRepository,
-    LikeRepository,
-    PlaylistRepository,
-    RepositoryProvider,
-    TrackRepository,
+    CheckpointRepositoryProtocol,
+    ConnectorRepositoryProtocol,
+    LikeRepositoryProtocol,
+    MetricsRepositoryProtocol,
+    PlaylistRepositoryProtocol,
+    PlaysRepositoryProtocol,
+    TrackIdentityServiceProtocol,
+    TrackRepositoryProtocol,
+    UnitOfWorkProtocol,
 )
 
 __all__ = [
-    "CheckpointRepository",
-    "ConnectorRepository",
-    "LikeRepository",
-    "PlaylistRepository",
-    "RepositoryProvider",
-    "TrackRepository",
+    "CheckpointRepositoryProtocol",
+    "ConnectorRepositoryProtocol",
+    "LikeRepositoryProtocol",
+    "MetricsRepositoryProtocol",
+    "PlaylistRepositoryProtocol",
+    "PlaysRepositoryProtocol", 
+    "TrackIdentityServiceProtocol",
+    "TrackRepositoryProtocol",
+    "UnitOfWorkProtocol",
 ]

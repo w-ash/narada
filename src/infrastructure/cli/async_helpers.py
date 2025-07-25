@@ -7,7 +7,6 @@ from typing import Any, cast
 
 from rich.console import Console
 
-from src.application.utilities.progress_integration import DatabaseProgressContext
 from src.domain.entities import OperationResult
 from src.infrastructure.cli.ui import command_error_handler
 
@@ -15,10 +14,10 @@ console = Console()
 
 
 def async_db_operation(
-    progress_text: str = "Processing...",
-    success_text: str = "Operation completed!",
-    display_title: str | None = None,
-    next_step_message: str | None = None,
+    progress_text: str = "Processing...",  # noqa: ARG001
+    success_text: str = "Operation completed!",  # noqa: ARG001
+    display_title: str | None = None,  # noqa: ARG001
+    next_step_message: str | None = None,  # noqa: ARG001
 ) -> Callable[
     [Callable[..., Awaitable[OperationResult]]],
     Callable[..., Awaitable[OperationResult]],
@@ -40,15 +39,10 @@ def async_db_operation(
         @command_error_handler
         @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> OperationResult:
-            # Use DatabaseProgressContext for session-per-operation pattern
-            async with DatabaseProgressContext(
-                description=progress_text,
-                success_text=success_text,
-                display_title=display_title,
-                next_step_message=next_step_message,
-            ) as progress:
-                # Execute the function with fresh repositories
-                return await progress.run_with_repositories(func, *args, **kwargs)
+            # Simplified UoW-compatible pattern
+            # Use case functions now handle their own UoW session management
+            # TODO: Eventually move progress tracking to use case level (https://github.com/w-ash/narada/issues/2)
+            return await func(*args, **kwargs)
 
         return wrapper
 

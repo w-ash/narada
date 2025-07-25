@@ -2,7 +2,10 @@
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Coroutine
 
 from rich.console import Console
 from rich.panel import Panel
@@ -16,7 +19,8 @@ from src.application.use_cases.sync_likes import (
 )
 from src.domain.entities import OperationResult
 from src.infrastructure.cli.async_helpers import async_db_operation
-from src.infrastructure.persistence.repositories.track import TrackRepositories
+from src.infrastructure.persistence.database.db_connection import get_session
+from src.infrastructure.persistence.repositories.factories import get_unit_of_work
 
 # Initialize console
 console = Console()
@@ -274,7 +278,7 @@ def _handle_spotify_plays_file(file_path: Path | None, batch_size: int | None) -
         raise typer.Exit(1)
 
     import asyncio
-    asyncio.run(_run_spotify_file_import(file_path=file_path, batch_size=batch_size))
+    asyncio.run(cast("Coroutine[Any, Any, OperationResult]", _run_spotify_file_import(file_path=file_path, batch_size=batch_size)))
 
 
 def _handle_lastfm_plays(
@@ -291,23 +295,23 @@ def _handle_lastfm_plays(
     
     if full:
         # Full import
-        asyncio.run(_run_lastfm_full_import(
+        asyncio.run(cast("Coroutine[Any, Any, OperationResult]", _run_lastfm_full_import(
             user_id=user_id,
             resolve_tracks=resolve_tracks,
             confirm=confirm,
-        ))
+        )))
     elif recent is not None:
         # Recent import with specific limit
-        asyncio.run(_run_lastfm_recent_import(
+        asyncio.run(cast("Coroutine[Any, Any, OperationResult]", _run_lastfm_recent_import(
             limit=recent,
             resolve_tracks=resolve_tracks,
-        ))
+        )))
     else:
         # Default to incremental
-        asyncio.run(_run_lastfm_incremental_import(
+        asyncio.run(cast("Coroutine[Any, Any, OperationResult]", _run_lastfm_incremental_import(
             user_id=user_id,
             resolve_tracks=resolve_tracks,
-        ))
+        )))
 
 
 def _handle_spotify_likes(
@@ -315,11 +319,11 @@ def _handle_spotify_likes(
 ) -> None:
     """Handle Spotify likes import."""
     import asyncio
-    asyncio.run(_run_spotify_likes_import(
+    asyncio.run(cast("Coroutine[Any, Any, OperationResult]", _run_spotify_likes_import(
         user_id=user_id or "default",
         batch_size=batch_size,
         limit=limit,
-    ))
+    )))
 
 
 def _handle_lastfm_loves(
@@ -327,11 +331,11 @@ def _handle_lastfm_loves(
 ) -> None:
     """Handle Last.fm loves export."""
     import asyncio
-    asyncio.run(_run_lastfm_loves_export(
+    asyncio.run(cast("Coroutine[Any, Any, OperationResult]", _run_lastfm_loves_export(
         user_id=user_id or "default",
         batch_size=batch_size,
         limit=limit,
-    ))
+    )))
 
 
 # Data operation handlers (preserving all existing functionality)
@@ -345,15 +349,13 @@ def _handle_lastfm_loves(
 async def _run_spotify_file_import(
     file_path: Path,
     batch_size: int | None,
-    *,
-    repositories: TrackRepositories,
 ) -> OperationResult:
     """Run Spotify file import via orchestrator."""
     kwargs: dict[str, Any] = {"file_path": file_path}
     if batch_size is not None:
         kwargs["batch_size"] = batch_size
 
-    return await run_import("spotify", "file", repositories, **kwargs)
+    return await run_import("spotify", "file", **kwargs)
 
 
 @async_db_operation(
@@ -364,12 +366,10 @@ async def _run_spotify_file_import(
 async def _run_lastfm_recent_import(
     limit: int,
     resolve_tracks: bool,
-    *,
-    repositories: TrackRepositories,
 ) -> OperationResult:
     """Run LastFM recent import via orchestrator."""
     return await run_import(
-        "lastfm", "recent", repositories, limit=limit, resolve_tracks=resolve_tracks
+        "lastfm", "recent", limit=limit, resolve_tracks=resolve_tracks
     )
 
 
@@ -381,14 +381,11 @@ async def _run_lastfm_recent_import(
 async def _run_lastfm_incremental_import(
     user_id: str | None,
     resolve_tracks: bool,
-    *,
-    repositories: TrackRepositories,
 ) -> OperationResult:
     """Run LastFM incremental import via orchestrator."""
     return await run_import(
         "lastfm",
         "incremental",
-        repositories,
         user_id=user_id,
         resolve_tracks=resolve_tracks,
     )
@@ -403,14 +400,11 @@ async def _run_lastfm_full_import(
     user_id: str | None,
     resolve_tracks: bool,
     confirm: bool,
-    *,
-    repositories: TrackRepositories,
 ) -> OperationResult:
     """Run LastFM full history import via orchestrator."""
     return await run_import(
         "lastfm",
         "full",
-        repositories,
         user_id=user_id,
         resolve_tracks=resolve_tracks,
         confirm=confirm,
@@ -427,16 +421,16 @@ async def _run_spotify_likes_import(
     user_id: str,
     batch_size: int | None,
     limit: int | None,
-    *,
-    repositories: TrackRepositories,
 ) -> OperationResult:
     """Run Spotify likes import operation."""
-    return await run_spotify_likes_import(
-        repositories=repositories,
-        user_id=user_id,
-        limit=batch_size,  # API batch size
-        max_imports=limit,  # Max total imports
-    )
+    async with get_session() as session:
+        uow = get_unit_of_work(session)
+        return await run_spotify_likes_import(
+            uow=uow,
+            user_id=user_id,
+            limit=batch_size,  # API batch size
+            max_imports=limit,  # Max total imports
+        )
 
 
 @async_db_operation(
@@ -448,16 +442,16 @@ async def _run_lastfm_loves_export(
     user_id: str,
     batch_size: int | None,
     limit: int | None,
-    *,
-    repositories: TrackRepositories,
 ) -> OperationResult:
     """Run Last.fm loves export operation."""
-    return await run_lastfm_likes_export(
-        repositories=repositories,
-        user_id=user_id,
-        batch_size=batch_size,
-        max_exports=limit,
-    )
+    async with get_session() as session:
+        uow = get_unit_of_work(session)
+        return await run_lastfm_likes_export(
+            uow=uow,
+            user_id=user_id,
+            batch_size=batch_size,
+            max_exports=limit,
+        )
 
 
 # Individual commands for direct access

@@ -82,7 +82,9 @@ class TestConnectorRegistryImpl:
         provider = ConnectorRegistryImpl()
         
         mock_discover.assert_called_once()
-        assert "test_connector" in provider._connectors
+        # Use public interface to verify initialization
+        available_connectors = provider.list_connectors()
+        assert "test_connector" in available_connectors
     
     @patch('src.application.workflows.context.discover_connectors')
     def test_get_connector_success(self, mock_discover):
@@ -142,40 +144,16 @@ class TestUseCaseProviderImpl:
     """Test use case provider implementation."""
     
     @pytest.mark.asyncio
-    @patch('src.application.workflows.context.get_session')
-    async def test_get_save_playlist_use_case(self, mock_get_session):
-        """Test getting SavePlaylistUseCase with dependency injection."""
-        # Mock session context manager
-        mock_session_ctx = MagicMock()
-        mock_session = AsyncMock()
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session_ctx)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
-        mock_get_session.return_value = mock_session
+    async def test_get_save_playlist_use_case(self):
+        """Test getting SavePlaylistUseCase with UnitOfWork pattern."""
+        provider = UseCaseProviderImpl()
         
-        # Mock repositories
-        with patch('src.application.workflows.context.TrackRepositories') as mock_track_repos, \
-             patch('src.application.workflows.context.PlaylistRepositories') as mock_playlist_repos, \
-             patch('src.application.use_cases.save_playlist.SavePlaylistUseCase') as mock_use_case_class:
-            
-            mock_track_repo_instance = MagicMock()
-            mock_playlist_repo_instance = MagicMock()
-            mock_track_repos.return_value.core = mock_track_repo_instance
-            mock_playlist_repos.return_value.core = mock_playlist_repo_instance
-            mock_use_case_instance = MagicMock()
-            mock_use_case_class.return_value = mock_use_case_instance
-            
-            provider = UseCaseProviderImpl()
-            
-            # This should work with proper session management
-            async with mock_session:
-                result = await provider.get_save_playlist_use_case()
-            
-            # Verify the use case was created with correct dependencies
-            mock_use_case_class.assert_called_once_with(
-                track_repo=mock_track_repo_instance,
-                playlist_repo=mock_playlist_repo_instance
-            )
-            assert result == mock_use_case_instance
+        # Use cases now have no dependencies - simple instantiation
+        result = await provider.get_save_playlist_use_case()
+        
+        # Verify the use case was created - it should be a SavePlaylistUseCase instance
+        from src.application.use_cases.save_playlist import SavePlaylistUseCase
+        assert isinstance(result, SavePlaylistUseCase)
 
 
 class TestCreateWorkflowContext:
@@ -216,7 +194,7 @@ class TestCreateWorkflowContext:
         assert context.connectors == mock_connectors_instance
         assert context.use_cases == mock_use_cases_instance
         assert context.session_provider == mock_session_provider_instance
-        assert context.repositories is not None  # Legacy compatibility
+        # repositories attribute removed - Clean Architecture: use cases provide dependency injection
     
     def test_context_structure(self):
         """Test that created context has the expected structure."""
@@ -228,7 +206,7 @@ class TestCreateWorkflowContext:
         assert hasattr(context, 'connectors')
         assert hasattr(context, 'use_cases')
         assert hasattr(context, 'session_provider')
-        assert hasattr(context, 'repositories')
+        # repositories attribute removed in Clean Architecture migration
         
         # Verify types are correct
         assert isinstance(context.config, ConfigProviderImpl)

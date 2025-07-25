@@ -6,9 +6,9 @@ from src.config import get_logger
 from src.domain.entities import Artist, ConnectorTrack, Track
 from src.domain.matching.algorithms import calculate_confidence
 from src.domain.matching.types import ConfidenceEvidence
+from src.domain.repositories.interfaces import ConnectorRepositoryProtocol
 from src.infrastructure.connectors.spotify import SpotifyConnector
 from src.infrastructure.connectors.spotify_personal_data import SpotifyPlayRecord
-from src.infrastructure.persistence.repositories.track import TrackRepositories
 
 logger = get_logger(__name__)
 
@@ -38,7 +38,7 @@ class SpotifyPlayResolver:
     """Resolves Spotify play records to internal track IDs using existing matcher."""
 
     spotify_connector: SpotifyConnector
-    track_repos: TrackRepositories
+    connector_repository: ConnectorRepositoryProtocol
 
     async def resolve_play_records(
         self, play_records: list[SpotifyPlayRecord]
@@ -110,7 +110,7 @@ class SpotifyPlayResolver:
         connections = [("spotify", track_id) for track_id in track_ids]
 
         # Find tracks that have existing mappings to these Spotify connector tracks
-        existing_tracks = await self.track_repos.connector.find_tracks_by_connectors(
+        existing_tracks = await self.connector_repository.find_tracks_by_connectors(
             connections
         )
 
@@ -212,7 +212,7 @@ class SpotifyPlayResolver:
         logger.info(
             f"Creating {len(connector_tracks)} tracks using existing infrastructure"
         )
-        created_tracks = await self.track_repos.connector.ingest_external_tracks_bulk(
+        created_tracks = await self.connector_repository.ingest_external_tracks_bulk(
             "spotify", connector_tracks
         )
 
@@ -333,7 +333,7 @@ class SpotifyPlayResolver:
             # Check for existing mappings to internal tracks
             connections = [("spotify", track_id) for track_id in unique_track_ids]
             existing_tracks = (
-                await self.track_repos.connector.find_tracks_by_connectors(connections)
+                await self.connector_repository.find_tracks_by_connectors(connections)
             )
 
             # Process results
@@ -436,7 +436,7 @@ class SpotifyPlayResolver:
                         spotify_id = search_result["id"]
                         connection_key = ("spotify", spotify_id)
                         existing_tracks = (
-                            await self.track_repos.connector.find_tracks_by_connectors([
+                            await self.connector_repository.find_tracks_by_connectors([
                                 connection_key
                             ])
                         )
@@ -557,7 +557,7 @@ class SpotifyPlayResolver:
 
             # Use existing infrastructure to create track
             created_tracks = (
-                await self.track_repos.connector.ingest_external_tracks_bulk(
+                await self.connector_repository.ingest_external_tracks_bulk(
                     "spotify", [connector_track]
                 )
             )

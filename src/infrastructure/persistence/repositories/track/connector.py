@@ -881,3 +881,59 @@ class TrackConnectorRepository:
             "match_method": mapping["match_method"],
             "confidence_evidence": mapping["confidence_evidence"],
         }
+
+    @db_operation("get_metadata_timestamps")
+    async def get_metadata_timestamps(
+        self, track_ids: list[int], connector: str
+    ) -> dict[int, datetime]:
+        """Get most recent metadata collection timestamps for tracks.
+        
+        Args:
+            track_ids: Track IDs to check timestamps for.
+            connector: Connector name to filter by.
+            
+        Returns:
+            Dictionary mapping track_id to most recent collected_at timestamp.
+        """
+        if not track_ids:
+            return {}
+            
+        try:
+            from sqlalchemy import func, select
+
+            from src.infrastructure.persistence.database.db_models import DBTrackMetric
+            
+            # Query for the most recent collected_at timestamp for each track
+            stmt = (
+                select(
+                    DBTrackMetric.track_id,
+                    func.max(DBTrackMetric.collected_at).label("latest_collected_at")
+                )
+                .where(
+                    DBTrackMetric.track_id.in_(track_ids),
+                    DBTrackMetric.connector_name == connector,
+                    DBTrackMetric.is_deleted == False  # noqa: E712
+                )
+                .group_by(DBTrackMetric.track_id)
+            )
+            
+            result = await self.session.execute(stmt)
+            rows = result.fetchall()
+            
+            timestamps = {}
+            for row in rows:
+                track_id = row[0]
+                collected_at = row[1]
+                
+                # Ensure UTC timezone for consistency - database stores UTC timestamps
+                # If no timezone info, assume it's already UTC (our standard)
+                if collected_at and collected_at.tzinfo is None:
+                    collected_at = collected_at.replace(tzinfo=UTC)
+                    
+                timestamps[track_id] = collected_at
+                
+            return timestamps
+            
+        except Exception as e:
+            logger.error(f"Failed to get metadata timestamps: {e}")
+            return {}

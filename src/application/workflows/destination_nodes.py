@@ -51,27 +51,26 @@ async def handle_internal_destination(
         ),
     )
 
-    # Get use cases from context (Clean Architecture compliance)
-    use_cases = context.get("use_cases")
-    if not use_cases:
-        raise ValueError("Use case provider not found in context")
+    # Use DRY helper functions for context extraction
+    from .node_context import NodeContext
+    ctx = NodeContext(context)
+    
+    workflow_context = ctx.extract_workflow_context()
+    use_cases = ctx.extract_use_cases()
 
-    # Get SavePlaylistUseCase with proper dependency injection
-    use_case = await use_cases.get_save_playlist_use_case()
-    result = await use_case.execute(command)
+    # Execute use case with UnitOfWork pattern
+    result = await workflow_context.execute_use_case(
+        use_cases.get_save_playlist_use_case, 
+        command
+    )
 
-    # Return result in expected format for backward compatibility
-    return {
-        "operation": "create_internal_playlist",
-        "operation_type": "create_internal_playlist",
-        "playlist": result.playlist,
-        "playlist_name": result.playlist.name,
-        "playlist_id": result.playlist.id,
-        "tracklist": tracklist,
-        "persisted_tracks": result.enriched_tracks,
-        "track_count": result.track_count,
-        "execution_time_ms": result.execution_time_ms,
-    }
+    # Use standardized result formatter
+    return NodeContext.format_playlist_result(
+        operation="create_internal_playlist",
+        result=result,
+        tracklist=tracklist,
+        operation_type="create_internal_playlist"  # Extra field for this operation
+    )
 
 
 async def handle_spotify_destination(
@@ -81,11 +80,9 @@ async def handle_spotify_destination(
 ) -> dict:
     """Create a new Spotify playlist using SavePlaylistUseCase."""
     # Infrastructure: create playlist in Spotify via external API
-    # Get Spotify connector from flattened context (Clean Architecture)
-    connector_registry = context.get("connectors")
-    if not connector_registry:
-        raise ValueError("No connector registry available")
-    spotify = connector_registry.get_connector("spotify")
+    from .node_context import NodeContext
+    ctx = NodeContext(context)
+    spotify = ctx.get_connector("spotify")
     spotify_id = await spotify.create_playlist(
         config.get("name", "Narada Playlist"),
         tracklist.tracks,
@@ -107,27 +104,23 @@ async def handle_spotify_destination(
         ),
     )
 
-    # Get use cases from context (Clean Architecture compliance)
-    use_cases = context.get("use_cases")
-    if not use_cases:
-        raise ValueError("Use case provider not found in context")
+    # Use DRY helper functions for context extraction
+    workflow_context = ctx.extract_workflow_context()
+    use_cases = ctx.extract_use_cases()
 
-    # Get SavePlaylistUseCase with proper dependency injection
-    use_case = await use_cases.get_save_playlist_use_case()
-    result = await use_case.execute(command)
+    # Execute use case with UnitOfWork pattern
+    result = await workflow_context.execute_use_case(
+        use_cases.get_save_playlist_use_case, 
+        command
+    )
 
-    # Return result in expected format for backward compatibility
-    return {
-        "operation": "create_spotify_playlist",
-        "playlist": result.playlist,
-        "playlist_name": result.playlist.name,
-        "playlist_id": result.playlist.id,
-        "tracklist": tracklist,
-        "persisted_tracks": result.enriched_tracks,
-        "track_count": result.track_count,
-        "spotify_id": spotify_id,
-        "execution_time_ms": result.execution_time_ms,
-    }
+    # Use standardized result formatter
+    return NodeContext.format_playlist_result(
+        operation="create_spotify_playlist",
+        result=result,
+        tracklist=tracklist,
+        spotify_id=spotify_id  # Extra field for Spotify operations
+    )
 
 
 async def handle_update_spotify_destination(
@@ -157,33 +150,31 @@ async def handle_update_spotify_destination(
         ),
     )
 
-    # Get use cases from context (Clean Architecture compliance)
-    use_cases = context.get("use_cases")
-    if not use_cases:
-        raise ValueError("Use case provider not found in context")
+    # Use DRY helper functions for context extraction
+    from .node_context import NodeContext
+    ctx = NodeContext(context)
+    
+    workflow_context = ctx.extract_workflow_context()
+    use_cases = ctx.extract_use_cases()
 
-    # Get SavePlaylistUseCase with proper dependency injection
-    use_case = await use_cases.get_save_playlist_use_case()
-    result = await use_case.execute(command)
+    # Execute use case with UnitOfWork pattern
+    result = await workflow_context.execute_use_case(
+        use_cases.get_save_playlist_use_case, 
+        command
+    )
 
     # Infrastructure: update Spotify via external API
-    # Get Spotify connector from flattened context (Clean Architecture)
-    connector_registry = context.get("connectors")
-    if not connector_registry:
-        raise ValueError("No connector registry available")
-    spotify = connector_registry.get_connector("spotify")
+    spotify = ctx.get_connector("spotify")
     await spotify.update_playlist(spotify_id, result.playlist, replace=not append)
 
-    # Return result in expected format for backward compatibility
-    return {
-        "playlist": result.playlist,
-        "tracklist": tracklist,
-        "persisted_tracks": result.enriched_tracks,
-        "track_count": result.track_count,
-        "spotify_id": spotify_id,
-        "append_mode": append,
-        "execution_time_ms": result.execution_time_ms,
-    }
+    # Return result in expected format for backward compatibility  
+    return NodeContext.format_playlist_result(
+        operation="update_spotify_playlist",
+        result=result,
+        tracklist=tracklist,
+        spotify_id=spotify_id,
+        append_mode=append
+    )
 
 
 async def handle_update_playlist_destination(
@@ -240,16 +231,20 @@ async def handle_update_playlist_destination(
         },
     )
 
-    # Get use cases from context (Clean Architecture compliance)
-    use_cases = context.get("use_cases")
-    if not use_cases:
-        raise ValueError("Use case provider not found in context")
+    # Use DRY helper functions for context extraction
+    from .node_context import NodeContext
+    ctx = NodeContext(context)
+    
+    workflow_context = ctx.extract_workflow_context()
+    use_cases = ctx.extract_use_cases()
 
-    # Get UpdatePlaylistUseCase with proper dependency injection
-    use_case = await use_cases.get_update_playlist_use_case()
-    result = await use_case.execute(command)
+    # Execute use case with UnitOfWork pattern
+    result = await workflow_context.execute_use_case(
+        use_cases.get_update_playlist_use_case, 
+        command
+    )
 
-    # Return result in expected format for backward compatibility
+    # Return result with specialized fields for update operations
     return {
         "operation": "update_playlist",
         "operation_type": operation_type,

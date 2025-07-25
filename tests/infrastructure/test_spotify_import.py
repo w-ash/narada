@@ -9,7 +9,7 @@ import pytest
 from src.infrastructure.connectors.spotify import SpotifyConnector
 from src.infrastructure.persistence.database.db_connection import get_session
 from src.infrastructure.persistence.database.db_models import init_db
-from src.infrastructure.persistence.repositories.track import TrackRepositories
+from src.infrastructure.persistence.repositories.factories import get_unit_of_work
 from src.infrastructure.services.spotify_import import SpotifyImportService
 from src.infrastructure.services.spotify_play_resolver import SpotifyPlayResolver
 
@@ -86,8 +86,11 @@ async def test_spotify_import_service_complete_flow(
     
     async with get_session() as session:
         # Arrange
-        repo = TrackRepositories(session)
-        import_service = SpotifyImportService(repo)
+        uow = await get_unit_of_work(session)
+        import_service = SpotifyImportService(
+            plays_repository=uow.get_plays_repository(),
+            connector_repository=uow.get_connector_repository()
+        )
         batch_id = str(uuid4())
         
         # Act
@@ -104,7 +107,7 @@ async def test_spotify_import_service_complete_flow(
         assert result.play_metrics.get("batch_id") == batch_id
         
         # Verify plays were stored in database
-        plays = await repo.plays.get_plays_by_batch(batch_id)
+        plays = await uow.get_plays_repository().get_plays_by_batch(batch_id)
         assert len(plays) >= 0  # Some plays might be skipped if tracks can't be resolved
         
         # Verify import metadata is set correctly
@@ -123,8 +126,11 @@ async def test_spotify_import_service_deduplication(
     
     async with get_session() as session:
         # Arrange
-        repo = TrackRepositories(session)
-        import_service = SpotifyImportService(repo)
+        uow = await get_unit_of_work(session)
+        import_service = SpotifyImportService(
+            plays_repository=uow.get_plays_repository(),
+            connector_repository=uow.get_connector_repository()
+        )
         batch_id_1 = str(uuid4())
         batch_id_2 = str(uuid4())
         
@@ -146,8 +152,8 @@ async def test_spotify_import_service_deduplication(
         assert result_2 is not None
         
         # Second import should have fewer new records due to deduplication
-        plays_1 = await repo.plays.get_plays_by_batch(batch_id_1)
-        plays_2 = await repo.plays.get_plays_by_batch(batch_id_2)
+        plays_1 = await uow.get_plays_repository().get_plays_by_batch(batch_id_1)
+        plays_2 = await uow.get_plays_repository().get_plays_by_batch(batch_id_2)
         
         # Both batches should exist but represent same underlying data
         assert len(plays_1) >= 0
@@ -163,8 +169,11 @@ async def test_spotify_import_service_error_handling(
     
     async with get_session() as session:
         # Arrange
-        repo = TrackRepositories(session)
-        import_service = SpotifyImportService(repo)
+        uow = await get_unit_of_work(session)
+        import_service = SpotifyImportService(
+            plays_repository=uow.get_plays_repository(),
+            connector_repository=uow.get_connector_repository()
+        )
         
         # Create invalid JSON file
         invalid_file = tmp_path / "invalid.json"
@@ -194,8 +203,11 @@ async def test_spotify_import_service_progress_reporting(
     
     async with get_session() as session:
         # Arrange
-        repo = TrackRepositories(session)
-        import_service = SpotifyImportService(repo)
+        uow = await get_unit_of_work(session)
+        import_service = SpotifyImportService(
+            plays_repository=uow.get_plays_repository(),
+            connector_repository=uow.get_connector_repository()
+        )
         progress_reports = []
         
         def progress_callback(current: int, total: int, message: str):
@@ -227,11 +239,11 @@ async def test_enhanced_resolver_with_existing_tracks():
     
     async with get_session() as session:
         # Arrange
-        repo = TrackRepositories(session)
+        uow = await get_unit_of_work(session)
         spotify_connector = SpotifyConnector()
         enhanced_resolver = SpotifyPlayResolver(
             spotify_connector=spotify_connector,
-            track_repos=repo
+            connector_repository=uow.get_connector_repository()
         )
         
         # Create a small sample of records
@@ -283,8 +295,9 @@ async def test_enhanced_resolver_with_existing_tracks():
         assert len(resolution_map) >= 0  # At least partial resolution expected
         
         # Verify any resolved tracks exist in database
+        track_repository = uow.get_track_repository()
         for track_id in resolution_map.values():
             assert track_id is not None
-            track = await repo.core.get_by_id(track_id)
+            track = await track_repository.get_by_id(track_id)
             assert track is not None
             assert track.title is not None

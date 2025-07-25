@@ -27,29 +27,28 @@ class TestWorkflowContextContracts:
         async with get_session() as session:
             context = create_workflow_context(shared_session=session)
             
-            # Verify repositories are not None
-            assert context.repositories is not None, (
-                "Repositories should not be None when shared session provided"
+            # Verify use cases are available (Clean Architecture pattern)
+            assert context.use_cases is not None, (
+                "Use cases should not be None when shared session provided"
             )
             
-            # Verify critical repository properties exist
-            assert hasattr(context.repositories, "connector"), (
-                "Repository provider must have connector property"
+            # Verify critical use case provider methods exist
+            assert hasattr(context.use_cases, "get_save_playlist_use_case"), (
+                "Use case provider must have get_save_playlist_use_case method"
             )
-            assert context.repositories.connector is not None, (
-                "Connector repository must not be None"
+            assert callable(context.use_cases.get_save_playlist_use_case), (
+                "get_save_playlist_use_case must be callable"
             )
             
-            # Verify connector repository has required methods
-            assert hasattr(context.repositories.connector, "get_connector_mappings"), (
-                "Connector repository must have get_connector_mappings method"
+            assert hasattr(context.use_cases, "get_update_playlist_use_case"), (
+                "Use case provider must have get_update_playlist_use_case method"
             )
-            assert callable(context.repositories.connector.get_connector_mappings), (
-                "get_connector_mappings must be callable"
+            assert callable(context.use_cases.get_update_playlist_use_case), (
+                "get_update_playlist_use_case must be callable"
             )
 
-    def test_workflow_context_without_session_provides_fallback(self):
-        """Test that workflow context without session provides fallback.
+    def test_workflow_context_without_session_provides_use_cases(self):
+        """Test that workflow context without session provides use cases.
         
         Prevents: Runtime errors when context created outside workflow execution
         """
@@ -59,8 +58,9 @@ class TestWorkflowContextContracts:
         # Should not fail to create
         assert context is not None
         
-        # Should have repositories (even if placeholder)
-        assert hasattr(context, "repositories")
+        # Should have use cases available for dependency injection
+        assert hasattr(context, "use_cases")
+        assert context.use_cases is not None
 
     def test_workflow_context_provides_working_connectors(self):
         """Test that workflow context provides working connector registry.
@@ -106,51 +106,51 @@ class TestWorkflowContextContracts:
         )
 
 
-class TestRepositoryProviderContracts:
-    """Detailed contract tests for repository provider interface."""
+class TestUseCaseProviderContracts:
+    """Contract tests for use case provider interface (Clean Architecture)."""
 
     @pytest.mark.asyncio
-    async def test_repository_provider_with_session_has_all_repositories(self):
-        """Test that RepositoryProviderImpl provides all required repositories.
+    async def test_use_case_provider_provides_all_required_use_cases(self):
+        """Test that UseCaseProviderImpl provides all required use cases.
         
-        Prevents: Missing repository errors in enrichment services
+        Prevents: Missing use case errors in workflow execution
         """
         async with get_session() as session:
             context = create_workflow_context(shared_session=session)
-            repos = context.repositories
+            use_cases = context.use_cases
             
-            # Check all required repository properties exist
-            required_repos = ["core", "connector", "metrics", "likes", "plays", "checkpoints", "playlists"]
+            # Check all required use case provider methods exist
+            required_use_cases = ["get_save_playlist_use_case", "get_update_playlist_use_case"]
             
-            for repo_name in required_repos:
-                assert hasattr(repos, repo_name), (
-                    f"Repository provider must have {repo_name} property"
+            for use_case_method in required_use_cases:
+                assert hasattr(use_cases, use_case_method), (
+                    f"Use case provider must have {use_case_method} method"
                 )
-                repo = getattr(repos, repo_name)
-                assert repo is not None, (
-                    f"{repo_name} repository must not be None"
+                method = getattr(use_cases, use_case_method)
+                assert callable(method), (
+                    f"{use_case_method} must be callable"
                 )
 
     @pytest.mark.asyncio  
-    async def test_track_repositories_integration(self):
-        """Test that TrackRepositories work properly in workflow context.
+    async def test_use_case_dependency_injection_integration(self):
+        """Test that use cases work properly with dependency injection.
         
-        Prevents: Repository initialization failures
+        Prevents: Use case instantiation failures due to missing dependencies
         """
         async with get_session() as session:
             context = create_workflow_context(shared_session=session)
             
-            # Access connector repository through the provider
-            connector_repo = context.repositories.connector
-            
-            # Should be able to call methods without errors
-            # (Note: This tests the integration, not the database operations)
+            # Test that use cases can be instantiated successfully
             try:
-                # This should not raise AttributeError
-                method = connector_repo.get_connector_mappings
-                assert callable(method)
-            except AttributeError as e:
-                pytest.fail(f"Connector repository missing required method: {e}")
+                # This tests the dependency injection pattern
+                save_playlist_use_case = await context.use_cases.get_save_playlist_use_case()
+                assert save_playlist_use_case is not None
+                
+                update_playlist_use_case = await context.use_cases.get_update_playlist_use_case()
+                assert update_playlist_use_case is not None
+                
+            except Exception as e:
+                pytest.fail(f"Use case dependency injection failed: {e}")
 
 
 class TestExtractorContracts:

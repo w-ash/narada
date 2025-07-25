@@ -15,8 +15,13 @@ from src.domain.entities import (
     TrackList,
     TrackPlay,
 )
+from src.domain.repositories.interfaces import (
+    CheckpointRepositoryProtocol,
+    ConnectorRepositoryProtocol,
+    PlaysRepositoryProtocol,
+    TrackRepositoryProtocol,
+)
 from src.infrastructure.connectors.lastfm import LastFMConnector
-from src.infrastructure.persistence.repositories.track import TrackRepositories
 from src.infrastructure.services.base_import import BaseImportService
 from src.infrastructure.services.track_identity_resolver import TrackIdentityResolver
 
@@ -28,13 +33,19 @@ class LastfmImportService(BaseImportService):
 
     def __init__(
         self,
-        repositories: TrackRepositories,
+        plays_repository: PlaysRepositoryProtocol,
+        checkpoint_repository: CheckpointRepositoryProtocol,
+        connector_repository: ConnectorRepositoryProtocol,
+        track_repository: TrackRepositoryProtocol,
         lastfm_connector: LastFMConnector | None = None,
     ) -> None:
-        """Initialize with repository access."""
-        super().__init__(repositories)
+        """Initialize with repository access following Clean Architecture."""
+        super().__init__(plays_repository)
         self.operation_name = "Last.fm Recent Plays Import"
         self.lastfm_connector = lastfm_connector or LastFMConnector()
+        self.checkpoint_repository = checkpoint_repository
+        self.connector_repository = connector_repository
+        self.track_repository = track_repository
 
     # Public interface methods - delegate to template method with strategies
 
@@ -227,7 +238,7 @@ class LastfmImportService(BaseImportService):
             )
 
         # Get checkpoint (only once)
-        checkpoint = await self.repositories.checkpoints.get_sync_checkpoint(
+        checkpoint = await self.checkpoint_repository.get_sync_checkpoint(
             user_id=username, service="lastfm", entity_type="plays"
         )
         from_time = checkpoint.last_timestamp if checkpoint else None
@@ -416,7 +427,7 @@ class LastfmImportService(BaseImportService):
                         entity_type="plays",
                         last_timestamp=most_recent_timestamp,
                     )
-                    await self.repositories.checkpoints.save_sync_checkpoint(checkpoint)
+                    await self.checkpoint_repository.save_sync_checkpoint(checkpoint)
                     logger.info(
                         f"Updated checkpoint for {username} to {most_recent_timestamp}"
                     )
@@ -433,7 +444,7 @@ class LastfmImportService(BaseImportService):
                         entity_type="plays",
                         last_timestamp=current_time,
                     )
-                    await self.repositories.checkpoints.save_sync_checkpoint(checkpoint)
+                    await self.checkpoint_repository.save_sync_checkpoint(checkpoint)
                     logger.info(
                         f"Updated checkpoint for {username} to current time (no new data)"
                     )
@@ -476,7 +487,7 @@ class LastfmImportService(BaseImportService):
 
         # Use TrackIdentityResolver for clean architecture
         track_list = TrackList(tracks=tracks_for_matching)
-        identity_resolver = TrackIdentityResolver(self.repositories)
+        identity_resolver = TrackIdentityResolver(self.track_repository, self.connector_repository)
         match_results = await identity_resolver.resolve_track_identities(
             track_list=track_list,
             connector="lastfm",
@@ -501,11 +512,12 @@ class LastfmImportService(BaseImportService):
     ) -> None:
         """Create Last.fm connector track mapping for future efficiency."""
         lastfm_url = play_record.service_metadata.get("lastfm_track_url")
-        if not lastfm_url:
+        if not lastfm_url or resolved_track.id is None:
             return
 
         try:
-            await self.repositories.connector.map_track_to_connector(
+            # Create mapping with confidence and metadata
+            await self.connector_repository.map_track_to_connector(
                 track=resolved_track,
                 connector="lastfm",
                 connector_id=lastfm_url,

@@ -19,7 +19,12 @@ from src.infrastructure.persistence.database.db_models import (
 from src.infrastructure.persistence.repositories.base_repo import BaseRepository
 from src.infrastructure.persistence.repositories.playlist.mapper import PlaylistMapper
 from src.infrastructure.persistence.repositories.repo_decorator import db_operation
-from src.infrastructure.persistence.repositories.track import TrackRepositories
+from src.infrastructure.persistence.repositories.track.connector import (
+    TrackConnectorRepository,
+)
+from src.infrastructure.persistence.repositories.track.core import (
+    TrackRepository as CoreTrackRepository,
+)
 
 # Create module logger
 logger = get_logger(__name__)
@@ -43,8 +48,9 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
             model_class=DBPlaylist,
             mapper=PlaylistMapper(),
         )
-        # Initialize track repositories for reuse
-        self.track_repos = TrackRepositories(session)
+        # Initialize individual track repositories following Clean Architecture
+        self.track_repository = CoreTrackRepository(session)
+        self.connector_repository = TrackConnectorRepository(session)
 
     # -------------------------------------------------------------------------
     # ENHANCED QUERY METHODS
@@ -107,7 +113,7 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
 
                         # Use the new ingest method that handles all aspects of track creation
                         saved_track = (
-                            await self.track_repos.connector.ingest_external_track(
+                            await self.connector_repository.ingest_external_track(
                                 connector=connector,
                                 connector_id=connector_id,
                                 metadata=metadata,
@@ -124,7 +130,7 @@ class PlaylistRepository(BaseRepository[DBPlaylist, Playlist]):
                         updated_tracks.append(saved_track)
                     else:
                         # For tracks without connector data, just save directly
-                        saved_track = await self.track_repos.core.save_track(track)
+                        saved_track = await self.track_repository.save_track(track)
                         updated_tracks.append(saved_track)
                 except Exception as e:
                     # Use proper exception chaining

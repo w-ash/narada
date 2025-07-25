@@ -8,12 +8,15 @@ from typing import Any
 from src.application.utilities.results import ImportResultData, ResultFactory
 from src.config import get_logger
 from src.domain.entities import OperationResult, TrackPlay
+from src.domain.repositories.interfaces import (
+    ConnectorRepositoryProtocol,
+    PlaysRepositoryProtocol,
+)
 from src.infrastructure.connectors.spotify import SpotifyConnector
 from src.infrastructure.connectors.spotify_personal_data import (
     SpotifyPlayRecord,
     parse_spotify_personal_data,
 )
-from src.infrastructure.persistence.repositories.track import TrackRepositories
 from src.infrastructure.services.base_import import BaseImportService
 from src.infrastructure.services.spotify_play_resolver import SpotifyPlayResolver
 
@@ -23,13 +26,13 @@ logger = get_logger(__name__)
 class SpotifyImportService(BaseImportService):
     """Service for importing Spotify personal data exports using template method pattern."""
 
-    def __init__(self, repositories: TrackRepositories) -> None:
-        """Initialize with repository access."""
-        super().__init__(repositories)
+    def __init__(self, plays_repository: PlaysRepositoryProtocol, connector_repository: ConnectorRepositoryProtocol) -> None:
+        """Initialize with repository access following Clean Architecture."""
+        super().__init__(plays_repository)
         self.operation_name = "Spotify Import"
         self.spotify_connector = SpotifyConnector()
         self.resolver = SpotifyPlayResolver(
-            spotify_connector=self.spotify_connector, track_repos=repositories
+            spotify_connector=self.spotify_connector, connector_repository=connector_repository
         )
 
     # Public interface method - delegate to template method

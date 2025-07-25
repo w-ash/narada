@@ -12,7 +12,7 @@ from typing import Any, Protocol
 
 from attrs import define, field
 
-from src.domain.repositories.interfaces import RepositoryProvider
+# Removed RepositoryProvider import - was unused after Clean Architecture refactor
 
 
 # Protocols for dependency injection (Clean Architecture compliance)
@@ -280,11 +280,9 @@ class BatchProcessor[T]:
 
     def __init__(
         self,
-        repositories: RepositoryProvider | None = None,
         logger: Logger | None = None,
     ):
         """Initialize with injected dependencies."""
-        self.repositories = repositories
         self.logger = logger
 
     async def process_with_strategy(
